@@ -1,0 +1,38 @@
+# Environment variables (contains real API keys)
+.env
+.env.local
+*.env
+!.env.example
+!backend/.env.example
+
+# Node
+node_modules/
+dist/
+dist-ssr/
+*.local
+frontend/tsconfig.tsbuildinfo
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code local settings
+.claude/settings.local.json
