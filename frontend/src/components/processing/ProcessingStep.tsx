@@ -81,8 +81,15 @@ export function ProcessingStep({ uploadResult, internetAllowed, onDone }: Proces
     setPhase('validate');
   }, [uploadResult, internetAllowed]);
 
-  // 启动
-  useEffect(() => { runExtract(); }, [runExtract]);
+  // 启动。React StrictMode 开发模式下 effect 会双重执行，若不拦截会同时发出
+  // 两个 /api/extract 请求（各含 3 次 LLM 调用）：双倍耗时费用，且两次结果
+  // 可能不一致（曾出现一次 422 一次成功的竞态）——用 ref 保证只启动一次
+  const startedRef = useRef(false);
+  useEffect(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+    runExtract();
+  }, [runExtract]);
 
   // validate 阶段：短暂后设为 done
   useEffect(() => {

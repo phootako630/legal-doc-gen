@@ -21,15 +21,22 @@ export function buildReviewFields(fields: ExtractedFields): ReviewField[] {
   for (const key of reviewFieldKeys) {
     const label = fieldNameMap[key] ?? key;
 
-    // contacts 是数组，特殊处理
+    // contacts 是数组，特殊处理。
+    // LLM 返回的结构不可信：条目本身、name/phone、其 value 都可能是 null 或缺失，
+    // 必须防御性访问——曾因某条目 name 为 null 直接读 .value 导致审核页整页白屏
     if (key === 'contacts') {
-      const list = fields.contacts ?? [];
-      const value =
-        list.length > 0
-          ? list
-              .map((c) => `${c.name.value ?? '?'}（${c.phone.value ?? '?'}）`)
-              .join('；')
-          : null;
+      type LooseFieldValue = { value?: string | number | null } | null | undefined;
+      type LooseContact = { name?: LooseFieldValue; phone?: LooseFieldValue } | null | undefined;
+      const list = (fields.contacts ?? []) as LooseContact[];
+      const parts: string[] = [];
+      for (const c of list) {
+        const name = c?.name?.value;
+        const phone = c?.phone?.value;
+        // 姓名电话都拿不到的条目没有展示价值，直接丢弃
+        if (name == null && phone == null) continue;
+        parts.push(`${name ?? '？'}（${phone ?? '？'}）`);
+      }
+      const value = parts.length > 0 ? parts.join('；') : null;
       rows.push({ key, label, value, src: '', status: value ? 'normal' : 'missing', isEditing: false });
       continue;
     }
