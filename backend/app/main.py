@@ -1,4 +1,13 @@
 # FastAPI 应用入口：注册路由、配置 CORS
+import sys
+
+# print() 默认走 sys.stdout 的编码；输出被重定向/管道时（如 uvicorn 日志写入文件），
+# Windows 上会退化成系统代码页（cp1252），届时任何 print() 里出现中文都会抛
+# UnicodeEncodeError 并使当次请求变成 500——必须在其他模块 import 之前重设为 utf-8，
+# 否则 config.py / routers 里模块加载期或请求处理期打印的中文日志都会踩到这个坑
+sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 

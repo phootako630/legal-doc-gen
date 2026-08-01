@@ -65,6 +65,9 @@ export function applyEdits(original: ExtractedFields, reviewFields: ReviewField[
     const fv = result[rf.key];
     if (fv && typeof fv === 'object' && 'value' in (fv as object)) {
       (fv as Record<string, unknown>).value = rf.editedValue;
+      // 律师已人工核实修改，清除旧的 src（可能含"冲突"/"OCR"等提示词），
+      // 避免这些提示原封不动地传入 /api/generate，导致起诉状里出现已解决问题的警示标记
+      (fv as Record<string, unknown>).src = '律师人工确认修改';
     }
   }
 

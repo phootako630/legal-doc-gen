@@ -67,10 +67,9 @@ export function ProcessingStep({ uploadResult, internetAllowed, onDone }: Proces
     await delay(900);
     setPhase('extract');
 
-    const filesText = uploadResult.files.map((f) => f.text);
     let result: ExtractResponse;
     try {
-      result = await extractFields(filesText, internetAllowed);
+      result = await extractFields(uploadResult.files, internetAllowed);
     } catch (e) {
       setErrorAt('extract');
       setErrorMsg(e instanceof Error ? e.message : '字段抽取失败，请重试');

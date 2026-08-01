@@ -13,14 +13,18 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import TypedDict
 
 from app.config import (
     DASHSCOPE_API_KEY,
     DASHSCOPE_BASE_URL,
+    OCR_MAX_CONCURRENCY,
+    OCR_PAGE_TIMEOUT,
     OCR_TIMEOUT,
     QWEN_OCR_MODEL,
 )
+from app.services import upload_progress
 
 logger = logging.getLogger(__name__)
 print(f"[OCR ENGINE] loading: {__file__}  (version: Qwen-VL-OCR)", flush=True)
@@ -67,54 +71,76 @@ async def ocr_pdf(pdf_bytes: bytes) -> OcrResult:
     return result
 
 
-def _ocr_sync_qwen(pdf_bytes: bytes) -> OcrResult:
-    """逐页调用 Qwen-VL-OCR 原生 DashScope API，在线程池中运行以避免阻塞事件循环。"""
-    import fitz  # PyMuPDF
+def _ocr_one_page(page_idx: int, img_b64: str, total_pages: int) -> OcrPage:
+    """对单页图片调用 Qwen-VL-OCR，供线程池并发调度。"""
     import requests
 
     headers = {
         "Authorization": f"Bearer {DASHSCOPE_API_KEY.strip()}",
         "Content-Type": "application/json",
     }
+    payload = {
+        "model": QWEN_OCR_MODEL,
+        "input": {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"image": f"data:image/png;base64,{img_b64}"},
+                        {"text": "请识别图中所有文字内容，保持原有格式输出。"},
+                    ],
+                }
+            ]
+        },
+        "parameters": {
+            "result_format": "message",
+        },
+    }
+
+    resp = requests.post(DASHSCOPE_BASE_URL, headers=headers, json=payload, timeout=OCR_PAGE_TIMEOUT)
+    resp.raise_for_status()
+    data = resp.json()
+
+    # DashScope 原生 API 响应结构：output.choices[0].message.content[0].text
+    try:
+        text = data["output"]["choices"][0]["message"]["content"][0]["text"]
+    except (KeyError, IndexError):
+        print(f"[OCR ENGINE] page {page_idx + 1} unexpected response: {data}", flush=True)
+        text = ""
+
+    print(f"[OCR ENGINE] page {page_idx + 1}/{total_pages} done, chars={len(text)}", flush=True)
+    upload_progress.page_done()
+    return {"page_num": page_idx + 1, "text": text.strip()}
+
+
+def _ocr_sync_qwen(pdf_bytes: bytes) -> OcrResult:
+    """
+    并发调用 Qwen-VL-OCR 对每页做识别，在线程池中运行以避免阻塞事件循环。
+
+    页数一多，逐页串行调用很容易撑爆整份文件的总超时（例如 45 页的合同，
+    每页 2-3 秒也要 100+ 秒）——改为多页并发请求，用 OCR_MAX_CONCURRENCY
+    控制并发数，避免打爆 DashScope 的限流。
+    """
+    import fitz  # PyMuPDF
+
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    pages: list[OcrPage] = []
+    total_pages = doc.page_count
+    upload_progress.start_ocr(total_pages)
 
-    for page_idx, page in enumerate(doc):
-        # 以 150 DPI 渲染为 PNG，base64 编码后传给 API
+    # 先在主线程把所有页渲染为 base64 图片（本地操作，不受网络并发影响）
+    page_images: list[str] = []
+    for page in doc:
         pix = page.get_pixmap(dpi=150)
-        img_b64 = base64.b64encode(pix.tobytes("png")).decode()
+        page_images.append(base64.b64encode(pix.tobytes("png")).decode())
 
-        payload = {
-            "model": QWEN_OCR_MODEL,
-            "input": {
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"image": f"data:image/png;base64,{img_b64}"},
-                            {"text": "请识别图中所有文字内容，保持原有格式输出。"},
-                        ],
-                    }
-                ]
-            },
-            "parameters": {
-                "result_format": "message",
-            },
-        }
-
-        resp = requests.post(DASHSCOPE_BASE_URL, headers=headers, json=payload, timeout=OCR_TIMEOUT)
-        resp.raise_for_status()
-        data = resp.json()
-
-        # DashScope 原生 API 响应结构：output.choices[0].message.content[0].text
-        try:
-            text = data["output"]["choices"][0]["message"]["content"][0]["text"]
-        except (KeyError, IndexError):
-            print(f"[OCR ENGINE] page {page_idx + 1} unexpected response: {data}", flush=True)
-            text = ""
-
-        pages.append({"page_num": page_idx + 1, "text": text.strip()})
-        print(f"[OCR ENGINE] page {page_idx + 1}/{doc.page_count} done, chars={len(text)}", flush=True)
+    with ThreadPoolExecutor(max_workers=OCR_MAX_CONCURRENCY) as executor:
+        futures = [
+            executor.submit(_ocr_one_page, idx, img_b64, total_pages)
+            for idx, img_b64 in enumerate(page_images)
+        ]
+        # 按提交顺序取结果即按页码顺序——某一页失败会在这里抛出，
+        # with 块退出前仍会等待其余已提交的页面完成（无法强行取消已发出的请求）
+        pages: list[OcrPage] = [f.result() for f in futures]
 
     full_text = "\n\n".join(p["text"] for p in pages if p["text"])
     return {"pages": pages, "full_text": full_text}

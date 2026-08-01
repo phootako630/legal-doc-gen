@@ -1,5 +1,12 @@
 // 后端 API 客户端：封装 /api/upload、/api/extract、/api/generate 的 fetch 调用
-import type { UploadResponse, ExtractResponse, GenerateResponse, ExtractedFields } from './types';
+import type {
+  UploadResponse,
+  UploadProgress,
+  ExtractResponse,
+  GenerateResponse,
+  ExtractedFields,
+  ParsedFile,
+} from './types';
 
 const BASE = '/api';
 
@@ -33,15 +40,34 @@ export async function uploadFiles(files: File[]): Promise<UploadResponse> {
   return res.json() as Promise<UploadResponse>;
 }
 
-/** 调用 LLM 完成抽取与校验 */
+/** 查询上传处理进度（上传期间轮询用；失败静默返回 null，不打断上传流程） */
+export async function fetchUploadProgress(): Promise<UploadProgress | null> {
+  try {
+    const res = await fetch(`${BASE}/upload/progress`);
+    if (!res.ok) return null;
+    return (await res.json()) as UploadProgress;
+  } catch {
+    return null;
+  }
+}
+
+/** 调用 LLM 完成抽取与校验；携带文件名/类型/是否扫描件，供后端结构化拼装与 OCR 标记 */
 export async function extractFields(
-  filesText: string[],
+  files: ParsedFile[],
   internetAllowed: boolean,
 ): Promise<ExtractResponse> {
   const res = await safeFetch(`${BASE}/extract`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ files_text: filesText, internet_allowed: internetAllowed }),
+    body: JSON.stringify({
+      files: files.map((f) => ({
+        filename: f.filename,
+        text: f.text,
+        is_scanned: f.is_scanned,
+        identified_type: f.identified_type,
+      })),
+      internet_allowed: internetAllowed,
+    }),
   });
   if (!res.ok) throw await extractError(res, '字段抽取失败');
   return res.json() as Promise<ExtractResponse>;

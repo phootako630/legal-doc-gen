@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Loader2, Download, TriangleAlert, ArrowLeft, RotateCcw } from 'lucide-react';
 import { ComplaintPreview } from './ComplaintPreview';
-import { downloadComplaintDocx } from '@/lib/doc-generator';
+import { buildComplaintHtml, downloadAsWord } from '@/lib/html-doc-generator';
 
 interface PreviewStepProps {
   complaintText: string;
@@ -18,10 +18,13 @@ export function PreviewStep({ complaintText, onBack, onReset }: PreviewStepProps
 
   const xxxCount = (complaintText.match(/XXX/g) ?? []).length;
 
-  const handleDownload = async () => {
+  const handleDownload = () => {
     setDownloading(true);
     try {
-      await downloadComplaintDocx(complaintText);
+      // TODO: headerText 目前用固定文案占位；若后续把当事人姓名/案号一路传到本组件，
+      // 可以在这里换成真实案件名（如"XX诉XX安装合同纠纷"）
+      const html = buildComplaintHtml(complaintText, { headerText: '民事起诉状' });
+      downloadAsWord(html, '起诉状.doc');
     } finally {
       setDownloading(false);
     }

@@ -17,6 +17,17 @@ export interface UploadResponse {
   warnings: string[];
 }
 
+/** GET /api/upload/progress 的响应：上传处理期间的实时进度（前端轮询用） */
+export interface UploadProgress {
+  active: boolean;
+  filename: string | null;
+  file_index: number;
+  total_files: number;
+  stage: '解析中' | 'OCR识别中' | '';
+  done_pages: number;
+  total_pages: number;
+}
+
 /** 单个字段值（AI 抽取格式） */
 export interface FieldValue {
   value: string | number | null;
@@ -68,6 +79,20 @@ export interface ExtractResponse {
 /** POST /api/generate 的响应 */
 export interface GenerateResponse {
   complaint_text: string;
+}
+
+/**
+ * 起诉状文档：LLM 生成的起诉状全文（含【高亮缺失】/【高亮冲突】/⚠️ 待核实 等审核期标记）。
+ * 这些标记仅用于屏幕预览着色（见 ComplaintPreview.tsx），Word 导出时会被清理为纯文本。
+ */
+export type ComplaintDocument = string;
+
+/** Word 导出的页眉/页脚元信息 */
+export interface DocMeta {
+  /** Text shown in the running header, e.g. the case name */
+  headerText: string;
+  /** Optional right-aligned header text, e.g. firm name */
+  headerRight?: string;
 }
 
 /** 字段在审核表格中的状态 */

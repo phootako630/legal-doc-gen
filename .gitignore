@@ -36,3 +36,6 @@ Thumbs.db
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# Sample/test case files (real-looking case documents, not for the repo)
+docs-examples/
