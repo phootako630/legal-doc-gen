@@ -20,5 +20,5 @@ openai==1.61.0
 # 代码质量
 ruff==0.9.2
 
-# 测试（llm_client 空返回重试 / llm_progress 进度模块单测）
+# 测试（validators / confidence / anchoring 纯函数、llm_client 空返回重试、llm_progress 进度模块单测）
 pytest==8.3.4
