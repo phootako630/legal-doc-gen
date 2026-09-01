@@ -95,8 +95,27 @@ async def chat(
     for attempt in range(2):  # 最多尝试 2 次
         try:
             response = await client.chat.completions.create(**kwargs)
-            content: str = response.choices[0].message.content or ""
+            choice = response.choices[0]
+            content: str = choice.message.content or ""
             last_content = content
+
+            # 每次调用记录 finish_reason 和 token 用量，空返回等问题才有排查依据
+            usage = response.usage
+            print(
+                f"[LLM] finish_reason={choice.finish_reason} content_len={len(content)}"
+                + (f" tokens={usage.completion_tokens}/{usage.total_tokens}" if usage else ""),
+                flush=True,
+            )
+
+            # 推理模型可能把 max_tokens 全部耗在思维链上（finish_reason=length），
+            # 导致正文为空——这是失败而非成功，必须走重试路径
+            if not content.strip():
+                if attempt == 1:
+                    raise RuntimeError(
+                        f"AI 返回内容为空（finish_reason={choice.finish_reason}），"
+                        "已重试一次仍为空，请稍后重试"
+                    )
+                continue
 
             if not json_mode:
                 return content

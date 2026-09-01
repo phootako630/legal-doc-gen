@@ -2,6 +2,7 @@
 import type {
   UploadResponse,
   UploadProgress,
+  LlmProgress,
   ExtractResponse,
   GenerateResponse,
   ExtractedFields,
@@ -46,6 +47,17 @@ export async function fetchUploadProgress(): Promise<UploadProgress | null> {
     const res = await fetch(`${BASE}/upload/progress`);
     if (!res.ok) return null;
     return (await res.json()) as UploadProgress;
+  } catch {
+    return null;
+  }
+}
+
+/** 查询抽取任务的 LLM 处理阶段（抽取期间轮询用；失败静默返回 null，不打断流程） */
+export async function fetchExtractProgress(): Promise<LlmProgress | null> {
+  try {
+    const res = await fetch(`${BASE}/extract/progress`);
+    if (!res.ok) return null;
+    return (await res.json()) as LlmProgress;
   } catch {
     return null;
   }

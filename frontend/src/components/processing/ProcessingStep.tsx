@@ -1,8 +1,8 @@
-// 第二步：AI 处理中——自动调用 /api/extract，模拟三阶段进度，成功后自动推进
+// 第二步：AI 处理中——调用 /api/extract，轮询后端真实 LLM 阶段驱动进度展示
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { StepProgress, type SubStep, type SubStepStatus } from './StepProgress';
-import { extractFields } from '@/lib/api';
+import { extractFields, fetchExtractProgress } from '@/lib/api';
 import type { UploadResponse, ExtractResponse } from '@/lib/types';
 
 interface ProcessingStepProps {
@@ -11,74 +11,97 @@ interface ProcessingStepProps {
   onDone: (result: ExtractResponse) => void;
 }
 
-type Phase = 'parse' | 'extract' | 'validate' | 'done' | 'error';
+/** 后端三个 LLM 阶段（与 /api/extract/progress 返回的 stage 名一一对应） */
+type StageKey = 'checklist' | 'extract' | 'validate';
 
-function statusOf(phase: Phase, errorAt: Phase | null, stepPhase: Phase): SubStepStatus {
-  const order: Phase[] = ['parse', 'extract', 'validate', 'done'];
-  const phaseIdx = order.indexOf(phase === 'error' ? (errorAt ?? 'extract') : phase);
-  const stepIdx = order.indexOf(stepPhase);
+const STAGE_ORDER: StageKey[] = ['checklist', 'extract', 'validate'];
 
-  if (phase === 'error' && stepPhase === errorAt) return 'error';
-  if (stepIdx < phaseIdx) return 'done';
-  if (stepIdx === phaseIdx && phase !== 'error' && phase !== 'done') return 'active';
-  if (phase === 'done') return 'done';
-  return 'pending';
-}
+const STAGE_BY_NAME: Record<string, StageKey> = {
+  材料清点: 'checklist',
+  字段抽取: 'extract',
+  校验高亮: 'validate',
+};
 
-function buildSteps(phase: Phase, errorAt: Phase | null, errorMsg: string): SubStep[] {
+const STAGE_LABELS: Record<StageKey, string> = {
+  checklist: '材料清点',
+  extract: '抽取字段',
+  validate: '交叉校验',
+};
+
+const STAGE_SUMMARIES: Record<StageKey, string> = {
+  checklist: '材料清点完成',
+  extract: '字段抽取完成',
+  validate: '校验完成，可进入审核',
+};
+
+/** 各阶段的预计耗时提示（基于 DeepSeek 实际观测，帮律师建立等待预期） */
+const STAGE_HINTS: Record<StageKey, string> = {
+  checklist: '正在核对材料是否齐全，通常需要 10–30 秒',
+  extract: '正在逐字段抽取并标注出处，本步最耗时，通常需要 1–2 分钟',
+  validate: '正在交叉校验各文件间的数据一致性，通常需要 30–60 秒',
+};
+
+type Phase = 'running' | 'done' | 'error';
+
+function buildSteps(
+  phase: Phase,
+  activeStage: StageKey,
+  elapsed: number,
+  errorMsg: string,
+): SubStep[] {
+  const activeIdx = STAGE_ORDER.indexOf(activeStage);
+
+  const llmSteps = STAGE_ORDER.map((stage, idx): SubStep => {
+    let status: SubStepStatus;
+    if (phase === 'done' || idx < activeIdx) status = 'done';
+    else if (idx > activeIdx) status = 'pending';
+    else status = phase === 'error' ? 'error' : 'active';
+
+    return {
+      label: STAGE_LABELS[stage],
+      status,
+      summary: STAGE_SUMMARIES[stage],
+      error: status === 'error' ? errorMsg : undefined,
+      activeHint:
+        status === 'active'
+          ? `${STAGE_HINTS[stage]}（已用时 ${elapsed} 秒）`
+          : undefined,
+    };
+  });
+
+  // 文件解析在上传步骤已完成，这里作为已完成步骤展示，让律师看到完整链路
   return [
-    {
-      label: '解析文件',
-      status: statusOf(phase, errorAt, 'parse'),
-      summary: '文件内容已提取',
-    },
-    {
-      label: '抽取字段',
-      status: statusOf(phase, errorAt, 'extract'),
-      summary: '字段抽取完成',
-      error: errorAt === 'extract' ? errorMsg : undefined,
-    },
-    {
-      label: '交叉校验',
-      status: statusOf(phase, errorAt, 'validate'),
-      summary: '校验完成，可进入审核',
-      error: errorAt === 'validate' ? errorMsg : undefined,
-    },
+    { label: '解析文件', status: 'done', summary: '上传时已完成' },
+    ...llmSteps,
   ];
 }
 
 export function ProcessingStep({ uploadResult, internetAllowed, onDone }: ProcessingStepProps) {
-  const [phase, setPhase] = useState<Phase>('parse');
-  const [errorAt, setErrorAt] = useState<Phase | null>(null);
+  const [phase, setPhase] = useState<Phase>('running');
+  const [activeStage, setActiveStage] = useState<StageKey>('checklist');
+  const [elapsed, setElapsed] = useState(0);
   const [errorMsg, setErrorMsg] = useState('');
-  const extractResultRef = useRef<ExtractResponse | null>(null);
   const onDoneRef = useRef(onDone);
   onDoneRef.current = onDone;
-  const calledRef = useRef(false);
 
   const runExtract = useCallback(async () => {
-    calledRef.current = false;
-    setPhase('parse');
-    setErrorAt(null);
+    setPhase('running');
+    setActiveStage('checklist');
+    setElapsed(0);
     setErrorMsg('');
-    extractResultRef.current = null;
-
-    // 短暂显示"解析文件"
-    await delay(900);
-    setPhase('extract');
 
     let result: ExtractResponse;
     try {
       result = await extractFields(uploadResult.files, internetAllowed);
     } catch (e) {
-      setErrorAt('extract');
-      setErrorMsg(e instanceof Error ? e.message : '字段抽取失败，请重试');
+      setErrorMsg(e instanceof Error ? e.message : '处理失败，请重试');
       setPhase('error');
       return;
     }
 
-    extractResultRef.current = result;
-    setPhase('validate');
+    setPhase('done');
+    // 稍停片刻让律师看到全部完成的绿勾，再推进到审核页
+    setTimeout(() => onDoneRef.current(result), 600);
   }, [uploadResult, internetAllowed]);
 
   // 启动。React StrictMode 开发模式下 effect 会双重执行，若不拦截会同时发出
@@ -91,24 +114,20 @@ export function ProcessingStep({ uploadResult, internetAllowed, onDone }: Proces
     runExtract();
   }, [runExtract]);
 
-  // validate 阶段：短暂后设为 done
+  // 处理期间每秒轮询后端真实阶段；elapsed 由后端计算，避免前后端时钟不一致
   useEffect(() => {
-    if (phase !== 'validate') return;
-    const t = setTimeout(() => setPhase('done'), 700);
-    return () => clearTimeout(t);
+    if (phase !== 'running') return;
+    const timer = setInterval(async () => {
+      const p = await fetchExtractProgress();
+      if (p?.active && p.stage in STAGE_BY_NAME) {
+        setActiveStage(STAGE_BY_NAME[p.stage]);
+        setElapsed(p.stage_elapsed_s);
+      }
+    }, 1000);
+    return () => clearInterval(timer);
   }, [phase]);
 
-  // done 阶段：稍停后推进
-  useEffect(() => {
-    if (phase !== 'done' || calledRef.current) return;
-    calledRef.current = true;
-    const t = setTimeout(() => {
-      if (extractResultRef.current) onDoneRef.current(extractResultRef.current);
-    }, 500);
-    return () => clearTimeout(t);
-  }, [phase]);
-
-  const steps = buildSteps(phase, errorAt, errorMsg);
+  const steps = buildSteps(phase, activeStage, elapsed, errorMsg);
 
   return (
     <Card className="shadow-sm">
@@ -124,8 +143,4 @@ export function ProcessingStep({ uploadResult, internetAllowed, onDone }: Proces
       </CardContent>
     </Card>
   );
-}
-
-function delay(ms: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
