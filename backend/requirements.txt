@@ -19,3 +19,6 @@ openai==1.61.0
 
 # 代码质量
 ruff==0.9.2
+
+# 测试（服务层纯函数单测：validators / confidence / anchoring）
+pytest==8.3.4
