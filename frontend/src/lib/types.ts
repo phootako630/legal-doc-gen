@@ -78,9 +78,20 @@ export interface ExtractedFields {
   internet_lookup_status: FieldValue;
 }
 
+/** 交叉校验单项结果（②：由后端确定性代码判定，非 LLM） */
+export interface ValidationCheck {
+  key: string; // 'amount_reconcile' | 'qty_consistency' | 'credit_code' | 'date_valid'
+  passed: boolean;
+  applicable: boolean; // false 表示输入不足、本次跳过（既非通过也非冲突）
+  is_conflict: boolean; // applicable 且未通过 = 真冲突
+  message: string; // 中文说明
+  related_fields: string[];
+}
+
 /** POST /api/extract 的响应 */
 export interface ExtractResponse {
   extracted_fields: ExtractedFields;
+  validations: ValidationCheck[]; // 确定性校验结论，冲突态的权威来源
   validation_report: string;
   highlight_list: string;
 }

@@ -2,7 +2,7 @@
 import { useState, useCallback, useImperativeHandle, forwardRef } from 'react';
 import { FieldRow } from './FieldRow';
 import { buildReviewFields, applyEdits } from '@/lib/buildReviewFields';
-import type { ExtractedFields, ReviewField } from '@/lib/types';
+import type { ExtractedFields, ReviewField, ValidationCheck } from '@/lib/types';
 
 export interface FieldTableHandle {
   getEditedFields: () => ExtractedFields;
@@ -10,11 +10,14 @@ export interface FieldTableHandle {
 
 interface FieldTableProps {
   extractedFields: ExtractedFields;
+  validations?: ValidationCheck[];
 }
 
 export const FieldTable = forwardRef<FieldTableHandle, FieldTableProps>(
-  function FieldTable({ extractedFields }, ref) {
-    const [rows, setRows] = useState<ReviewField[]>(() => buildReviewFields(extractedFields));
+  function FieldTable({ extractedFields, validations = [] }, ref) {
+    const [rows, setRows] = useState<ReviewField[]>(() =>
+      buildReviewFields(extractedFields, validations),
+    );
 
     const handleSave = useCallback((key: string, value: string) => {
       setRows((prev) =>

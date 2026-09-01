@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from app.services import llm_progress
 from app.services.llm_client import chat
 from app.services.prompt_loader import load_prompt
+from app.services.validators import ValidationCheck, check_to_dict, run_all_checks
 
 router = APIRouter()
 
@@ -27,6 +28,9 @@ class ExtractRequest(BaseModel):
 
 class ExtractResponse(BaseModel):
     extracted_fields: dict  # type: ignore[type-arg]
+    # 确定性代码校验结论（金额勾稽/台数三源/信用代码/日期），是冲突判断的权威来源。
+    # LLM 不再做一致性判断，validation_report/highlight_list 仅为据此生成的说明文本。
+    validations: list[dict]  # type: ignore[type-arg]
     validation_report: str
     highlight_list: str
 
@@ -46,6 +50,20 @@ def _build_combined_text(files: list[FileInput]) -> str:
         tag = "（本文件为 OCR 扫描识别，文字可能存在误差）" if f.is_scanned else ""
         blocks.append(f"【文件：{f.filename}｜{f.identified_type}】{tag}\n{f.text}")
     return "\n\n---\n\n".join(blocks)
+
+
+def _format_checks_for_llm(checks: list[ValidationCheck]) -> str:
+    """把确定性校验结论渲染成给 LLM 的只读事实清单——LLM 据此措辞，不得重新判断。"""
+    lines: list[str] = []
+    for c in checks:
+        if not c.applicable:
+            verdict = "未校验（信息不足）"
+        elif c.passed:
+            verdict = "通过"
+        else:
+            verdict = "冲突/不通过"
+        lines.append(f"- [{verdict}] {c.message}")
+    return "\n".join(lines)
 
 
 def _mark_ocr_fields(data: Any, scanned_filenames: set[str]) -> None:
@@ -132,13 +150,18 @@ async def _extract_impl(req: ExtractRequest) -> ExtractResponse:
     # 代码层面补全 OCR 标记（见 _mark_ocr_fields 说明），不依赖模型是否记得声明
     _mark_ocr_fields(extracted_fields, scanned_filenames)
 
-    # ── Step 3：校验高亮（json_mode=False，返回文本）──────────────────────
+    # ── Step 3a：确定性交叉校验（代码，非 LLM）────────────────────────────
+    # 金额勾稽/台数三源/信用代码/日期一律由 validators.py 判定，是冲突结论的权威来源。
+    checks = run_all_checks(extracted_fields)
+    validations = [check_to_dict(c) for c in checks]
+
+    # ── Step 3b：LLM 仅据确定性结论生成给律师看的说明文本（不做一致性判断）──
     llm_progress.start_stage("校验高亮", 3)
     validate_prompt = load_prompt(
         "prompt-a-validate.md",
         {
             "extracted_json": json.dumps(extracted_fields, ensure_ascii=False),
-            "material_checklist": checklist_summary,
+            "deterministic_checks": _format_checks_for_llm(checks),
         },
     )
     try:
@@ -153,6 +176,7 @@ async def _extract_impl(req: ExtractRequest) -> ExtractResponse:
 
     return ExtractResponse(
         extracted_fields=extracted_fields,
+        validations=validations,
         validation_report=validation_report,
         highlight_list=highlight_list,
     )

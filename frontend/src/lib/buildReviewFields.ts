@@ -1,5 +1,5 @@
 // ExtractedFields → ReviewField[] 转换，以及将编辑结果写回 ExtractedFields
-import type { ExtractedFields, FieldStatus, ReviewField } from './types';
+import type { ExtractedFields, FieldStatus, ReviewField, ValidationCheck } from './types';
 import { fieldNameMap, reviewFieldKeys } from './field-map';
 
 // 用于绕过严格类型，按 key 动态访问 ExtractedFields
@@ -13,10 +13,32 @@ function inferStatus(value: string | number | null, src: string): FieldStatus {
   return 'normal';
 }
 
-/** 将后端 ExtractedFields 转换为审核表格所需的 ReviewField[] */
-export function buildReviewFields(fields: ExtractedFields): ReviewField[] {
+/**
+ * 从确定性校验结论中收集"处于冲突"的字段 key（权威冲突来源，②）。
+ * 台数三源不一致对应展示字段 elevator_qty（表格不单列三个来源口径）。
+ */
+function collectConflictKeys(validations: ValidationCheck[]): Set<string> {
+  const keys = new Set<string>();
+  for (const v of validations) {
+    if (!v.is_conflict) continue;
+    for (const k of v.related_fields) keys.add(k);
+    if (v.key === 'qty_consistency') keys.add('elevator_qty');
+  }
+  return keys;
+}
+
+/**
+ * 将后端 ExtractedFields 转换为审核表格所需的 ReviewField[]。
+ * validations 为确定性校验结论：命中冲突的字段状态直接置为 conflict（优先级最高，
+ * 覆盖 src 文本启发式），对齐 CLAUDE.md「硬信号定状态」。
+ */
+export function buildReviewFields(
+  fields: ExtractedFields,
+  validations: ValidationCheck[] = [],
+): ReviewField[] {
   const rows: ReviewField[] = [];
   const raw = fields as unknown as AnyFields;
+  const conflictKeys = collectConflictKeys(validations);
 
   for (const key of reviewFieldKeys) {
     const label = fieldNameMap[key] ?? key;
@@ -37,7 +59,12 @@ export function buildReviewFields(fields: ExtractedFields): ReviewField[] {
         parts.push(`${name ?? '？'}（${phone ?? '？'}）`);
       }
       const value = parts.length > 0 ? parts.join('；') : null;
-      rows.push({ key, label, value, src: '', status: value ? 'normal' : 'missing', isEditing: false });
+      const status: FieldStatus = conflictKeys.has(key)
+        ? 'conflict'
+        : value
+          ? 'normal'
+          : 'missing';
+      rows.push({ key, label, value, src: '', status, isEditing: false });
       continue;
     }
 
@@ -45,12 +72,16 @@ export function buildReviewFields(fields: ExtractedFields): ReviewField[] {
     if (!fv || typeof fv !== 'object' || !('value' in (fv as object))) continue;
 
     const { value, src } = fv as { value: string | number | null; src: string };
+    // 确定性冲突优先级最高（conflict > missing > ocr_uncertain > normal）
+    const status: FieldStatus = conflictKeys.has(key)
+      ? 'conflict'
+      : inferStatus(value, src ?? '');
     rows.push({
       key,
       label,
       value: value !== null ? String(value) : null,
       src: src ?? '',
-      status: inferStatus(value, src ?? ''),
+      status,
       isEditing: false,
     });
   }
