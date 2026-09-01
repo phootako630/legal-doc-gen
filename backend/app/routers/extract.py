@@ -1,10 +1,12 @@
 # POST /api/extract：接收文件文本，依次调用 LLM 完成清点、抽取、校验三步
+# GET /api/extract/progress：三步 LLM 处理的实时阶段，供前端轮询渲染进度
 import json
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from app.services import llm_progress
 from app.services.llm_client import chat
 from app.services.prompt_loader import load_prompt
 
@@ -27,6 +29,14 @@ class ExtractResponse(BaseModel):
     extracted_fields: dict  # type: ignore[type-arg]
     validation_report: str
     highlight_list: str
+
+
+class LlmProgress(BaseModel):
+    active: bool
+    stage: str  # '材料清点' | '字段抽取' | '校验高亮' | ''
+    stage_index: int
+    total_stages: int
+    stage_elapsed_s: int
 
 
 def _build_combined_text(files: list[FileInput]) -> str:
@@ -61,11 +71,27 @@ def _mark_ocr_fields(data: Any, scanned_filenames: set[str]) -> None:
 
 @router.post("/extract", response_model=ExtractResponse)
 async def extract(req: ExtractRequest) -> ExtractResponse:
+    """三步 LLM 调用入口：包一层进度记录，保证异常时进度态也能复位。"""
+    llm_progress.begin(total_stages=3)
+    try:
+        return await _extract_impl(req)
+    finally:
+        llm_progress.finish()
+
+
+@router.get("/extract/progress", response_model=LlmProgress)
+async def get_extract_progress() -> LlmProgress:
+    """返回当前抽取任务的处理阶段（v1 单用户全局态，无任务 ID）。"""
+    return LlmProgress(**llm_progress.snapshot())
+
+
+async def _extract_impl(req: ExtractRequest) -> ExtractResponse:
     """三步 LLM 调用：材料清点 → 字段抽取 → 校验高亮。"""
     combined_text = _build_combined_text(req.files)
     scanned_filenames = {f.filename for f in req.files if f.is_scanned}
 
     # ── Step 1：材料清点（json_mode=True）──────────────────────────────────
+    llm_progress.start_stage("材料清点", 1)
     checklist_prompt = load_prompt("prompt-a-checklist.md", {"files_text": combined_text})
     try:
         checklist: dict = await chat(  # type: ignore[type-arg]
@@ -87,6 +113,7 @@ async def extract(req: ExtractRequest) -> ExtractResponse:
     checklist_summary = json.dumps(checklist, ensure_ascii=False, indent=2)
 
     # ── Step 2：字段抽取（json_mode=True）──────────────────────────────────
+    llm_progress.start_stage("字段抽取", 2)
     extract_prompt = load_prompt(
         "prompt-a-extract.md",
         {
@@ -106,6 +133,7 @@ async def extract(req: ExtractRequest) -> ExtractResponse:
     _mark_ocr_fields(extracted_fields, scanned_filenames)
 
     # ── Step 3：校验高亮（json_mode=False，返回文本）──────────────────────
+    llm_progress.start_stage("校验高亮", 3)
     validate_prompt = load_prompt(
         "prompt-a-validate.md",
         {

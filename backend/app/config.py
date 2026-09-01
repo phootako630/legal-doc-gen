@@ -9,7 +9,10 @@ DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL = "deepseek-v4-flash"
 
 LLM_TEMPERATURE = 0.1
-LLM_MAX_TOKENS = 8192
+# deepseek-v4-flash 是推理模型：思维链（reasoning_content）也计入 max_tokens。
+# 8192 时曾出现思维链耗尽全部配额、正文为空（finish_reason=length）——
+# 必须留出足够余量，实测 16384 可被 API 接受
+LLM_MAX_TOKENS = 16384
 LLM_TIMEOUT = 120  # 秒
 
 # ── OCR ──────────────────────────────────────────────────────────────────────

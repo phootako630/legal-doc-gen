@@ -8,8 +8,9 @@ export type SubStepStatus = 'pending' | 'active' | 'done' | 'error';
 export interface SubStep {
   label: string;
   status: SubStepStatus;
-  summary?: string;   // 完成时显示的摘要文字
-  error?: string;     // 失败时的错误信息
+  summary?: string;    // 完成时显示的摘要文字
+  error?: string;      // 失败时的错误信息
+  activeHint?: string; // 进行中时显示的提示（如已用时、预计耗时）
 }
 
 interface StepProgressProps {
@@ -63,6 +64,10 @@ export function StepProgress({ steps, onRetry }: StepProgressProps) {
                   <span className="ml-2 text-xs font-normal text-muted-foreground">处理中…</span>
                 )}
               </p>
+
+              {step.status === 'active' && step.activeHint && (
+                <p className="mt-0.5 text-xs text-muted-foreground">{step.activeHint}</p>
+              )}
 
               {step.status === 'done' && step.summary && (
                 <p className="mt-0.5 text-xs text-emerald-600">{step.summary}</p>

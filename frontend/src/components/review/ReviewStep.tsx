@@ -1,5 +1,5 @@
 // 第三步：审核确认——字段表格 + 校验报告，确认后调用 /api/generate
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -22,7 +22,18 @@ export function ReviewStep({ extractResult, onBack, onDone }: ReviewStepProps) {
   const tableRef = useRef<FieldTableHandle>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [genElapsed, setGenElapsed] = useState(0);
   const allMissing = isAllFieldsMissing(extractResult.extracted_fields);
+
+  // 生成是单次长 LLM 调用（无中间阶段可轮询），用客户端计时给律师等待预期
+  useEffect(() => {
+    if (!loading) {
+      setGenElapsed(0);
+      return;
+    }
+    const timer = setInterval(() => setGenElapsed((s) => s + 1), 1000);
+    return () => clearInterval(timer);
+  }, [loading]);
 
   const handleGenerate = async () => {
     const editedFields = tableRef.current?.getEditedFields() ?? extractResult.extracted_fields;
@@ -100,6 +111,11 @@ export function ReviewStep({ extractResult, onBack, onDone }: ReviewStepProps) {
             <p className="flex items-center gap-1.5 text-xs text-destructive">
               <TriangleAlert className="h-3.5 w-3.5" />
               {error}
+            </p>
+          )}
+          {loading && (
+            <p className="text-xs text-muted-foreground">
+              正在生成起诉状，通常需要 1–2 分钟，请勿关闭页面（已用时 {genElapsed} 秒）
             </p>
           )}
           <Button onClick={handleGenerate} disabled={loading} size="lg" className="min-w-44 gap-2 shadow-sm">

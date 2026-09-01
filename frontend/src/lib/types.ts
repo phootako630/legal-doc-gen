@@ -17,6 +17,15 @@ export interface UploadResponse {
   warnings: string[];
 }
 
+/** GET /api/extract/progress 的响应：三步 LLM 处理的实时阶段（前端轮询用） */
+export interface LlmProgress {
+  active: boolean;
+  stage: '材料清点' | '字段抽取' | '校验高亮' | '';
+  stage_index: number;
+  total_stages: number;
+  stage_elapsed_s: number;
+}
+
 /** GET /api/upload/progress 的响应：上传处理期间的实时进度（前端轮询用） */
 export interface UploadProgress {
   active: boolean;
