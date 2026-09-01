@@ -74,6 +74,7 @@ export function ReviewStep({ extractResult, onBack, onDone }: ReviewStepProps) {
             <FieldTable
               ref={tableRef}
               extractedFields={extractResult.extracted_fields}
+              validations={extractResult.validations}
             />
           </CardContent>
         </Card>
@@ -88,7 +89,10 @@ export function ReviewStep({ extractResult, onBack, onDone }: ReviewStepProps) {
                   <TabsTrigger value="highlight" className="flex-1 text-xs">高亮列表</TabsTrigger>
                 </TabsList>
                 <TabsContent value="report" className="mt-3 max-h-[65vh] overflow-y-auto">
-                  <ValidationReport report={extractResult.validation_report} />
+                  <ValidationReport
+                    report={extractResult.validation_report}
+                    validations={extractResult.validations}
+                  />
                 </TabsContent>
                 <TabsContent value="highlight" className="mt-3 max-h-[65vh] overflow-y-auto">
                   <HighlightList highlightList={extractResult.highlight_list} />

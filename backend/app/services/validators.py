@@ -262,3 +262,15 @@ def run_all_checks(fields: dict) -> list[ValidationCheck]:
         check_date_valid(_field_value(fields, "contract_sign_date"), "contract_sign_date"),
     ]
     return checks
+
+
+def check_to_dict(check: ValidationCheck) -> dict[str, object]:
+    """把 ValidationCheck 序列化为 API/前端可消费的字典（含派生的 is_conflict）。"""
+    return {
+        "key": check.key,
+        "passed": check.passed,
+        "applicable": check.applicable,
+        "is_conflict": check.is_conflict,
+        "message": check.message,
+        "related_fields": list(check.related_fields),
+    }
