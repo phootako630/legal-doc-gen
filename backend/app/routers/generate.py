@@ -1,11 +1,11 @@
-# POST /api/generate：接收律师确认后的字段 JSON，生成起诉状全文
-import json
-
+# POST /api/generate：接收律师确认后的字段 JSON，确定性渲染起诉状全文
+#
+# v2 第 4 步：不再调用 LLM 自由生成，改为 complaint_renderer 模板填槽（非 LLM）。
+# 标注（缺失/冲突/OCR）由代码按字段状态贴，稳定可控；prompt-b-generate.md 降为 v1 遗留。
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from app.services.llm_client import chat
-from app.services.prompt_loader import load_prompt
+from app.services.complaint_renderer import render_complaint
 
 router = APIRouter()
 
@@ -20,21 +20,14 @@ class GenerateResponse(BaseModel):
 
 @router.post("/generate", response_model=GenerateResponse)
 async def generate(req: GenerateRequest) -> GenerateResponse:
-    """将律师确认的字段 JSON 和起诉状模板注入 Prompt B，调用 LLM 生成起诉状全文。"""
-    complaint_template = load_prompt("complaint-template.md")
-    prompt = load_prompt(
-        "prompt-b-generate.md",
-        {
-            "complaint_template": complaint_template,
-            "validated_json": json.dumps(req.validated_json, ensure_ascii=False, indent=2),
-        },
-    )
+    """将律师确认的字段模板填槽为起诉状全文（确定性渲染，非 LLM）。"""
     try:
-        complaint_text: str = await chat([{"role": "user", "content": prompt}])
-    except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=f"起诉状生成失败：{e}") from e
+        complaint_text = render_complaint(req.validated_json)
+    except FileNotFoundError as e:
+        # 模板文件缺失属部署问题，给出明确中文错误
+        raise HTTPException(status_code=500, detail=f"起诉状模板缺失：{e}") from e
 
     if not complaint_text.strip():
-        raise HTTPException(status_code=500, detail="起诉状生成失败：LLM 返回为空")
+        raise HTTPException(status_code=500, detail="起诉状生成失败：渲染结果为空")
 
     return GenerateResponse(complaint_text=complaint_text)
