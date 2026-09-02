@@ -1,14 +1,14 @@
-// 第二步：AI 处理中——调用 /api/extract，轮询后端真实 LLM 阶段驱动进度展示
+// 第二步：AI 处理中——启动 agent（/api/analyze），轮询后端真实阶段驱动进度展示
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { StepProgress, type SubStep, type SubStepStatus } from './StepProgress';
-import { extractFields, fetchExtractProgress } from '@/lib/api';
-import type { UploadResponse, ExtractResponse } from '@/lib/types';
+import { analyzeCase, fetchAnalyzeProgress } from '@/lib/api';
+import type { UploadResponse, CaseState } from '@/lib/types';
 
 interface ProcessingStepProps {
   uploadResult: UploadResponse;
   internetAllowed: boolean;
-  onDone: (result: ExtractResponse) => void;
+  onDone: (result: CaseState) => void;
 }
 
 /** 后端三个 LLM 阶段（与 /api/extract/progress 返回的 stage 名一一对应） */
@@ -84,15 +84,15 @@ export function ProcessingStep({ uploadResult, internetAllowed, onDone }: Proces
   const onDoneRef = useRef(onDone);
   onDoneRef.current = onDone;
 
-  const runExtract = useCallback(async () => {
+  const runAnalyze = useCallback(async () => {
     setPhase('running');
     setActiveStage('checklist');
     setElapsed(0);
     setErrorMsg('');
 
-    let result: ExtractResponse;
+    let result: CaseState;
     try {
-      result = await extractFields(uploadResult.files, internetAllowed);
+      result = await analyzeCase(uploadResult.files, internetAllowed);
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : '处理失败，请重试');
       setPhase('error');
@@ -100,25 +100,25 @@ export function ProcessingStep({ uploadResult, internetAllowed, onDone }: Proces
     }
 
     setPhase('done');
-    // 稍停片刻让律师看到全部完成的绿勾，再推进到审核页
+    // 稍停片刻让律师看到全部完成的绿勾，再推进到审核页（命中断点则由审核页处理 pending）
     setTimeout(() => onDoneRef.current(result), 600);
   }, [uploadResult, internetAllowed]);
 
   // 启动。React StrictMode 开发模式下 effect 会双重执行，若不拦截会同时发出
-  // 两个 /api/extract 请求（各含 3 次 LLM 调用）：双倍耗时费用，且两次结果
+  // 两个 /api/analyze 请求（各含多次 LLM 调用）：双倍耗时费用，且两次结果
   // 可能不一致（曾出现一次 422 一次成功的竞态）——用 ref 保证只启动一次
   const startedRef = useRef(false);
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
-    runExtract();
-  }, [runExtract]);
+    runAnalyze();
+  }, [runAnalyze]);
 
   // 处理期间每秒轮询后端真实阶段；elapsed 由后端计算，避免前后端时钟不一致
   useEffect(() => {
     if (phase !== 'running') return;
     const timer = setInterval(async () => {
-      const p = await fetchExtractProgress();
+      const p = await fetchAnalyzeProgress();
       if (p?.active && p.stage in STAGE_BY_NAME) {
         setActiveStage(STAGE_BY_NAME[p.stage]);
         setElapsed(p.stage_elapsed_s);
@@ -138,7 +138,7 @@ export function ProcessingStep({ uploadResult, internetAllowed, onDone }: Proces
       <CardContent className="px-10 py-10">
         <StepProgress
           steps={steps}
-          onRetry={phase === 'error' ? runExtract : undefined}
+          onRetry={phase === 'error' ? runAnalyze : undefined}
         />
       </CardContent>
     </Card>
