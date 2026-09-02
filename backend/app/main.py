@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import CORS_ORIGINS
-from app.routers import files, extract, generate
+from app.routers import analyze, extract, files, generate, resume
 
 app = FastAPI(title="安装合同纠纷起诉状生成系统", version="1.0.0")
 
@@ -26,6 +26,8 @@ app.add_middleware(
 
 app.include_router(files.router, prefix="/api")
 app.include_router(extract.router, prefix="/api")
+app.include_router(analyze.router, prefix="/api")
+app.include_router(resume.router, prefix="/api")
 app.include_router(generate.router, prefix="/api")
 
 
