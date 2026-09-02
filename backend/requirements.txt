@@ -17,6 +17,9 @@ requests==2.32.3
 # LLM 调用（OpenAI SDK 兼容 DeepSeek）
 openai==1.61.0
 
+# Agent 编排：仅用 LangGraph 的图 + checkpoint + interrupt，不引入 LangChain 本体
+langgraph==0.2.76
+
 # 代码质量
 ruff==0.9.2
 
