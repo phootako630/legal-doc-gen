@@ -1,5 +1,11 @@
 // 共享类型定义：所有接口、枚举、联合类型均在此声明，前后端数据契约的前端侧
 
+/** 单页文本（供抽取值回原文定位到具体页码） */
+export interface PageText {
+  page: number;
+  text: string;
+}
+
 /** 后端返回的单个文件解析结果 */
 export interface ParsedFile {
   filename: string;
@@ -7,6 +13,7 @@ export interface ParsedFile {
   text: string;
   is_scanned: boolean;
   page_count: number;
+  pages: PageText[];
 }
 
 /** POST /api/upload 的响应 */
@@ -37,10 +44,17 @@ export interface UploadProgress {
   total_pages: number;
 }
 
-/** 单个字段值（AI 抽取格式） */
+/** 字段来源通道（用于 confidence 计算与展示） */
+export type SourceChannel = 'text' | 'ocr' | 'multimodal';
+
+/** 单个字段值（AI 抽取格式；出处字段由后端逐页锚定补充，供回溯） */
 export interface FieldValue {
   value: string | number | null;
   src: string;
+  page?: number | null; // 值回原文命中的真实页码（未命中为 null）
+  anchor?: string | null; // 原文命中片段（反幻觉比对 / 高亮）
+  channel?: SourceChannel; // 命中所在文件的来源通道
+  confidence?: number; // 0–100 软置信度，仅供 UI 排序/默认展开
 }
 
 /** 抽取结果 JSON */
@@ -147,6 +161,7 @@ export interface ReviewField {
   label: string;
   value: string | null;
   src: string;
+  page?: number | null; // 值回原文命中的真实页码（供来源列展示，未命中为 null）
   status: FieldStatus;
   isEditing: boolean;
   editedValue?: string;

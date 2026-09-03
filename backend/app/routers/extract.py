@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from app.services import llm_progress
 from app.services.extraction import (
     build_combined_text,
+    enrich_provenance,
     format_checks_for_llm,
     mark_ocr_fields,
 )
@@ -18,11 +19,18 @@ from app.services.validators import check_to_dict, run_all_checks
 router = APIRouter()
 
 
+class PageText(BaseModel):
+    page: int
+    text: str
+
+
 class FileInput(BaseModel):
     filename: str
     text: str
     is_scanned: bool = False
     identified_type: str = "未知"
+    # 逐页文本，供抽取后定位真实页码；旧客户端可不带
+    pages: list[PageText] = []
 
 
 class ExtractRequest(BaseModel):
@@ -65,12 +73,15 @@ async def get_extract_progress() -> LlmProgress:
 
 async def _extract_impl(req: ExtractRequest) -> ExtractResponse:
     """三步 LLM 调用：材料清点 → 字段抽取 → 校验高亮。"""
-    combined_text = build_combined_text([f.model_dump() for f in req.files])
+    files = [f.model_dump() for f in req.files]
+    combined_text = build_combined_text(files)
     scanned_filenames = {f.filename for f in req.files if f.is_scanned}
 
     # ── Step 1：材料清点（json_mode=True）──────────────────────────────────
     llm_progress.start_stage("材料清点", 1)
-    checklist_prompt = load_prompt("prompt-a-checklist.md", {"files_text": combined_text})
+    checklist_prompt = load_prompt(
+        "prompt-a-checklist.md", {"files_text": combined_text}
+    )
     try:
         checklist: dict = await chat(  # type: ignore[type-arg]
             [{"role": "user", "content": checklist_prompt}], json_mode=True
@@ -82,7 +93,9 @@ async def _extract_impl(req: ExtractRequest) -> ExtractResponse:
     if not checklist.get("can_proceed", True):
         missing: list[str] = checklist.get("missing", [])
         notes: str = checklist.get("notes", "")
-        detail = f"材料不足，无法继续处理。缺少：{'、'.join(missing) if missing else '未知'}"
+        detail = (
+            f"材料不足，无法继续处理。缺少：{'、'.join(missing) if missing else '未知'}"
+        )
         if notes:
             detail += f"。备注：{notes}"
         raise HTTPException(status_code=422, detail=detail)
@@ -109,6 +122,8 @@ async def _extract_impl(req: ExtractRequest) -> ExtractResponse:
 
     # 代码层面补全 OCR 标记（见 mark_ocr_fields 说明），不依赖模型是否记得声明
     mark_ocr_fields(extracted_fields, scanned_filenames)
+    # 值回原文逐页锚定：补充已验证页码 + 命中片段 + 通道 + confidence（出处可追溯）
+    enrich_provenance(extracted_fields, files)
 
     # ── Step 3a：确定性交叉校验（代码，非 LLM）────────────────────────────
     # 金额勾稽/台数三源/信用代码/日期一律由 validators.py 判定，是冲突结论的权威来源。
