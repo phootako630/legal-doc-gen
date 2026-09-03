@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.services.confidence import ConfidenceSignals, compute_confidence
+from app.services.provenance import resolve_provenance
 from app.services.validators import ValidationCheck
 
 
@@ -15,7 +17,9 @@ def build_combined_text(files: list[dict]) -> str:
     """
     blocks: list[str] = []
     for f in files:
-        tag = "（本文件为 OCR 扫描识别，文字可能存在误差）" if f.get("is_scanned") else ""
+        tag = (
+            "（本文件为 OCR 扫描识别，文字可能存在误差）" if f.get("is_scanned") else ""
+        )
         name = f.get("filename", "未知文件")
         dtype = f.get("identified_type", "未知")
         blocks.append(f"【文件：{name}｜{dtype}】{tag}\n{f.get('text', '')}")
@@ -41,6 +45,36 @@ def mark_ocr_fields(data: Any, scanned_filenames: set[str]) -> None:
     elif isinstance(data, list):
         for item in data:
             mark_ocr_fields(item, scanned_filenames)
+
+
+def enrich_provenance(data: Any, files: list[dict]) -> None:
+    """
+    递归遍历 extracted_fields，为每个 FieldValue 补充**已验证**的出处信息：
+      page    —— 值回原文逐页锚定得到的真实页码（未命中为 None，不伪造）
+      anchor  —— 命中片段（供前端高亮/反幻觉比对）
+      channel —— 命中所在文件的来源通道（扫描件 ocr / 文本 text）
+      confidence —— 由确定性软信号加权得出的 0-100 分（仅供 UI 排序/默认展开）
+
+    值保守保留（不因未命中而硬删）：未命中时 confidence 偏低，
+    交由 confidence.map_status 归入「待核实」，避免误删有效值。
+    """
+    if isinstance(data, dict):
+        if "value" in data and "src" in data:
+            prov = resolve_provenance(data.get("value"), data.get("src"), files)
+            data["page"] = prov.page
+            data["anchor"] = prov.matched_text
+            data["channel"] = prov.channel
+            data["confidence"] = compute_confidence(
+                ConfidenceSignals(
+                    channel=prov.channel, anchor_quality=prov.anchor_quality
+                )
+            )
+            return
+        for v in data.values():
+            enrich_provenance(v, files)
+    elif isinstance(data, list):
+        for item in data:
+            enrich_provenance(item, files)
 
 
 def format_checks_for_llm(checks: list[ValidationCheck]) -> str:

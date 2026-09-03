@@ -9,12 +9,19 @@ from app.services.file_parser import parse_file
 router = APIRouter()
 
 
+class PageText(BaseModel):
+    page: int  # 页码，从 1 开始
+    text: str  # 该页文本（可解析 PDF 为 PyMuPDF 逐页文本；扫描件为 OCR 逐页结果）
+
+
 class ParsedFile(BaseModel):
     filename: str
     identified_type: str  # '审批表' | '合同' | '验收报告' | '未知'
     text: str
     is_scanned: bool
     page_count: int
+    # 逐页文本，供抽取值回原文定位到具体页码；旧客户端可不带，缺省空列表
+    pages: list[PageText] = []
 
 
 class UploadResponse(BaseModel):
@@ -53,7 +60,9 @@ async def upload(files: list[UploadFile] = File(...)) -> UploadResponse:
             except Exception as e:
                 # 解析失败（含 OCR 失败）在旧版本里只进了 warnings、从不打印，
                 # 排查时后端日志完全看不出原因——必须打印，否则只能靠猜
-                print(f"[UPLOAD] 文件解析失败：{upload_file.filename} — {e}", flush=True)
+                print(
+                    f"[UPLOAD] 文件解析失败：{upload_file.filename} — {e}", flush=True
+                )
                 warnings.append(f"{upload_file.filename}：解析失败 — {e}")
     finally:
         upload_progress.finish()

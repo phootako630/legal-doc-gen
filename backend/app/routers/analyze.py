@@ -10,11 +10,18 @@ from app.services import llm_progress
 router = APIRouter()
 
 
+class PageText(BaseModel):
+    page: int
+    text: str
+
+
 class FileInput(BaseModel):
     filename: str
     text: str
     is_scanned: bool = False
     identified_type: str = "未知"
+    # 逐页文本，供抽取后定位真实页码；旧客户端可不带
+    pages: list[PageText] = []
 
 
 class AnalyzeRequest(BaseModel):

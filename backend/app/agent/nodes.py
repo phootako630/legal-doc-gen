@@ -14,6 +14,7 @@ from app.agent.state import GraphState
 from app.services import llm_progress
 from app.services.extraction import (
     build_combined_text,
+    enrich_provenance,
     format_checks_for_llm,
     mark_ocr_fields,
 )
@@ -156,6 +157,8 @@ async def extract_node(state: GraphState) -> dict:
         [{"role": "user", "content": prompt}], json_mode=True
     )
     mark_ocr_fields(fields, set(state.get("scanned_filenames", [])))
+    # 值回原文逐页锚定：补充已验证页码 + 命中片段 + 通道 + confidence（出处可追溯）
+    enrich_provenance(fields, state.get("files", []))
     return {"extracted_fields": fields}
 
 

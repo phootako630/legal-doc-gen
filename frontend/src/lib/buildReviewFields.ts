@@ -71,7 +71,11 @@ export function buildReviewFields(
     const fv = raw[key];
     if (!fv || typeof fv !== 'object' || !('value' in (fv as object))) continue;
 
-    const { value, src } = fv as { value: string | number | null; src: string };
+    const { value, src, page } = fv as {
+      value: string | number | null;
+      src: string;
+      page?: number | null;
+    };
     // 确定性冲突优先级最高（conflict > missing > ocr_uncertain > normal）
     const status: FieldStatus = conflictKeys.has(key)
       ? 'conflict'
@@ -81,6 +85,7 @@ export function buildReviewFields(
       label,
       value: value !== null ? String(value) : null,
       src: src ?? '',
+      page: page ?? null,
       status,
       isEditing: false,
     });

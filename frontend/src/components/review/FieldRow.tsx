@@ -99,22 +99,32 @@ export function FieldRow({ field, onSave, isEven }: FieldRowProps) {
         )}
       </td>
 
-      {/* 来源（hover 显示完整文本） */}
+      {/* 来源（hover 显示完整文本）；页码为后端逐页锚定验证所得 */}
       <td className="px-3 py-3 align-top">
         {field.src ? (
-          <Tooltip>
-            <TooltipTrigger
-              render={<span className="line-clamp-2 cursor-default text-[11px] leading-relaxed text-muted-foreground/60" />}
-            >
-              {field.src}
-            </TooltipTrigger>
-            <TooltipContent
-              side="left"
-              className="max-w-72 whitespace-pre-wrap break-words text-xs leading-relaxed"
-            >
-              {field.src}
-            </TooltipContent>
-          </Tooltip>
+          <div className="flex flex-col gap-1">
+            <Tooltip>
+              <TooltipTrigger
+                render={<span className="line-clamp-2 cursor-default text-[11px] leading-relaxed text-muted-foreground/60" />}
+              >
+                {field.src}
+              </TooltipTrigger>
+              <TooltipContent
+                side="left"
+                className="max-w-72 whitespace-pre-wrap break-words text-xs leading-relaxed"
+              >
+                {field.src}
+              </TooltipContent>
+            </Tooltip>
+            {field.page != null && (
+              <Badge
+                variant="outline"
+                className="w-fit border-sky-200 bg-sky-50 px-1.5 py-0 text-[10px] font-normal text-sky-700"
+              >
+                第 {field.page} 页
+              </Badge>
+            )}
+          </div>
         ) : (
           <span className="text-[11px] text-muted-foreground/40">—</span>
         )}
