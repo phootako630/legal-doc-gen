@@ -66,15 +66,15 @@ export default function App() {
             uploadResult={flow.uploadResult}
             internetAllowed={flow.internetAllowed}
             onDone={(result) => {
-              flow.setExtractResult(result);
+              flow.setCaseState(result);
               flow.goToStep('review');
             }}
           />
         )}
 
-        {flow.step === 'review' && flow.extractResult && (
+        {flow.step === 'review' && flow.caseState && (
           <ReviewStep
-            extractResult={flow.extractResult}
+            caseState={flow.caseState}
             onBack={flow.goBack}
             onDone={(complaintText) => {
               flow.setComplaintText(complaintText);

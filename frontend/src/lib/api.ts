@@ -7,6 +7,7 @@ import type {
   GenerateResponse,
   ExtractedFields,
   ParsedFile,
+  CaseState,
 } from './types';
 
 const BASE = '/api';
@@ -83,6 +84,53 @@ export async function extractFields(
   });
   if (!res.ok) throw await extractError(res, '字段抽取失败');
   return res.json() as Promise<ExtractResponse>;
+}
+
+/** 查询 agent 任务的处理阶段（analyze/resume 期间轮询用；失败静默返回 null，不打断流程） */
+export async function fetchAnalyzeProgress(): Promise<LlmProgress | null> {
+  try {
+    const res = await fetch(`${BASE}/analyze/progress`);
+    if (!res.ok) return null;
+    return (await res.json()) as LlmProgress;
+  } catch {
+    return null;
+  }
+}
+
+/** 启动 agent 分析（清点→抽取→代码校验）；命中断点时返回带 pending 的 CaseState */
+export async function analyzeCase(
+  files: ParsedFile[],
+  internetAllowed: boolean,
+): Promise<CaseState> {
+  const res = await safeFetch(`${BASE}/analyze`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      files: files.map((f) => ({
+        filename: f.filename,
+        text: f.text,
+        is_scanned: f.is_scanned,
+        identified_type: f.identified_type,
+      })),
+      internet_allowed: internetAllowed,
+    }),
+  });
+  if (!res.ok) throw await extractError(res, '分析失败');
+  return res.json() as Promise<CaseState>;
+}
+
+/** 在断点处提交律师决定并恢复 agent；可能再次返回 pending，直至 pending=null */
+export async function resumeCase(
+  runId: string,
+  decisions: Record<string, string | number | null>,
+): Promise<CaseState> {
+  const res = await safeFetch(`${BASE}/resume`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ run_id: runId, decisions }),
+  });
+  if (!res.ok) throw await extractError(res, '恢复失败');
+  return res.json() as Promise<CaseState>;
 }
 
 /** 调用 LLM 生成起诉状全文 */

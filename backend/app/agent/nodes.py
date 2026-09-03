@@ -11,6 +11,7 @@ import json
 from langgraph.types import interrupt
 
 from app.agent.state import GraphState
+from app.services import llm_progress
 from app.services.extraction import (
     build_combined_text,
     format_checks_for_llm,
@@ -93,7 +94,9 @@ def _apply_decisions(fields: dict, decisions: dict) -> dict:
     return fields
 
 
-async def _validate_prose(fields: dict, checks: list[ValidationCheck]) -> tuple[str, str]:
+async def _validate_prose(
+    fields: dict, checks: list[ValidationCheck]
+) -> tuple[str, str]:
     """据确定性结论调用降级版 validate prompt，仅生成给律师看的说明文本。"""
     prompt = load_prompt(
         "prompt-a-validate.md",
@@ -112,6 +115,7 @@ async def _validate_prose(fields: dict, checks: list[ValidationCheck]) -> tuple[
 # ── 节点 ──────────────────────────────────────────────────────────────────────
 async def checklist_node(state: GraphState) -> dict:
     """材料清点：LLM 判断三类材料是否齐全；不足则设 pending（missing）并终止。"""
+    llm_progress.start_stage("材料清点", 1)
     combined = build_combined_text(state["files"])
     prompt = load_prompt("prompt-a-checklist.md", {"files_text": combined})
     checklist: dict = await chat(  # type: ignore[assignment]
@@ -135,8 +139,11 @@ async def checklist_node(state: GraphState) -> dict:
 
 async def extract_node(state: GraphState) -> dict:
     """字段抽取：结构化输出 + 代码层补全 OCR 标记。"""
+    llm_progress.start_stage("字段抽取", 2)
     combined = build_combined_text(state["files"])
-    checklist_summary = json.dumps(state.get("checklist", {}), ensure_ascii=False, indent=2)
+    checklist_summary = json.dumps(
+        state.get("checklist", {}), ensure_ascii=False, indent=2
+    )
     prompt = load_prompt(
         "prompt-a-extract.md",
         {
@@ -169,6 +176,8 @@ async def validate_node(state: GraphState) -> dict:
         fields = _apply_decisions(fields, decisions or {})
         checks = run_all_checks(fields)
 
+    # 冲突消解（若有）之后才进入 LLM 说明文本生成，进度对齐"校验高亮"阶段
+    llm_progress.start_stage("校验高亮", 3)
     report, highlight = await _validate_prose(fields, checks)
     return {
         "extracted_fields": fields,

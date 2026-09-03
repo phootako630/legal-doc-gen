@@ -1,12 +1,12 @@
 // 整体流程状态管理 hook：协调 upload → processing → review → preview 四步状态
 import { useState } from 'react';
-import type { FlowStep, UploadResponse, ExtractResponse } from '@/lib/types';
+import type { FlowStep, UploadResponse, CaseState } from '@/lib/types';
 
 interface FlowState {
   step: FlowStep;
   uploadResult: UploadResponse | null;
   internetAllowed: boolean;
-  extractResult: ExtractResponse | null;
+  caseState: CaseState | null; // agent 会话状态（含 run_id/pending，贯穿 analyze/resume）
   complaintText: string | null;
   error: string | null;
 }
@@ -15,7 +15,7 @@ interface UseComplaintFlowReturn extends FlowState {
   goToStep: (step: FlowStep) => void;
   goBack: () => void;
   setUploadResult: (r: UploadResponse, internetAllowed: boolean) => void;
-  setExtractResult: (r: ExtractResponse) => void;
+  setCaseState: (s: CaseState) => void;
   setComplaintText: (t: string) => void;
   setError: (msg: string | null) => void;
   reset: () => void;
@@ -27,7 +27,7 @@ const initialState: FlowState = {
   step: 'upload',
   uploadResult: null,
   internetAllowed: true,
-  extractResult: null,
+  caseState: null,
   complaintText: null,
   error: null,
 };
@@ -46,10 +46,10 @@ export function useComplaintFlow(): UseComplaintFlowReturn {
 
   const setUploadResult = (r: UploadResponse, internetAllowed: boolean) =>
     setState((s) => ({ ...s, uploadResult: r, internetAllowed }));
-  const setExtractResult = (r: ExtractResponse) => setState((s) => ({ ...s, extractResult: r }));
+  const setCaseState = (cs: CaseState) => setState((s) => ({ ...s, caseState: cs }));
   const setComplaintText = (t: string) => setState((s) => ({ ...s, complaintText: t }));
   const setError = (msg: string | null) => setState((s) => ({ ...s, error: msg }));
   const reset = () => setState(initialState);
 
-  return { ...state, goToStep, goBack, setUploadResult, setExtractResult, setComplaintText, setError, reset };
+  return { ...state, goToStep, goBack, setUploadResult, setCaseState, setComplaintText, setError, reset };
 }

@@ -96,6 +96,29 @@ export interface ExtractResponse {
   highlight_list: string;
 }
 
+/** agent 命中的待决断点（interrupt）——审核页据此渲染让律师决定 */
+export interface PendingDecision {
+  kind: 'missing' | 'conflict' | 'confirm';
+  question: string; // 中文，问律师
+  options: string[]; // 冲突时的候选值（可空，律师可自由编辑）
+  field_keys: string[]; // 涉及的字段 key
+}
+
+/**
+ * agent 会话状态：POST /api/analyze、/api/resume 的响应体。
+ * 是 ExtractResponse 的超集，额外携带 run_id（供 resume 定位会话）、
+ * readiness（起诉状就绪度 0–100）、pending（断点，null 表示无待决）。
+ */
+export interface CaseState {
+  run_id: string;
+  extracted_fields: ExtractedFields;
+  validations: ValidationCheck[];
+  validation_report: string;
+  highlight_list: string;
+  readiness: number;
+  pending: PendingDecision | null;
+}
+
 /** POST /api/generate 的响应 */
 export interface GenerateResponse {
   complaint_text: string;

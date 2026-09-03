@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from app.agent.runner import run_resume
 from app.agent.state import CaseState
+from app.services import llm_progress
 
 router = APIRouter()
 
@@ -19,9 +20,15 @@ class ResumeRequest(BaseModel):
 @router.post("/resume", response_model=CaseState)
 async def resume(req: ResumeRequest) -> CaseState:
     """在 interrupt 断点处提交决定并恢复；可能再次返回 pending，直至 pending=null。"""
+    # 恢复后仅重跑校验节点（校验高亮阶段），仍用同一进度模块驱动前端等待提示
+    llm_progress.begin(total_stages=3)
     try:
         return await run_resume(req.run_id, req.decisions)
     except KeyError as e:
-        raise HTTPException(status_code=404, detail="会话不存在或已过期，请重新分析") from e
+        raise HTTPException(
+            status_code=404, detail="会话不存在或已过期，请重新分析"
+        ) from e
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=f"恢复失败：{e}") from e
+    finally:
+        llm_progress.finish()
