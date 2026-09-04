@@ -20,10 +20,19 @@ from app.services.extraction import (
     format_checks_for_llm,
     mark_ocr_fields,
 )
+from app.services.company_lookup import lookup_company
 from app.services.llm_client import chat
 from app.services.ocr_engine import ocr_page
 from app.services.prompt_loader import load_prompt
 from app.services.validators import ValidationCheck, check_to_dict, run_all_checks
+
+# 名称疑似分公司/门店的标记词：命中则该主体需补法人全称（联网或律师确认）
+_BRANCH_MARKERS = ("分公司", "分店", "营业部", "分中心", "办事处", "分理处", "支公司")
+# 需要核实法人全称的主体：展示字段 → 对应统一社会信用代码字段
+_NAME_FIELDS = {
+    "plaintiff_name_final": "plaintiff_credit_code",
+    "defendant_name": "defendant_credit_code",
+}
 
 # 三类条款字段（按需 OCR 的目标）：indicator 为“该条款是否已拿到”的判定字段
 _CLAUSE_INDICATOR = {
@@ -311,6 +320,90 @@ async def ocr_augment_node(state: GraphState) -> dict:
     # 有新 OCR 文本：重新逐页锚定，令条款字段拿到真实页码 + channel=ocr
     enrich_provenance(fields, files)
     return {"extracted_fields": fields, "files": files}
+
+
+def _str_value(fields: dict, key: str) -> str | None:
+    node = fields.get(key)
+    val = node.get("value") if isinstance(node, dict) else node
+    if val is None:
+        return None
+    s = str(val).strip()
+    return s or None
+
+
+def _names_needing_confirmation(fields: dict) -> list[tuple[str, str, str | None]]:
+    """找出疑为分公司、需补法人全称的主体：返回 (名称字段, 原文值, 信用代码)。"""
+    targets: list[tuple[str, str, str | None]] = []
+    for name_key, code_key in _NAME_FIELDS.items():
+        raw = _str_value(fields, name_key)
+        if raw and any(marker in raw for marker in _BRANCH_MARKERS):
+            targets.append((name_key, raw, _str_value(fields, code_key)))
+    return targets
+
+
+def _set_confirmed_name(fields: dict, key: str, value: object, src: str) -> None:
+    """写回已确认的法人全称：法人全称来自联网/律师，不在案卷原文，清空页码/锚点。"""
+    node = fields.get(key) if isinstance(fields.get(key), dict) else {}
+    node = dict(node)
+    node.update(value=value, src=src, page=None, anchor=None, channel="text")
+    fields[key] = node
+
+
+def _build_company_pending(targets: list[tuple[str, str, str | None]]) -> dict:
+    """把待核实的主体名称汇成一个 confirm 断点，引导律师联网查询后键入法人全称。"""
+    lines = []
+    for _, raw, code in targets:
+        code_hint = f"（统一社会信用代码 {code}）" if code else "（信用代码缺失）"
+        lines.append(f"- {raw}{code_hint}")
+    question = (
+        "以下主体疑为分公司，起诉状需填写其法人全称。"
+        "请通过企查查 / 天眼查 / 国家企业信用信息公示系统按统一社会信用代码查询后，"
+        "填写法人全称：\n" + "\n".join(lines)
+    )
+    return {
+        "kind": "confirm",
+        "question": question,
+        "options": [],
+        "field_keys": [t[0] for t in targets],
+    }
+
+
+async def company_lookup_node(state: GraphState) -> dict:
+    """
+    主体名称核实：疑为分公司的原告/被告名称需补法人全称。
+    预留联网查询（lookup_company，当前 stub 恒 None）；查得则回填，否则 interrupt
+    走 HITL——暂停让律师自行查询后键入。internet_allowed=False 时直接走 HITL。
+    """
+    fields = state.get("extracted_fields", {})
+    targets = _names_needing_confirmation(fields)
+    if not targets:
+        return {}
+
+    fields = copy.deepcopy(fields)
+
+    # 预留：联网自动查询（当前 stub 恒 None → 全部转 HITL）
+    remaining = targets
+    if state.get("internet_allowed"):
+        still: list[tuple[str, str, str | None]] = []
+        for name_key, raw, code in targets:
+            info = await lookup_company(code)
+            if info and info.name:
+                _set_confirmed_name(
+                    fields, name_key, info.name, f"联网查询（{info.source}）"
+                )
+            else:
+                still.append((name_key, raw, code))
+        remaining = still
+
+    if not remaining:
+        return {"extracted_fields": fields}
+
+    # 仍有待确认 → 暂停问律师（resume 时返回 {名称字段: 法人全称}）
+    decisions = interrupt({"pending": _build_company_pending(remaining)})
+    for key, value in (decisions or {}).items():
+        if value is not None and str(value).strip() != "":
+            _set_confirmed_name(fields, key, value, "律师查询确认")
+    return {"extracted_fields": fields}
 
 
 def after_checklist(state: GraphState) -> str:
