@@ -10,6 +10,7 @@ from langgraph.graph import END, StateGraph
 from app.agent.nodes import (
     after_checklist,
     checklist_node,
+    company_lookup_node,
     extract_node,
     ocr_augment_node,
     validate_node,
@@ -29,6 +30,8 @@ def get_graph():
         builder.add_node("extract", extract_node)
         # 按需 OCR：缺条款且有扫描合同时，逐页 OCR 定向补齐（命中即停）
         builder.add_node("ocr_augment", ocr_augment_node)
+        # 主体名称核实：疑为分公司 → 联网查询（预留）或 HITL 让律师补法人全称
+        builder.add_node("company", company_lookup_node)
         builder.add_node("validate", validate_node)
 
         builder.set_entry_point("intake")
@@ -36,7 +39,8 @@ def get_graph():
             "intake", after_checklist, {"extract": "extract", "end": END}
         )
         builder.add_edge("extract", "ocr_augment")
-        builder.add_edge("ocr_augment", "validate")
+        builder.add_edge("ocr_augment", "company")
+        builder.add_edge("company", "validate")
         builder.add_edge("validate", END)
 
         _graph = builder.compile(checkpointer=MemorySaver())

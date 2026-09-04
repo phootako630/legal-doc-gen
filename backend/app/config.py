@@ -43,5 +43,10 @@ SCANNED_PDF_TEXT_THRESHOLD = 50
 # 命中付款/违约/争议三条款即提前停止，通常远不到此上限。
 AGENT_MAX_OCR_PAGES = 20
 
+# ── 企业信息联网查询（预留）────────────────────────────────────────────────────
+# 企查查 / 天眼查 / 国家企业信用信息公示系统查询 API 的密钥（暂未接入）。
+# 未配置时 lookup_company 恒返回 None，agent 走 HITL 让律师自行查询键入法人全称。
+COMPANY_LOOKUP_API_KEY = os.getenv("COMPANY_LOOKUP_API_KEY")
+
 # CORS 允许的前端地址
 CORS_ORIGINS = ["http://localhost:5173"]

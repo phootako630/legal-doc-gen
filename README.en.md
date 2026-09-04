@@ -215,7 +215,7 @@ Backend tests: `cd backend && python -m pytest`
 | 5 | Agent orchestration (LangGraph + interrupt, backend & frontend) | ✅ |
 | 6a | Field provenance (verified page numbers via per-page anchoring) | ✅ |
 | 6b | On-demand OCR (page-by-page `ocr_page` + `search_in_docs` on scanned contracts when clauses are missing, early-stop) | ✅ |
-| 7 | Online company lookup (complete legal-entity name from USCC) | ⏳ |
+| 7 | Entity verification (branch name → full legal name): HITL lawyer lookup-and-enter, online lookup API reserved | ✅ |
 
 ---
 
