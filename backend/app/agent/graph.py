@@ -11,6 +11,7 @@ from app.agent.nodes import (
     after_checklist,
     checklist_node,
     extract_node,
+    ocr_augment_node,
     validate_node,
 )
 from app.agent.state import GraphState
@@ -26,13 +27,16 @@ def get_graph():
         # 节点名不能与状态 key 同名（LangGraph 限制），故清点节点取名 intake
         builder.add_node("intake", checklist_node)
         builder.add_node("extract", extract_node)
+        # 按需 OCR：缺条款且有扫描合同时，逐页 OCR 定向补齐（命中即停）
+        builder.add_node("ocr_augment", ocr_augment_node)
         builder.add_node("validate", validate_node)
 
         builder.set_entry_point("intake")
         builder.add_conditional_edges(
             "intake", after_checklist, {"extract": "extract", "end": END}
         )
-        builder.add_edge("extract", "validate")
+        builder.add_edge("extract", "ocr_augment")
+        builder.add_edge("ocr_augment", "validate")
         builder.add_edge("validate", END)
 
         _graph = builder.compile(checkpointer=MemorySaver())

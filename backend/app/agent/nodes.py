@@ -11,7 +11,9 @@ import json
 from langgraph.types import interrupt
 
 from app.agent.state import GraphState
-from app.services import llm_progress
+from app.config import AGENT_MAX_OCR_PAGES
+from app.services import file_store, llm_progress
+from app.services.doc_search import CLAUSE_KEYWORDS, locate_clauses
 from app.services.extraction import (
     build_combined_text,
     enrich_provenance,
@@ -19,8 +21,24 @@ from app.services.extraction import (
     mark_ocr_fields,
 )
 from app.services.llm_client import chat
+from app.services.ocr_engine import ocr_page
 from app.services.prompt_loader import load_prompt
 from app.services.validators import ValidationCheck, check_to_dict, run_all_checks
+
+# 三类条款字段（按需 OCR 的目标）：indicator 为“该条款是否已拿到”的判定字段
+_CLAUSE_INDICATOR = {
+    "payment": "payment_clause_text",
+    "breach": "breach_interest_rate_text",
+    "dispute": "dispute_clause_text",
+}
+_ALL_CLAUSE_KEYS = [
+    "payment_clause_location",
+    "payment_clause_text",
+    "breach_interest_clause_location",
+    "breach_interest_rate_text",
+    "dispute_clause_location",
+    "dispute_clause_text",
+]
 
 # 起诉状就绪度关注的关键字段（齐全且非冲突才计入）
 _READINESS_KEYS = [
@@ -190,6 +208,109 @@ async def validate_node(state: GraphState) -> dict:
         "readiness": _readiness(fields, checks),
         "pending": None,
     }
+
+
+def _is_missing(fields: dict, key: str) -> bool:
+    """字段是否缺失（value 为 None 或空串）。"""
+    node = fields.get(key)
+    val = node.get("value") if isinstance(node, dict) else node
+    return val is None or (isinstance(val, str) and val.strip() == "")
+
+
+async def _extract_clauses(file: dict) -> dict:
+    """据某扫描合同已 OCR 的逐页文本，定向抽取 6 个条款字段（结构化 JSON）。"""
+    text = "\n\n".join(
+        f"【第{p['page']}页】\n{p['text']}"
+        for p in file.get("pages", [])
+        if p.get("text")
+    )
+    prompt = load_prompt(
+        "prompt-a-clauses.md",
+        {"contract_filename": file.get("filename", "合同"), "contract_text": text},
+    )
+    result = await chat([{"role": "user", "content": prompt}], json_mode=True)
+    return result if isinstance(result, dict) else {}
+
+
+async def ocr_augment_node(state: GraphState) -> dict:
+    """
+    按需 OCR：仅当付款/违约/争议条款字段仍缺失、且存在暂存了字节的扫描合同时，
+    对该合同逐页 OCR（命中三条款即停，页数受 AGENT_MAX_OCR_PAGES 约束），
+    再据 OCR 文本定向补齐条款字段并重新锚定页码。OCR 不可用则优雅降级、条款保持缺失。
+    """
+    fields = state.get("extracted_fields", {})
+    missing = {c for c, key in _CLAUSE_INDICATOR.items() if _is_missing(fields, key)}
+    if not missing:
+        return {}
+
+    contracts = [
+        f
+        for f in state.get("files", [])
+        if f.get("is_scanned")
+        and f.get("identified_type") == "合同"
+        and f.get("file_id")
+    ]
+    if not contracts:
+        return {}
+
+    fields = copy.deepcopy(fields)
+    files = copy.deepcopy(state.get("files", []))
+    # 对深拷贝后的同名文件对象操作（保证返回的 files 带上 OCR 结果）
+    contracts = [
+        f
+        for f in files
+        if f.get("is_scanned")
+        and f.get("identified_type") == "合同"
+        and f.get("file_id")
+    ]
+
+    budget = AGENT_MAX_OCR_PAGES
+    did_ocr = False
+
+    for f in contracts:
+        if budget <= 0 or not missing:
+            break
+        pdf = file_store.get(f.get("file_id"))
+        if pdf is None:
+            continue  # 字节已淘汰/丢失 → 跳过（条款保持缺失）
+
+        ocr_pages: list[dict] = []
+        for page_num in range(1, f.get("page_count", 0) + 1):
+            if budget <= 0:
+                break
+            try:
+                page_text = await ocr_page(pdf, page_num)
+            except (RuntimeError, TimeoutError):
+                break  # OCR 不可用/超时 → 停止，优雅降级
+            budget -= 1
+            did_ocr = True
+            ocr_pages.append({"page": page_num, "text": page_text})
+            # 命中即停：所有仍缺失的条款都已在已 OCR 页里定位到，则无需再往下翻
+            located = locate_clauses(
+                ocr_pages, {c: CLAUSE_KEYWORDS[c] for c in missing}
+            )
+            if missing <= located:
+                break
+
+        if not ocr_pages:
+            continue
+        # 回填该合同的逐页文本，供 provenance 定位页码 + 后续展示
+        f["pages"] = ocr_pages
+        f["text"] = "\n\n".join(p["text"] for p in ocr_pages if p["text"])
+
+        clause_fields = await _extract_clauses(f)
+        for key in _ALL_CLAUSE_KEYS:
+            if _is_missing(fields, key):
+                node = clause_fields.get(key)
+                if isinstance(node, dict) and not _is_missing({key: node}, key):
+                    fields[key] = node
+        missing = {c for c in missing if _is_missing(fields, _CLAUSE_INDICATOR[c])}
+
+    if not did_ocr:
+        return {}
+    # 有新 OCR 文本：重新逐页锚定，令条款字段拿到真实页码 + channel=ocr
+    enrich_provenance(fields, files)
+    return {"extracted_fields": fields, "files": files}
 
 
 def after_checklist(state: GraphState) -> str:

@@ -14,6 +14,7 @@ export interface ParsedFile {
   is_scanned: boolean;
   page_count: number;
   pages: PageText[];
+  file_id?: string | null; // 扫描件暂存字节引用，供 agent 按需 OCR；非扫描件为 null
 }
 
 /** POST /api/upload 的响应 */

@@ -32,7 +32,7 @@ print(f"[OCR ENGINE] loading: {__file__}  (version: Qwen-VL-OCR)", flush=True)
 
 class OcrPage(TypedDict):
     page_num: int  # 从 1 开始
-    text: str      # 该页识别出的全部文字，行间用 \n 分隔
+    text: str  # 该页识别出的全部文字，行间用 \n 分隔
 
 
 class OcrResult(TypedDict):
@@ -41,6 +41,7 @@ class OcrResult(TypedDict):
 
 
 # ── 当前实现：Qwen-VL-OCR ────────────────────────────────────────────────────
+
 
 async def ocr_pdf(pdf_bytes: bytes) -> OcrResult:
     """
@@ -51,7 +52,9 @@ async def ocr_pdf(pdf_bytes: bytes) -> OcrResult:
         TimeoutError: OCR 超时
     """
     if not DASHSCOPE_API_KEY:
-        raise RuntimeError("未配置 DASHSCOPE_API_KEY，请在 backend/.env 中填入阿里云 DashScope API Key")
+        raise RuntimeError(
+            "未配置 DASHSCOPE_API_KEY，请在 backend/.env 中填入阿里云 DashScope API Key"
+        )
 
     print(f"[OCR ENGINE] ocr_pdf() called, pdf_bytes len={len(pdf_bytes)}", flush=True)
     loop = asyncio.get_event_loop()
@@ -71,8 +74,8 @@ async def ocr_pdf(pdf_bytes: bytes) -> OcrResult:
     return result
 
 
-def _ocr_one_page(page_idx: int, img_b64: str, total_pages: int) -> OcrPage:
-    """对单页图片调用 Qwen-VL-OCR，供线程池并发调度。"""
+def _ocr_image_b64(img_b64: str) -> str:
+    """对单页 PNG（base64）调用 Qwen-VL-OCR，返回识别文本（异常/异常结构返回空串）。"""
     import requests
 
     headers = {
@@ -97,20 +100,74 @@ def _ocr_one_page(page_idx: int, img_b64: str, total_pages: int) -> OcrPage:
         },
     }
 
-    resp = requests.post(DASHSCOPE_BASE_URL, headers=headers, json=payload, timeout=OCR_PAGE_TIMEOUT)
+    resp = requests.post(
+        DASHSCOPE_BASE_URL, headers=headers, json=payload, timeout=OCR_PAGE_TIMEOUT
+    )
     resp.raise_for_status()
     data = resp.json()
 
     # DashScope 原生 API 响应结构：output.choices[0].message.content[0].text
     try:
-        text = data["output"]["choices"][0]["message"]["content"][0]["text"]
+        return data["output"]["choices"][0]["message"]["content"][0]["text"].strip()
     except (KeyError, IndexError):
-        print(f"[OCR ENGINE] page {page_idx + 1} unexpected response: {data}", flush=True)
-        text = ""
+        print(f"[OCR ENGINE] unexpected response: {data}", flush=True)
+        return ""
 
-    print(f"[OCR ENGINE] page {page_idx + 1}/{total_pages} done, chars={len(text)}", flush=True)
+
+def _ocr_one_page(page_idx: int, img_b64: str, total_pages: int) -> OcrPage:
+    """对单页图片调用 Qwen-VL-OCR，供整份并发 OCR 的线程池调度（带进度上报）。"""
+    text = _ocr_image_b64(img_b64)
+    print(
+        f"[OCR ENGINE] page {page_idx + 1}/{total_pages} done, chars={len(text)}",
+        flush=True,
+    )
     upload_progress.page_done()
-    return {"page_num": page_idx + 1, "text": text.strip()}
+    return {"page_num": page_idx + 1, "text": text}
+
+
+def _render_page_b64(pdf_bytes: bytes, page_num: int) -> str | None:
+    """把 PDF 第 page_num 页（1 起）渲染为 PNG base64；页码越界返回 None。"""
+    import fitz  # PyMuPDF
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    if page_num < 1 or page_num > doc.page_count:
+        return None
+    pix = doc[page_num - 1].get_pixmap(dpi=150)
+    return base64.b64encode(pix.tobytes("png")).decode()
+
+
+async def ocr_page(pdf_bytes: bytes, page_num: int) -> str:
+    """
+    对扫描件 PDF 的**指定页**（1 起）做 OCR，返回该页文本（按需 OCR，非整份）。
+
+    Raises:
+        RuntimeError: API Key 未配置，或 OCR 处理失败
+        TimeoutError: 单页 OCR 超时
+    """
+    if not DASHSCOPE_API_KEY:
+        raise RuntimeError(
+            "未配置 DASHSCOPE_API_KEY，请在 backend/.env 中填入阿里云 DashScope API Key"
+        )
+
+    loop = asyncio.get_event_loop()
+    try:
+        img_b64 = await loop.run_in_executor(
+            None, _render_page_b64, pdf_bytes, page_num
+        )
+        if img_b64 is None:
+            return ""
+        return await asyncio.wait_for(
+            loop.run_in_executor(None, _ocr_image_b64, img_b64),
+            timeout=OCR_PAGE_TIMEOUT,
+        )
+    except asyncio.TimeoutError as exc:
+        raise TimeoutError(
+            f"第 {page_num} 页 OCR 超时（超过 {OCR_PAGE_TIMEOUT} 秒）"
+        ) from exc
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(f"第 {page_num} 页 OCR 处理失败：{exc}") from exc
 
 
 def _ocr_sync_qwen(pdf_bytes: bytes) -> OcrResult:

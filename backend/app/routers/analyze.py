@@ -22,6 +22,8 @@ class FileInput(BaseModel):
     identified_type: str = "未知"
     # 逐页文本，供抽取后定位真实页码；旧客户端可不带
     pages: list[PageText] = []
+    # 扫描件暂存字节引用，供 agent 按需逐页 OCR
+    file_id: str | None = None
 
 
 class AnalyzeRequest(BaseModel):

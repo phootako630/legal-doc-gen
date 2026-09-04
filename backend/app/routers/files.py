@@ -22,6 +22,8 @@ class ParsedFile(BaseModel):
     page_count: int
     # 逐页文本，供抽取值回原文定位到具体页码；旧客户端可不带，缺省空列表
     pages: list[PageText] = []
+    # 扫描件暂存字节的引用，供 agent 按需逐页 OCR；非扫描件为 None
+    file_id: str | None = None
 
 
 class UploadResponse(BaseModel):
