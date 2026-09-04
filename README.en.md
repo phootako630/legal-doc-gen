@@ -73,10 +73,11 @@ flowchart TB
             REND["complaint_renderer: template fill"]
         end
 
-        RU --> FP -->|scanned| OCR
+        RU --> FP
         RA --> Agent
         RR --> Agent
         N2 --> ANC & PROV
+        N2 -->|missing clauses · on demand| OCR
         N3 --> VAL & CONF
         RG --> REND
     end
@@ -213,7 +214,7 @@ Backend tests: `cd backend && python -m pytest`
 | 4 | Render the complaint via template fill (drop LLM free-gen) | ✅ |
 | 5 | Agent orchestration (LangGraph + interrupt, backend & frontend) | ✅ |
 | 6a | Field provenance (verified page numbers via per-page anchoring) | ✅ |
-| 6b | On-demand OCR (scanned contracts via `ocr_page` + `search_in_docs`) | ⏳ |
+| 6b | On-demand OCR (page-by-page `ocr_page` + `search_in_docs` on scanned contracts when clauses are missing, early-stop) | ✅ |
 | 7 | Online company lookup (complete legal-entity name from USCC) | ⏳ |
 
 ---

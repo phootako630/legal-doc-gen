@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import UploadFile
 
 from app.config import SCANNED_PDF_TEXT_THRESHOLD
-from app.services.ocr_engine import ocr_pdf
+from app.services import file_store
 
 # 文件名关键词 → 文件类型（简单规则，后续可升级为 LLM 判断）
 _TYPE_KEYWORDS: dict[str, str] = {
@@ -52,12 +52,18 @@ async def _parse_pdf(
 
     is_scanned = len(text.strip()) < SCANNED_PDF_TEXT_THRESHOLD
     if is_scanned:
-        # 扫描件走 OCR，取结构化结果：full_text 供抽取，pages 供逐页定位
-        ocr_result = await ocr_pdf(content)
-        text = ocr_result["full_text"]
-        pages = [
-            {"page": p["page_num"], "text": p["text"]} for p in ocr_result["pages"]
-        ]
+        # 扫描件不再在上传时整份 OCR（成本高、且多数条款字段可由审批表/验收报告补全）。
+        # 只暂存原始字节并返回 file_id，交给 agent 在缺条款字段时按需逐页 OCR。
+        file_id = file_store.put(content)
+        return {
+            "filename": filename,
+            "identified_type": identified_type,
+            "text": "",  # 暂无文本；build_combined_text 会以占位文案呈现
+            "is_scanned": True,
+            "page_count": page_count,
+            "pages": [],  # 按需 OCR 后由 agent 回填
+            "file_id": file_id,
+        }
 
     if not text.strip():
         raise ValueError(
@@ -68,9 +74,10 @@ async def _parse_pdf(
         "filename": filename,
         "identified_type": identified_type,
         "text": text,
-        "is_scanned": is_scanned,
+        "is_scanned": False,
         "page_count": page_count,
         "pages": pages,
+        "file_id": None,
     }
 
 
@@ -92,4 +99,5 @@ def _parse_docx(filename: str, content: bytes, identified_type: str) -> dict[str
         "page_count": 1,
         # Word 无固定分页概念，整体作第 1 页
         "pages": [{"page": 1, "text": text}],
+        "file_id": None,
     }

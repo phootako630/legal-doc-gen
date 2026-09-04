@@ -73,10 +73,11 @@ flowchart TB
             REND["complaint_renderer 模板填槽"]
         end
 
-        RU --> FP -->|扫描件| OCR
+        RU --> FP
         RA --> Agent
         RR --> Agent
         N2 --> ANC & PROV
+        N2 -->|缺条款·按需逐页| OCR
         N3 --> VAL & CONF
         RG --> REND
     end
@@ -213,7 +214,7 @@ pnpm dev                   # http://localhost:5173，/api/* 代理转发到 :800
 | 4 | 起诉状改模板填槽渲染（去 LLM 自由生成） | ✅ |
 | 5 | agent 编排（LangGraph + interrupt，前后端） | ✅ |
 | 6a | 字段出处可追溯（逐页锚定得真实页码） | ✅ |
-| 6b | 按需 OCR（扫描合同按需 `ocr_page` + `search_in_docs`） | ⏳ |
+| 6b | 按需 OCR（扫描合同缺条款时逐页 `ocr_page` + `search_in_docs`，命中即停） | ✅ |
 | 7 | 联网企业信息查询（按信用代码补法人全称） | ⏳ |
 
 ---

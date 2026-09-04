@@ -17,12 +17,20 @@ def build_combined_text(files: list[dict]) -> str:
     """
     blocks: list[str] = []
     for f in files:
-        tag = (
-            "（本文件为 OCR 扫描识别，文字可能存在误差）" if f.get("is_scanned") else ""
-        )
         name = f.get("filename", "未知文件")
         dtype = f.get("identified_type", "未知")
-        blocks.append(f"【文件：{name}｜{dtype}】{tag}\n{f.get('text', '')}")
+        body = f.get("text") or ""
+        if f.get("is_scanned"):
+            if body.strip():
+                tag = "（本文件为 OCR 扫描识别，文字可能存在误差）"
+            else:
+                # 扫描件尚未 OCR（按需 OCR 延后到 agent 阶段）：给占位文案，
+                # 让清点/抽取知道该文件存在但暂无正文，不要误判为空文件
+                tag = "（扫描件，暂未 OCR，正文将在需要时按需识别）"
+                body = "[扫描件正文暂未识别]"
+        else:
+            tag = ""
+        blocks.append(f"【文件：{name}｜{dtype}】{tag}\n{body}")
     return "\n\n---\n\n".join(blocks)
 
 

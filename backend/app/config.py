@@ -25,7 +25,10 @@ QWEN_OCR_MODEL = "qwen-vl-ocr"
 # 启动时打印密钥诊断（仅显示首尾4位，保护安全）
 if DASHSCOPE_API_KEY:
     _k = DASHSCOPE_API_KEY.strip()
-    print(f"[CONFIG] DASHSCOPE_API_KEY loaded: {_k[:8]}...{_k[-4:]} (len={len(_k)})", flush=True)
+    print(
+        f"[CONFIG] DASHSCOPE_API_KEY loaded: {_k[:8]}...{_k[-4:]} (len={len(_k)})",
+        flush=True,
+    )
 else:
     print("[CONFIG] WARNING: DASHSCOPE_API_KEY not set!", flush=True)
 
@@ -35,6 +38,10 @@ OCR_MAX_CONCURRENCY = 5  # 单份文件内并发 OCR 请求数上限，避免触
 
 # 扫描件判断阈值：PyMuPDF 提取文字少于此字数 → 判定为扫描件
 SCANNED_PDF_TEXT_THRESHOLD = 50
+
+# Agent 按需 OCR 护栏：单次分析对扫描件逐页 OCR 的页数上限（成本上限）。
+# 命中付款/违约/争议三条款即提前停止，通常远不到此上限。
+AGENT_MAX_OCR_PAGES = 20
 
 # CORS 允许的前端地址
 CORS_ORIGINS = ["http://localhost:5173"]
