@@ -88,3 +88,44 @@ def test_success_on_first_call_no_retry(monkeypatch):
     _patch_client(monkeypatch, create)
     assert _run_chat() == "一次成功"
     assert create.await_count == 1
+
+
+# ── JSON 模式外壳兜底（deepseek-v4-flash 实测会把答案包成 {"type":"json_object",...}）──
+def test_json_mode_adds_system_prompt(monkeypatch):
+    create = AsyncMock(return_value=_resp('{"a": 1}'))
+    _patch_client(monkeypatch, create)
+    assert _run_chat(json_mode=True) == {"a": 1}
+    msgs = create.await_args.kwargs["messages"]
+    assert msgs[0]["role"] == "system" and "JSON" in msgs[0]["content"]
+    assert msgs[1] == {"role": "user", "content": "x"}
+
+
+def test_text_mode_has_no_system_prompt(monkeypatch):
+    create = AsyncMock(return_value=_resp("正文"))
+    _patch_client(monkeypatch, create)
+    _run_chat()
+    assert create.await_args.kwargs["messages"] == [{"role": "user", "content": "x"}]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '{"type": "json_object", "content": {"a": 1}}',
+        '{"type": "json_object", "content": "{\\"a\\": 1}"}',
+        '{"type": "json_object", "a": 1}',
+    ],
+)
+def test_json_envelope_unwrapped(monkeypatch, raw):
+    create = AsyncMock(return_value=_resp(raw))
+    _patch_client(monkeypatch, create)
+    assert _run_chat(json_mode=True) == {"a": 1}
+
+
+def test_bare_envelope_retries(monkeypatch):
+    # 只回外壳 → 视为失败重试，不把空结果当成功
+    create = AsyncMock(
+        side_effect=[_resp('{"type": "json_object"}'), _resp('{"a": 1}')]
+    )
+    _patch_client(monkeypatch, create)
+    assert _run_chat(json_mode=True) == {"a": 1}
+    assert create.await_count == 2

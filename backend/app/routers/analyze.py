@@ -20,6 +20,8 @@ class FileInput(BaseModel):
     text: str
     is_scanned: bool = False
     identified_type: str = "未知"
+    # 总页数：按需 OCR 逐页遍历的上限。缺了它扫描合同会被当成 0 页、一页都不 OCR
+    page_count: int = 0
     # 逐页文本，供抽取后定位真实页码；旧客户端可不带
     pages: list[PageText] = []
     # 扫描件暂存字节引用，供 agent 按需逐页 OCR

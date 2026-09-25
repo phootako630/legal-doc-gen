@@ -30,7 +30,7 @@ def get_graph():
         builder.add_node("extract", extract_node)
         # 按需 OCR：缺条款且有扫描合同时，逐页 OCR 定向补齐（命中即停）
         builder.add_node("ocr_augment", ocr_augment_node)
-        # 主体名称核实：疑为分公司 → 联网查询（预留）或 HITL 让律师补法人全称
+        # 主体名称核实：被告疑为分公司 → 联网查询（预留）或 HITL 让律师补法人全称
         builder.add_node("company", company_lookup_node)
         builder.add_node("validate", validate_node)
 

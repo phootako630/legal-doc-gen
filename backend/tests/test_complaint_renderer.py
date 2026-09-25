@@ -7,7 +7,7 @@ from app.services.complaint_renderer import (
 TEMPLATE = (
     "款{{unpaid_amount}}；签订{{contract_sign_date}}；"
     "台数{{elevator_qty}}台；被告{{defendant_name}}；"
-    "法院{{court_name}}人民法院"
+    "法院{{court_name}}人民法院；联系人{{contacts}}；条款{{payment_clause_text}}。"
 )
 
 
@@ -65,8 +65,9 @@ def _fields(**overrides):
 
 def test_render_normal_fills_slots_with_amounts_and_dates():
     out = render_complaint(_fields(), TEMPLATE)
-    assert "256266.8元（人民币大写：贰拾伍万陆仟贰佰陆拾陆元捌角）" in out
-    assert "2023年05月01日" in out
+    # 金额只出数字（模板自带 ¥…元），日期不补零——对齐律师诉状模板
+    assert "款256266.8；" in out
+    assert "2023年5月1日" in out
     assert "台数6台" in out
     assert "北京华龙电梯有限公司" in out
     # 无冲突/OCR，不应出现标注
@@ -86,12 +87,17 @@ def test_render_conflict_amount_is_highlighted():
     out = render_complaint(
         _fields(total_amount={"value": 900000, "src": "《审批表》"}), TEMPLATE
     )
-    assert "【高亮冲突：256266.8元（人民币大写：贰拾伍万陆仟贰佰陆拾陆元捌角）】" in out
+    assert "【高亮冲突：256266.8】" in out
 
 
 def test_render_ocr_source_marks_uncertain():
     out = render_complaint(
-        _fields(defendant_name={"value": "华龙电梯", "src": "《合同.pdf》（OCR识别，请核实）"}),
+        _fields(
+            defendant_name={
+                "value": "华龙电梯",
+                "src": "《合同.pdf》（OCR识别，请核实）",
+            }
+        ),
         TEMPLATE,
     )
     assert "⚠️ 待核实：华龙电梯" in out
@@ -108,6 +114,151 @@ def test_render_qty_conflict_marks_elevator_qty():
 def test_render_uses_real_template_when_none():
     # 不传模板时读取 prompts/complaint-template.md，应含标题与落款
     out = render_complaint(_fields())
-    assert out.startswith("民事起诉状")
+    assert out.startswith("民 事 起 诉 状")
     assert "此致" in out
-    assert "具状人：" in out
+    assert "诉讼请求：" in out and "事实和理由：" in out
+    # 未知占位符不应残留
+    assert "{{" not in out
+
+
+def test_render_contacts_list_formatted():
+    contacts = [
+        {
+            "name": {"value": "李四", "src": "《审批表》"},
+            "phone": {"value": "13800000000", "src": "《审批表》"},
+        },
+        {
+            "name": {"value": "李四", "src": "《审批表》"},
+            "phone": {"value": None, "src": ""},
+        },
+    ]
+    out = render_complaint(_fields(contacts=contacts), TEMPLATE)
+    assert "联系人李四 13800000000；李四；" in out
+
+
+def test_render_contacts_missing_marks_placeholder():
+    out = render_complaint(_fields(contacts=[]), TEMPLATE)
+    assert "联系人【待补充】；" in out
+
+
+def test_render_clause_text_trailing_punct_not_doubled():
+    out = render_complaint(
+        _fields(
+            payment_clause_text={"value": "验收后30日内付清。", "src": "《审批表》"}
+        ),
+        TEMPLATE,
+    )
+    assert "条款验收后30日内付清。" in out
+    assert "。。" not in out
+
+
+# ── 律师样例全文回归：以律师诉状模板（样例案件，已脱敏）的真实取值渲染 ─────────────
+_SAMPLE = {
+    "plaintiff_name_final": {
+        "value": "某电梯（中国）有限公司江苏分公司",
+        "src": "《审批表》合同分公司",
+    },
+    "plaintiff_credit_code": {"value": "91320100000000000X", "src": "律师填写"},
+    "plaintiff_person_in_charge": {"value": "张三，总经理", "src": "律师填写"},
+    "plaintiff_address": {
+        "value": "江苏省南京市鼓楼区某路1号101室",
+        "src": "律师填写",
+    },
+    "plaintiff_phone": {"value": "025-00000000", "src": "律师填写"},
+    "defendant_name": {
+        "value": "南京某置业有限公司",
+        "src": "《审批表》合同买方名称",
+    },
+    "defendant_credit_code": {"value": "91320114MA0000000H", "src": "企查查"},
+    "defendant_legal_rep": {"value": "王五", "src": "企查查"},
+    "defendant_address": {
+        "value": "南京市雨花台区某街道某大街1号",
+        "src": "企查查",
+    },
+    "contacts": [
+        {
+            "name": {"value": "李四", "src": "《审批表》"},
+            "phone": {"value": "13800000000", "src": "《审批表》"},
+        }
+    ],
+    "contract_sign_date": {"value": "2024-02-26", "src": "《合同》封面"},
+    "contract_title": {
+        "value": "南京某某二期电梯安装工程合同",
+        "src": "《合同》封面",
+    },
+    "contract_no": {"value": "AH0000001", "src": "《审批表》"},
+    "elevator_qty": {"value": 14, "src": "《审批表》情况说明"},
+    "total_amount": {"value": 894934, "src": "《审批表》合同总额"},
+    "paid_amount": {"value": 638667.2, "src": "《审批表》已付款"},
+    "unpaid_amount": {"value": 256266.8, "src": "《审批表》未付款金额"},
+    "acceptance_latest_date": {"value": "2024年10月25日", "src": "《验收报告》"},
+    "payment_clause_location": {"value": "第二十八章", "src": "《合同》"},
+    "payment_clause_text": {
+        "value": "电梯安装完成后，30个工作日内支付合同总价的60%",
+        "src": "《合同》",
+    },
+    "dispute_clause_location": {
+        "value": "第二十章第1.1条及第一条第2款",
+        "src": "《合同》",
+    },
+    "dispute_clause_text": {
+        "value": "履行合同时发生争议，协商、调解不成的，双方向工程所在地的当地法院提起诉讼。",
+        "src": "《合同》",
+    },
+    "project_site": {
+        "value": "江苏省南京市雨花台区某某二期项目",
+        "src": "《验收报告》",
+    },
+}
+
+
+def test_render_lawyer_sample_matches_template_wording():
+    out = render_complaint(_SAMPLE)
+    for expected in [
+        "原告：某电梯（中国）有限公司江苏分公司",
+        "联系人：李四 13800000000",
+        "1、判令被告向原告支付剩余合同款¥256266.8元；",
+        "2、判令被告向原告支付逾期付款利息（以¥256266.8元为基数，自起诉之日起，"
+        "按照全国银行间同业拆借中心公布的贷款市场报价利率计至实际付清之日止）；",
+        "2024年2月26日，原、被告双方签订了《南京某某二期电梯安装工程合同》"
+        "（合同编号：AH0000001），约定原告负责安装14台电梯，合同总价为¥894934元。",
+        "依据合同第二十八章约定，电梯安装完成后，30个工作日内支付合同总价的60%。",
+        "案涉合同项下14台电梯均于2024年10月25日前验收合格。",
+        # 未付 = 总额 - 已付（律师样例此处误写为 894934-256266.8，这里按正确算式）
+        "尚欠剩余合同款¥256266.8元（894934-638667.2）未付",
+        "依据案涉合同第二十章第1.1条及第一条第2款约定，履行合同时发生争议，"
+        "协商、调解不成的，双方向工程所在地的当地法院提起诉讼。因工程所在地为"
+        "江苏省南京市雨花台区某某二期项目，属南京市雨花台区法院辖区，"
+        "故原告向南京市雨花台区人民法院提起诉讼。",
+        "此致\n南京市雨花台区人民法院",
+    ]:
+        # 去掉待核实标注后比对正文措辞（导出 Word 时前端同样会去掉标注）
+        assert expected in out.replace("⚠️ 待核实：", ""), expected
+    # 推定的管辖法院一律标待核实，交律师确认
+    assert "属⚠️ 待核实：南京市雨花台区法院辖区" in out
+    assert "{{" not in out and "【待补充】" not in out
+
+
+def test_render_clause_text_tidied_into_one_sentence():
+    # OCR 摘录带条目编号、换行与插入的空格 → 起诉状里是连贯一句（换行会被导出成新段落）
+    raw = (
+        "1. 进度款：安装完成后，30 个工作日内支付合同总价的 60%；\n"
+        "2. 验收款：验收合格后，30 个工作日内支付合同总价的 20%。"
+    )
+    out = render_complaint(
+        _fields(payment_clause_text={"value": raw, "src": "《审批表》"}), TEMPLATE
+    )
+    assert (
+        "条款进度款：安装完成后，30个工作日内支付合同总价的60%；"
+        "验收款：验收合格后，30个工作日内支付合同总价的20%。"
+    ) in out
+
+
+def test_render_clause_keeps_article_numbers():
+    out = render_complaint(
+        _fields(
+            payment_clause_text={"value": "按第1.1条约定付款。", "src": "《审批表》"}
+        ),
+        TEMPLATE,
+    )
+    assert "条款按第1.1条约定付款。" in out

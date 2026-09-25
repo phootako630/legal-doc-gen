@@ -56,7 +56,7 @@ export function PreviewStep({ complaintText, onBack, onReset }: PreviewStepProps
                 请仔细核对内容后再下载 &nbsp;—&nbsp;
                 <span className="text-red-600 font-medium">红色</span>为缺失字段，
                 <span className="text-orange-600 font-medium">橙色</span>为冲突字段，
-                <span className="text-amber-600 font-medium">黄色</span>为 OCR 待核实内容
+                <span className="text-amber-600 font-medium">黄色</span>为待核实内容（OCR 识别或系统推定）
               </CardDescription>
             </div>
           </div>

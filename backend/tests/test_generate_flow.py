@@ -20,9 +20,9 @@ def test_generate_is_deterministic_no_llm():
     a = _run(fields).complaint_text
     b = _run(fields).complaint_text
     assert a == b
-    assert a.startswith("民事起诉状")
-    assert "贰拾伍万陆仟贰佰陆拾陆元捌角" in a
-    assert "2023年05月01日" in a
+    assert a.startswith("民 事 起 诉 状")
+    assert "支付剩余合同款¥256266.8元" in a
+    assert "2023年5月1日" in a
 
 
 def test_generate_marks_missing_and_conflict():

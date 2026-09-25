@@ -8,6 +8,22 @@
 - **出处可追溯**：每个字段的 src 必须以《文件名》开头，后接具体位置，例如"《安装合同.pdf》第3条"。文件名请照抄下方"文件内容"中【文件：...】标注的原始文件名，不要省略、不要意译
 - **联网查询**：internet_allowed={{internet_allowed}}，若为 true 且文件中未找到原告完整名称，可说明需要联网补全
 
+## 字段来源指引（律师注释，按此优先级取值）
+
+- `plaintiff_name_final` / `plaintiff_branch_raw`：审批表「合同分公司」处，**照抄原文**。安装合同的原告就是该分公司（如「XX电梯（中国）有限公司江苏分公司」），不要改写成总公司名称
+- `defendant_name`：审批表「合同买方名称」处
+- `defendant_credit_code` / `defendant_legal_rep` / `defendant_address`：律师通常在企查查等网站查询；材料中（如验收报告）确有原文才填，否则填 null，不要猜
+- `contacts`：审批表「联系人」「联系电话」处，每人输出 `{"name": {...}, "phone": {...}}`
+- `contract_sign_date`：合同盖章页或合同封面的签订日期
+- `contract_title` / `contract_no`：合同封面；合同编号审批表上也有
+- `elevator_qty`：一般在审批表「情况说明」处；没有则取合同前部或合同设备表
+- `total_amount`：审批表「合同总额」处；或合同前部「合同总额」「合同金额」等表述
+- `paid_amount`：审批表「已付款」处；`unpaid_amount`：审批表「未付款金额」处
+- `acceptance_latest_date`：验收报告盖章落款处的日期，多份报告取**最晚**的一个
+- `payment_clause_location` / `payment_clause_text`：只在合同中（可能是列表或文字说明），location 写章节号如「第二十八章」
+- `dispute_clause_location` / `dispute_clause_text`：合同「争议解决」条款，location 写如「第二十章第1.1条」
+- `project_site`：工程所在地（含省市区的完整地址，如「江苏省南京市雨花台区XX项目」）
+
 ## 材料清点结果（第一步已确认）
 
 {{material_checklist}}

@@ -185,7 +185,7 @@ Word 文件仍默认在前端用 docx-js 按模板填槽生成（避免后端装
 - **台数一致**：`elevator_qty_by_approval == elevator_qty_by_contract == elevator_qty_by_acceptance`
 - **信用代码**：18 位、字符集、校验位
 - **日期**：合法性、`acceptance_latest_date` 取各验收报告最晚合格日
-- **名称**：分公司原文 vs 应填法人全称（差异→需律师/联网确认）
+- **名称**：被告疑为分公司 → 需律师/联网确认法人全称。原告**不在此列**：律师模板注明安装合同的原告就是审批表「合同分公司」（如「XX（中国）有限公司江苏分公司」），分公司以自身名义起诉
 
 校验产出：每个字段的 `status` 结论（正常/冲突/缺失）+ 供展示的高亮说明文本。
 `prompt-a-validate.md` **降级**为"仅生成给律师看的自然语言高亮说明"，不再承担一致性判断。
@@ -229,13 +229,17 @@ value=null 或锚定失败        → ❌ 缺失
 ## 起诉状生成（④：模板填槽）
 
 - LLM/agent 只产出**结构化字段**，不写全文。
-- 用带占位符的模板（`complaint-template.md` 已是模板雏形）做**确定性渲染**：前端 docx-js 填槽（默认）或后端 docxtpl。
+- 用带占位符的模板（`complaint-template.md`，按律师提供的诉状模板逐句对齐）做**确定性渲染**：后端 `complaint_renderer.py` 填槽，前端导出 Word。
 - 标注规则由**代码**按字段 status 贴，稳定可控：
   - `value=null` → 正文写 `【待补充】`
   - 冲突字段 → `【高亮冲突：<值>】`
   - OCR/扫描来源 → `⚠️ 待核实：<值>`
   - 正常 → 直接写入
-- 金额同时输出汉字大写与阿拉伯数字；日期 `XXXX年XX月XX日`。
+- 格式对齐律师模板：金额只写阿拉伯数字（模板自带 `¥…元`），日期 `2024年2月26日`（不补零）；未付款算式写 `（总额-已付）`。
+- 派生字段（`services/derived_fields.py`，律师可改、改后不覆盖）：
+  - `interest_rate_basis` 逾期利息标准：默认常规话术「全国银行间同业拆借中心公布的贷款市场报价利率」，自起诉之日起算；合同另有违约利率约定则标待核实
+  - `court_district` 管辖法院辖区：按工程所在地推定「市+区/县」，一律标待核实；约定仲裁则不推定
+- 字段来源以律师注释为准（见 `prompt-a-extract.md`「字段来源指引」）：原告=审批表「合同分公司」；被告=「合同买方名称」；被告信用代码/法定代表人/住址=企查查等查询；联系人=「联系人」「联系电话」；台数=「情况说明」；总额/已付/未付=「合同总额」「已付款」「未付款金额」；签约日期/合同名/编号=合同封面或盖章页；付款与争议条款只在合同中；验收日期=验收报告盖章落款，取最晚。
 
 ---
 
@@ -291,6 +295,7 @@ legal-doc-app/
 │   │   │   ├── llm_client.py        # DeepSeek 封装（OpenAI SDK，结构化输出）
 │   │   │   ├── prompt_loader.py     # 读取 prompts/，注入变量
 │   │   │   ├── validators.py        # ② 确定性交叉校验
+│   │   │   ├── derived_fields.py    # 派生字段：逾期利息话术、管辖法院推定
 │   │   │   ├── confidence.py        # ③ 可信度评分
 │   │   │   ├── anchoring.py         # 值回原文命中/定位
 │   │   │   └── company_lookup.py    # 联网企业信息查询
@@ -472,6 +477,8 @@ export interface ExtractedFields {
   dispute_clause_text: FieldValue;
   project_site: FieldValue;
   internet_lookup_status: FieldValue;
+  interest_rate_basis?: FieldValue;   // 派生：逾期利息计算标准
+  court_district?: FieldValue;        // 派生：管辖法院辖区
 }
 
 /** 交叉校验单项结果（②） */
@@ -572,6 +579,8 @@ export const fieldNameMap: Record<string, string> = {
   dispute_clause_text: '争议解决条款内容',
   project_site: '工程地点',
   internet_lookup_status: '联网查询状态',
+  interest_rate_basis: '逾期利息计算标准',
+  court_district: '管辖法院（辖区）',
 };
 
 /** 审核表格中展示的字段 */
@@ -594,10 +603,14 @@ export const reviewFieldKeys: string[] = [
   'paid_amount',
   'unpaid_amount',
   'acceptance_latest_date',
+  'payment_clause_location',
   'payment_clause_text',
   'breach_interest_rate_text',
+  'interest_rate_basis',
+  'dispute_clause_location',
   'dispute_clause_text',
   'project_site',
+  'court_district',
 ];
 ```
 
@@ -635,7 +648,7 @@ SCANNED_PDF_TEXT_THRESHOLD = 50
 
 # Agent 护栏
 AGENT_MAX_STEPS = 12          # 单次运行最大工具/循环步数
-AGENT_MAX_OCR_PAGES = 20      # 单次运行最多按需 OCR 的页数（成本上限）
+AGENT_MAX_OCR_PAGES = 50      # 单次运行最多按需 OCR 的页数（成本上限；找到付款+争议条款正文即停）
 
 # 可信度阈值
 CONFIDENCE_UNCERTAIN_BELOW = 60   # 低于此值标记为"待核实"

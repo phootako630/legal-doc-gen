@@ -27,7 +27,10 @@ function stripReviewMarkers(text: string): string {
 
 // ── 行分类：按中国民事起诉状惯例，不同行需要不同排版（首行缩进/悬挂缩进/不缩进） ────
 
-type LineKind = 'title' | 'heading' | 'claim' | 'noIndent' | 'body';
+type LineKind = 'title' | 'heading' | 'claim' | 'noIndent' | 'partyDetail' | 'body';
+
+/** 当事人信息块：原告/被告行之后的明细行归属谁（决定缩进） */
+type Party = 'plaintiff' | 'defendant' | null;
 
 // 编号诉讼请求项：一、 / （一） / (一) / 1. 等
 const CLAIM_RE = /^([一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十]+[)）]|\d+[.、．])/;
@@ -37,14 +40,30 @@ const HEADING_RE = /^(诉讼请求|事实与理由|事实和理由)[:：]?\s*$/;
 const SALUTATION_RE = /^此致[:：]?\s*$/;
 // 当事人信息行、落款、日期——起诉状惯例中这些行不首行缩进
 const NO_INDENT_RE =
-  /^(原告|被告|具状人|起诉人|上诉人)[:：]|^\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日\s*$/;
+  /^(原告|被告|具状人|起诉人|上诉人)[:：]|^\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日\s*$|^年\s+月\s+日\s*$/;
+// 当事人明细行（信用代码/负责人/住址等）：律师模板中原告明细顶格、被告明细对齐到「被告：」之后
+const PARTY_DETAIL_RE = /^(统一社会信用代码|负责人|法定代表人|住址|住所地|电话|联系电话|联系人)[:：]/;
+
+/** 根据当前行更新所处的当事人信息块（遇到原告/被告行进入，遇到小节标题退出） */
+function nextParty(line: string, current: Party): Party {
+  if (/^原告[:：]/.test(line)) return 'plaintiff';
+  if (/^被告[:：]/.test(line)) return 'defendant';
+  if (HEADING_RE.test(line)) return null;
+  return current;
+}
 
 function isSalutationLine(line: string): boolean {
   return SALUTATION_RE.test(line);
 }
 
-function classifyLine(line: string, isFirstNonEmpty: boolean, prevWasSalutation: boolean): LineKind {
+function classifyLine(
+  line: string,
+  isFirstNonEmpty: boolean,
+  prevWasSalutation: boolean,
+  party: Party,
+): LineKind {
   if (isFirstNonEmpty) return 'title';
+  if (party && PARTY_DETAIL_RE.test(line)) return party === 'defendant' ? 'partyDetail' : 'noIndent';
   if (isSalutationLine(line)) return 'noIndent';
   if (prevWasSalutation) return 'noIndent';
   if (HEADING_RE.test(line)) return 'heading';
@@ -68,6 +87,9 @@ function paragraphStyle(kind: LineKind): string {
       return `${base}margin-left:2em;text-indent:-2em;`;
     case 'noIndent':
       return base;
+    case 'partyDetail':
+      // 整段左移三字符，与「被告：」后的名称对齐
+      return `${base}margin-left:3em;`;
     case 'body':
     default:
       return `${base}text-indent:2em;`;
@@ -80,6 +102,7 @@ function buildBodyHtml(doc: ComplaintDocument): string {
 
   let firstNonEmptySeen = false;
   let prevWasSalutation = false;
+  let party: Party = null;
   const paragraphs: string[] = [];
 
   for (const rawLine of lines) {
@@ -87,7 +110,8 @@ function buildBodyHtml(doc: ComplaintDocument): string {
     const isFirst = !firstNonEmptySeen && line.length > 0;
     if (line) firstNonEmptySeen = true;
 
-    const kind = classifyLine(line, isFirst, prevWasSalutation);
+    party = nextParty(line, party);
+    const kind = classifyLine(line, isFirst, prevWasSalutation, party);
     prevWasSalutation = isSalutationLine(line);
 
     const content = line ? escapeHtml(line) : '&nbsp;';

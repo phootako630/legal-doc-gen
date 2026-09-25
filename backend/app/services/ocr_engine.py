@@ -127,6 +127,16 @@ def _ocr_one_page(page_idx: int, img_b64: str, total_pages: int) -> OcrPage:
     return {"page_num": page_idx + 1, "text": text}
 
 
+def pdf_page_count(pdf_bytes: bytes) -> int:
+    """PDF 总页数（打不开返回 0）。供按需 OCR 在调用方未带页数时兜底。"""
+    import fitz  # PyMuPDF
+
+    try:
+        return fitz.open(stream=pdf_bytes, filetype="pdf").page_count
+    except Exception:
+        return 0
+
+
 def _render_page_b64(pdf_bytes: bytes, page_num: int) -> str | None:
     """把 PDF 第 page_num 页（1 起）渲染为 PNG base64；页码越界返回 None。"""
     import fitz  # PyMuPDF

@@ -54,7 +54,7 @@ export const FieldTable = forwardRef<FieldTableHandle, FieldTableProps>(
           {(counts.ocr_uncertain ?? 0) > 0 && (
             <span className="flex items-center gap-1 font-medium text-amber-600">
               <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400" />
-              {counts.ocr_uncertain} 项 OCR 待核实
+              {counts.ocr_uncertain} 项待核实
             </span>
           )}
         </div>

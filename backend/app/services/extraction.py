@@ -3,6 +3,7 @@
 # 供 v1 的 routers/extract.py 与 v2 的 agent/nodes.py 共用，避免重复实现。
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from app.services.confidence import ConfidenceSignals, compute_confidence
@@ -53,6 +54,45 @@ def mark_ocr_fields(data: Any, scanned_filenames: set[str]) -> None:
     elif isinstance(data, list):
         for item in data:
             mark_ocr_fields(item, scanned_filenames)
+
+
+# 验收报告里的设备代码（每台电梯唯一）与报告编号（每台一份报告）
+_EQUIPMENT_CODE_RE = re.compile(r"设备代码\s*[:：]?\s*([0-9A-Za-z]{10,})")
+_REPORT_NO_RE = re.compile(r"报告编号\s*[:：]\s*([0-9A-Za-z\-]{6,})")
+
+
+def count_acceptance_units(files: list[dict]) -> tuple[int, str] | None:
+    """
+    数验收报告覆盖的电梯台数（确定性代码，对应 CLAUDE.md「验收口径 = 报告份数/设备代码数」）。
+    优先按不同设备代码计数，取不到再按不同报告编号计数；都取不到返回 None。
+    返回 (台数, 出处说明)。
+    """
+    reports = [
+        f for f in files if f.get("identified_type") == "验收报告" and f.get("text")
+    ]
+    if not reports:
+        return None
+    names = "、".join(f"《{f.get('filename', '验收报告')}》" for f in reports)
+    text = "\n".join(f["text"] for f in reports)
+    for pattern, label in (
+        (_EQUIPMENT_CODE_RE, "设备代码"),
+        (_REPORT_NO_RE, "报告编号"),
+    ):
+        found = set(pattern.findall(text))
+        if found:
+            return len(
+                found
+            ), f"{names}按{label}计数：共 {len(found)} 个不同{label}（代码计数）"
+    return None
+
+
+def apply_acceptance_count(fields: dict, files: list[dict]) -> None:
+    """用代码计数覆盖 LLM 给的验收口径台数；数不出来则保留 LLM 的值。"""
+    counted = count_acceptance_units(files)
+    if counted is None:
+        return
+    qty, src = counted
+    fields["elevator_qty_by_acceptance"] = {"value": qty, "src": src}
 
 
 def enrich_provenance(data: Any, files: list[dict]) -> None:
