@@ -226,6 +226,20 @@ def _is_missing(fields: dict, key: str) -> bool:
     return val is None or (isinstance(val, str) and val.strip() == "")
 
 
+def _mark_ocr_src(node: dict, filename: str) -> dict:
+    """
+    按需 OCR 补出的字段必然来自扫描件：确保 src 以《文件名》开头并带 OCR 标记。
+    审核页状态与起诉状「⚠️ 待核实」标注都靠 src 里的 OCR 字样判定，
+    不能依赖 LLM 是否按要求写出文件名（否则 mark_ocr_fields 匹配不到）。
+    """
+    node = dict(node)
+    src = (node.get("src") or "").strip() or f"《{filename}》"
+    if "OCR" not in src:
+        src = f"{src}（OCR识别，请核实）"
+    node["src"] = src
+    return node
+
+
 async def _extract_clauses(file: dict) -> dict:
     """据某扫描合同已 OCR 的逐页文本，定向抽取 6 个条款字段（结构化 JSON）。"""
     text = "\n\n".join(
@@ -312,7 +326,7 @@ async def ocr_augment_node(state: GraphState) -> dict:
             if _is_missing(fields, key):
                 node = clause_fields.get(key)
                 if isinstance(node, dict) and not _is_missing({key: node}, key):
-                    fields[key] = node
+                    fields[key] = _mark_ocr_src(node, f.get("filename", "合同"))
         missing = {c for c in missing if _is_missing(fields, _CLAUSE_INDICATOR[c])}
 
     if not did_ocr:

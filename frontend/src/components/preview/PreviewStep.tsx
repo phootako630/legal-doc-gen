@@ -1,4 +1,4 @@
-// 第四步：预览与下载——渲染起诉状全文、高亮标记、XXX 警告，以及 Word 下载
+// 第四步：预览与下载——渲染起诉状全文、高亮标记、缺失字段警告，以及 Word 下载
 import { useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -16,7 +16,9 @@ interface PreviewStepProps {
 export function PreviewStep({ complaintText, onBack, onReset }: PreviewStepProps) {
   const [downloading, setDownloading] = useState(false);
 
-  const xxxCount = (complaintText.match(/XXX/g) ?? []).length;
+  // 缺失标记与 ComplaintPreview 的「缺失」着色口径一致：渲染器输出【待补充】，
+  // 【高亮缺失：…】为旧版标记（兼容保留）。旧实现数的是 v1 的 XXX，模板渲染后永远为 0
+  const missingCount = (complaintText.match(/【待补充】|【高亮缺失：[^】]*】/g) ?? []).length;
 
   const handleDownload = () => {
     setDownloading(true);
@@ -32,14 +34,14 @@ export function PreviewStep({ complaintText, onBack, onReset }: PreviewStepProps
 
   return (
     <div className="flex flex-col gap-5">
-      {/* XXX 警告 */}
-      {xxxCount > 0 && (
+      {/* 缺失字段警告 */}
+      {missingCount > 0 && (
         <Alert className="border-orange-200 bg-orange-50">
           <TriangleAlert className="h-4 w-4 text-orange-500" />
           <AlertDescription className="text-orange-800">
             起诉状中仍有{' '}
-            <strong className="font-semibold text-orange-900">{xxxCount}</strong>{' '}
-            处未填写内容（标记为 XXX），请返回修改或在下载后手动补充。
+            <strong className="font-semibold text-orange-900">{missingCount}</strong>{' '}
+            处未填写内容（标记为【待补充】），请返回修改或在下载后手动补充。
           </AlertDescription>
         </Alert>
       )}
