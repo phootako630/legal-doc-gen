@@ -50,7 +50,7 @@ UI 组件：    shadcn/ui
 框架：         FastAPI
 Agent 编排：   LangGraph（状态图 + interrupt 断点 + checkpoint；仅用图与检查点，不引入整个 LangChain 生态）
 文件解析：     PyMuPDF（fitz）提取 PDF 文本；python-docx 提取 Word 文本
-OCR：          Qwen-VL-OCR 云端 API（阿里云 DashScope）；备用 RapidOCR（本地 ONNX，代码注释保留）
+OCR：          Qwen 多模态云端 API（阿里云 DashScope，默认 qwen3.8-max）；备用 RapidOCR（本地 ONNX，代码注释保留）
 LLM 调用：     OpenAI SDK（兼容 DeepSeek API），启用 function calling / 结构化输出
 模板渲染：     docxtpl（可选，后端渲染）或前端 docx-js（默认，见 API 设计）
 企业信息查询： 联网工具（企查查/天眼查/公示系统 API，按信用代码补全法人全称）
@@ -626,7 +626,7 @@ LLM_TIMEOUT = 120  # 秒
 # Qwen-VL-OCR（阿里云 DashScope）
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
 DASHSCOPE_BASE_URL = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
-QWEN_OCR_MODEL = "qwen-vl-ocr-latest"
+QWEN_OCR_MODEL = os.getenv("QWEN_OCR_MODEL", "qwen3.8-max")  # 关闭思考模式调用；可改回 qwen-vl-ocr
 
 OCR_TIMEOUT = 120  # 秒
 
@@ -647,7 +647,7 @@ CORS_ORIGINS = ["http://localhost:5173"]
 ```
 # backend/.env.example
 DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxx
-# 阿里云 DashScope，用于 Qwen-VL-OCR 识别扫描件 PDF
+# 阿里云 DashScope，用于 Qwen 多模态模型识别扫描件 PDF
 DASHSCOPE_API_KEY=sk-xxxxxxxxxxxxxxxx
 ```
 

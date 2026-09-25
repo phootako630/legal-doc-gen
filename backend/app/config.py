@@ -16,11 +16,15 @@ LLM_MAX_TOKENS = 16384
 LLM_TIMEOUT = 120  # 秒
 
 # ── OCR ──────────────────────────────────────────────────────────────────────
-# 当前实现：Qwen-VL-OCR API（云端，无需本地模型）
+# 当前实现：Qwen 多模态模型经 DashScope 云端 API 识别（无需本地模型）
 # Benchmark 备用：RapidOCR（本地 ONNX，见 ocr_engine.py 注释区）
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
 DASHSCOPE_BASE_URL = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
-QWEN_OCR_MODEL = "qwen-vl-ocr"
+# 默认 qwen3.8-max（支持图片输入，识别质量更好）；可在 .env 用 QWEN_OCR_MODEL 覆盖，
+# 如改回专用 OCR 模型 qwen-vl-ocr（更快更便宜）。
+QWEN_OCR_MODEL = os.getenv("QWEN_OCR_MODEL", "qwen3.8-max")
+# 关闭思考模式：OCR 只需照录原文，推理既增加耗时/费用，也可能让模型"纠正"原文（违背宁缺勿造）。
+QWEN_OCR_ENABLE_THINKING = False
 
 # 启动时打印密钥诊断（仅显示首尾4位，保护安全）
 if DASHSCOPE_API_KEY:

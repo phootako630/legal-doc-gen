@@ -22,12 +22,13 @@ from app.config import (
     OCR_MAX_CONCURRENCY,
     OCR_PAGE_TIMEOUT,
     OCR_TIMEOUT,
+    QWEN_OCR_ENABLE_THINKING,
     QWEN_OCR_MODEL,
 )
 from app.services import upload_progress
 
 logger = logging.getLogger(__name__)
-print(f"[OCR ENGINE] loading: {__file__}  (version: Qwen-VL-OCR)", flush=True)
+print(f"[OCR ENGINE] loading: {__file__}  (model: {QWEN_OCR_MODEL})", flush=True)
 
 
 class OcrPage(TypedDict):
@@ -97,6 +98,7 @@ def _ocr_image_b64(img_b64: str) -> str:
         },
         "parameters": {
             "result_format": "message",
+            "enable_thinking": QWEN_OCR_ENABLE_THINKING,
         },
     }
 
