@@ -1,6 +1,6 @@
 # Prompt A-2b：条款定向抽取（扫描合同按需 OCR 后）
 
-你是一名专业的法律文书助理。以下是从**扫描版安装合同**按需 OCR 得到的部分页文本（可能有识别噪声）。请仅抽取三类条款字段，不要抽取其他信息。
+你是一名专业的法律文书助理。以下是从**扫描版安装合同**按需 OCR 得到的部分页文本（可能有识别噪声）。请抽取三类条款字段，以及三个以合同为准的基本信息字段，不要抽取其他信息。
 
 ## 合同文件名
 
@@ -12,10 +12,15 @@
 
 ## 抽取要求
 
-- 只抽取下列 6 个字段；找不到的字段 value 填 null。
+- 只抽取下列 9 个字段；找不到的字段 value 填 null。
+- 付款条款取**专用条款**里约定付款节点与比例的那一章（如「合同价款支付」：进度款/验收款各付合同总价的百分之几），不要取通用条款里的付款申请程序；目录页只列章名，不是条款正文。
+- 争议条款取「争议」章中关于向哪里起诉/仲裁的约定。
+- `contract_title`：合同封面上的合同全称（不含书名号）。
+- `elevator_qty_by_contract`：合同约定的安装台数（协议书「承包范围」或计价清单的合计台数），只填数字。
+- `project_site`：协议书「安装地址 / 工程地点」的完整地址，保留省、市、区（县），去掉 OCR 插入的空格。
 - 每个字段的 src 必须以「《{{contract_filename}}》」开头，后接你判断的条款位置（如「第X条」或「付款条款」）。
 - `*_text` 为条款原文摘录（尽量照抄 OCR 文本，不要改写）；`*_location` 为条款章节/编号，会直接写进起诉状「依据合同<location>约定」，请写成「第二十八章」「第二十章第1.1条」这类形式。
-- `breach_interest_rate_text` 抽违约金/逾期利率的表述（如「按未付金额每日万分之五计算」）。
+- `breach_interest_rate_text` 只抽**甲方（发包方）逾期付款**应承担的利息/违约金标准（如「按未付金额每日万分之五计算」）；乙方工期、施工等方面的违约金不算，没有就填 null。
 - 宁缺勿造：不确定就填 null，不要编造条款。
 
 ## 输出格式
@@ -29,6 +34,9 @@
   "breach_interest_clause_location": {"value": null, "src": ""},
   "breach_interest_rate_text": {"value": null, "src": ""},
   "dispute_clause_location": {"value": null, "src": ""},
-  "dispute_clause_text": {"value": null, "src": ""}
+  "dispute_clause_text": {"value": null, "src": ""},
+  "contract_title": {"value": null, "src": ""},
+  "elevator_qty_by_contract": {"value": null, "src": ""},
+  "project_site": {"value": null, "src": ""}
 }
 ```

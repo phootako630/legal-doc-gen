@@ -648,7 +648,7 @@ SCANNED_PDF_TEXT_THRESHOLD = 50
 
 # Agent 护栏
 AGENT_MAX_STEPS = 12          # 单次运行最大工具/循环步数
-AGENT_MAX_OCR_PAGES = 20      # 单次运行最多按需 OCR 的页数（成本上限）
+AGENT_MAX_OCR_PAGES = 50      # 单次运行最多按需 OCR 的页数（成本上限；找到付款+争议条款正文即停）
 
 # 可信度阈值
 CONFIDENCE_UNCERTAIN_BELOW = 60   # 低于此值标记为"待核实"

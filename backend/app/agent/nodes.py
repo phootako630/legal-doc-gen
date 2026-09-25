@@ -5,16 +5,18 @@
 # 律师 resume 后节点从头重跑，interrupt() 直接返回决定值，据此改字段再复核。
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 
 from langgraph.types import interrupt
 
 from app.agent.state import GraphState
-from app.config import AGENT_MAX_OCR_PAGES
+from app.config import AGENT_MAX_OCR_PAGES, OCR_MAX_CONCURRENCY
 from app.services import file_store, llm_progress
-from app.services.doc_search import CLAUSE_KEYWORDS, locate_clauses
+from app.services.doc_search import locate_clause_bodies
 from app.services.extraction import (
+    apply_acceptance_count,
     build_combined_text,
     enrich_provenance,
     format_checks_for_llm,
@@ -23,7 +25,7 @@ from app.services.extraction import (
 from app.services.company_lookup import lookup_company
 from app.services.derived_fields import apply_derived_fields
 from app.services.llm_client import chat
-from app.services.ocr_engine import ocr_page
+from app.services.ocr_engine import ocr_page, pdf_page_count
 from app.services.prompt_loader import load_prompt
 from app.services.validators import ValidationCheck, check_to_dict, run_all_checks
 
@@ -49,6 +51,13 @@ _ALL_CLAUSE_KEYS = [
     "breach_interest_rate_text",
     "dispute_clause_location",
     "dispute_clause_text",
+]
+# 以合同为准的字段：律师取合同封面/协议书（合同名称、合同台数、安装地址）。
+# OCR 合同后若取得这些值，覆盖此前从审批表/验收报告推测的值。
+_CONTRACT_AUTHORITATIVE_KEYS = [
+    "contract_title",
+    "elevator_qty_by_contract",
+    "project_site",
 ]
 
 # 起诉状就绪度关注的关键字段（齐全且非冲突才计入）
@@ -187,6 +196,8 @@ async def extract_node(state: GraphState) -> dict:
         [{"role": "user", "content": prompt}], json_mode=True
     )
     mark_ocr_fields(fields, set(state.get("scanned_filenames", [])))
+    # 验收口径台数由代码数报告里的设备代码，不信 LLM 数数（实测会数错）
+    apply_acceptance_count(fields, state.get("files", []))
     # 值回原文逐页锚定：补充已验证页码 + 命中片段 + 通道 + confidence（出处可追溯）
     enrich_provenance(fields, state.get("files", []))
     return {"extracted_fields": fields}
@@ -247,7 +258,7 @@ def _mark_ocr_src(node: dict, filename: str) -> dict:
 
 
 async def _extract_clauses(file: dict) -> dict:
-    """据某扫描合同已 OCR 的逐页文本，定向抽取 6 个条款字段（结构化 JSON）。"""
+    """据某扫描合同已 OCR 的逐页文本，定向抽取条款字段 + 以合同为准的字段（结构化 JSON）。"""
     text = "\n\n".join(
         f"【第{p['page']}页】\n{p['text']}"
         for p in file.get("pages", [])
@@ -264,8 +275,9 @@ async def _extract_clauses(file: dict) -> dict:
 async def ocr_augment_node(state: GraphState) -> dict:
     """
     按需 OCR：仅当付款/违约/争议条款字段仍缺失、且存在暂存了字节的扫描合同时，
-    对该合同逐页 OCR（命中三条款即停，页数受 AGENT_MAX_OCR_PAGES 约束），
-    再据 OCR 文本定向补齐条款字段并重新锚定页码。OCR 不可用则优雅降级、条款保持缺失。
+    对该合同按批并发 OCR（找到付款 + 争议条款正文即停，跳过目录页；页数受
+    AGENT_MAX_OCR_PAGES 约束），再据 OCR 文本定向补齐条款字段，并以合同为准覆盖合同名称、
+    合同台数、安装地址，最后重新锚定页码。OCR 不可用则优雅降级、条款保持缺失。
     """
     fields = state.get("extracted_fields", {})
     missing = {c for c, key in _CLAUSE_INDICATOR.items() if _is_missing(fields, key)}
@@ -303,22 +315,32 @@ async def ocr_augment_node(state: GraphState) -> dict:
         if pdf is None:
             continue  # 字节已淘汰/丢失 → 跳过（条款保持缺失）
 
+        # 停止条件：付款、争议是起诉状必需的；违约条款常常没有（没有时律师用 LPR 常规话术），
+        # 不因它继续翻页。只缺违约条款时才以它为目标。
+        targets = (missing - {"breach"}) or missing
+        total_pages = min(f.get("page_count") or pdf_page_count(pdf), budget)
         ocr_pages: list[dict] = []
-        for page_num in range(1, f.get("page_count", 0) + 1):
-            if budget <= 0:
-                break
-            try:
-                page_text = await ocr_page(pdf, page_num)
-            except (RuntimeError, TimeoutError):
-                break  # OCR 不可用/超时 → 停止，优雅降级
-            budget -= 1
-            did_ocr = True
-            ocr_pages.append({"page": page_num, "text": page_text})
-            # 命中即停：所有仍缺失的条款都已在已 OCR 页里定位到，则无需再往下翻
-            located = locate_clauses(
-                ocr_pages, {c: CLAUSE_KEYWORDS[c] for c in missing}
+        # 按批并发 OCR（每批 OCR_MAX_CONCURRENCY 页），每批后判断是否已找到目标条款正文
+        for start in range(1, total_pages + 1, OCR_MAX_CONCURRENCY):
+            batch = list(
+                range(start, min(start + OCR_MAX_CONCURRENCY, total_pages + 1))
             )
-            if missing <= located:
+            results = await asyncio.gather(
+                *(ocr_page(pdf, n) for n in batch), return_exceptions=True
+            )
+            budget -= len(batch)
+            ok = 0
+            for page_num, res in zip(batch, results):
+                if isinstance(res, (RuntimeError, TimeoutError)):
+                    continue  # 单页失败/超时 → 跳过该页（实测密集表格页偶发超时）
+                if isinstance(res, BaseException):
+                    raise res
+                ocr_pages.append({"page": page_num, "text": res})
+                ok += 1
+            if ok == 0:
+                break  # 整批失败 → OCR 不可用，停止，优雅降级
+            did_ocr = True
+            if targets <= locate_clause_bodies(ocr_pages):
                 break
 
         if not ocr_pages:
@@ -327,12 +349,17 @@ async def ocr_augment_node(state: GraphState) -> dict:
         f["pages"] = ocr_pages
         f["text"] = "\n\n".join(p["text"] for p in ocr_pages if p["text"])
 
-        clause_fields = await _extract_clauses(f)
+        extracted = await _extract_clauses(f)
+        filename = f.get("filename", "合同")
         for key in _ALL_CLAUSE_KEYS:
             if _is_missing(fields, key):
-                node = clause_fields.get(key)
+                node = extracted.get(key)
                 if isinstance(node, dict) and not _is_missing({key: node}, key):
-                    fields[key] = _mark_ocr_src(node, f.get("filename", "合同"))
+                    fields[key] = _mark_ocr_src(node, filename)
+        for key in _CONTRACT_AUTHORITATIVE_KEYS:
+            node = extracted.get(key)
+            if isinstance(node, dict) and not _is_missing({key: node}, key):
+                fields[key] = _mark_ocr_src(node, filename)
         missing = {c for c in missing if _is_missing(fields, _CLAUSE_INDICATOR[c])}
 
     if not did_ocr:

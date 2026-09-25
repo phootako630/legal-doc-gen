@@ -237,3 +237,28 @@ def test_render_lawyer_sample_matches_template_wording():
     # 推定的管辖法院一律标待核实，交律师确认
     assert "属⚠️ 待核实：南京市雨花台区法院辖区" in out
     assert "{{" not in out and "【待补充】" not in out
+
+
+def test_render_clause_text_tidied_into_one_sentence():
+    # OCR 摘录带条目编号、换行与插入的空格 → 起诉状里是连贯一句（换行会被导出成新段落）
+    raw = (
+        "1. 进度款：安装完成后，30 个工作日内支付合同总价的 60%；\n"
+        "2. 验收款：验收合格后，30 个工作日内支付合同总价的 20%。"
+    )
+    out = render_complaint(
+        _fields(payment_clause_text={"value": raw, "src": "《审批表》"}), TEMPLATE
+    )
+    assert (
+        "条款进度款：安装完成后，30个工作日内支付合同总价的60%；"
+        "验收款：验收合格后，30个工作日内支付合同总价的20%。"
+    ) in out
+
+
+def test_render_clause_keeps_article_numbers():
+    out = render_complaint(
+        _fields(
+            payment_clause_text={"value": "按第1.1条约定付款。", "src": "《审批表》"}
+        ),
+        TEMPLATE,
+    )
+    assert "条款按第1.1条约定付款。" in out

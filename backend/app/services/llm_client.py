@@ -46,6 +46,34 @@ def _strip_markdown_json(raw: str) -> str:
     return cleaned.strip()
 
 
+# JSON 模式下补充的系统指令。deepseek-v4-flash 在 response_format=json_object 时常把答案包成
+# {"type": "json_object", "content": ...}（content 可能是对象或字符串，偶尔缺结尾括号），
+# 甚至只回 {"type": "json_object"}。实测（真实案卷抽取，每组 4 次）：无此指令仅 1/4 可直接用，
+# 加上后 4/4。
+_JSON_SYSTEM_PROMPT = (
+    "你只输出一个 JSON 对象本身：以 { 开头、以 } 结尾，顶层键就是要求的字段名。"
+    "不要输出任何解释、不要用 markdown 代码块，也不要再包一层 type/content。"
+)
+
+
+def _unwrap_json_envelope(obj: Any) -> Any:
+    """
+    兜底剥掉模型自加的 {"type": "json_object", ...} 外壳（有系统指令后仍防御一层）。
+    只剩外壳、没有实际内容时抛 JSONDecodeError，走重试路径，不把空结果当成功。
+    """
+    if not isinstance(obj, dict) or obj.get("type") != "json_object":
+        return obj
+    if "content" in obj:
+        inner = obj["content"]
+        if isinstance(inner, str):
+            inner = json.loads(_strip_markdown_json(inner))
+        return inner
+    rest = {k: v for k, v in obj.items() if k != "type"}
+    if not rest:
+        raise json.JSONDecodeError("模型只返回了 JSON 外壳，没有内容", str(obj), 0)
+    return rest
+
+
 def _translate_error(exc: Exception) -> RuntimeError:
     """将 OpenAI SDK 异常转换为带中文说明的 RuntimeError。"""
     if isinstance(exc, openai.AuthenticationError):
@@ -79,6 +107,9 @@ async def chat(
         RuntimeError: 含中文说明的错误（401 / 429 / 超时 / 其他）
     """
     client = _get_client()
+
+    if json_mode and not any(m.get("role") == "system" for m in messages):
+        messages = [{"role": "system", "content": _JSON_SYSTEM_PROMPT}, *messages]
 
     kwargs: dict[str, Any] = {
         "model": DEEPSEEK_MODEL,
@@ -120,9 +151,9 @@ async def chat(
             if not json_mode:
                 return content
 
-            # JSON 模式：去除可能的 markdown 包裹，再解析（JSONDecodeError 往下走重试路径）
+            # JSON 模式：去除可能的 markdown 包裹，再解析、剥外壳（JSONDecodeError 往下走重试路径）
             cleaned = _strip_markdown_json(content)
-            return json.loads(cleaned)
+            return _unwrap_json_envelope(json.loads(cleaned))
 
         except (
             openai.AuthenticationError,

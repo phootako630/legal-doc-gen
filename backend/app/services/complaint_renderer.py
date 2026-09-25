@@ -121,6 +121,19 @@ def _format_arabic(num: float) -> str:
 # 条款摘录后接模板自带的「。」，去掉摘录末尾标点避免「。。」
 _CLAUSE_TEXT_KEYS = {"payment_clause_text", "dispute_clause_text"}
 _TRAILING_PUNCT = "。；;，,.、 \n"
+# 句中出现的条目编号（「1. 进度款：…；2. 验收款：…」）：起诉状里是连贯的一句话，去掉编号
+_ITEM_NO_RE = re.compile(r"(?:^|(?<=[。；;\n]))\s*\d{1,2}\s*[.、．]\s*(?!\d)")
+_CJK = "\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef"
+# 与汉字/中文标点相邻的空白（OCR 常插入：「总价的 20%」「30 个工作日」）
+_SPACE_NEAR_CJK_RE = re.compile(f"(?<=[{_CJK}])\\s+|\\s+(?=[{_CJK}])")
+
+
+def _tidy_clause(text: str) -> str:
+    """条款摘录整理为起诉状正文里的一句话：去换行、去条目编号、去 OCR 插入的空格。"""
+    text = _ITEM_NO_RE.sub("", text.strip())
+    text = re.sub(r"\s*\n\s*", "", text)
+    text = _SPACE_NEAR_CJK_RE.sub("", text)
+    return text.rstrip(_TRAILING_PUNCT)
 
 
 def _base_display(key: str, value: object) -> str:
@@ -134,7 +147,7 @@ def _base_display(key: str, value: object) -> str:
         if d is not None:
             return f"{d[0]}年{d[1]}月{d[2]}日"
     elif key in _CLAUSE_TEXT_KEYS:
-        return str(value).strip().rstrip(_TRAILING_PUNCT)
+        return _tidy_clause(str(value))
     return str(value)
 
 
