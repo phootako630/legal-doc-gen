@@ -9,7 +9,8 @@ function inferStatus(value: string | number | null, src: string): FieldStatus {
   if (value === null) return 'missing';
   const s = src.toLowerCase();
   if (s.includes('冲突') || s.includes('不一致')) return 'conflict';
-  if (s.includes('ocr') || s.includes('扫描')) return 'ocr_uncertain';
+  // OCR/扫描来源，或后端推定值（管辖法院、合同另有利率约定）标了「待核实」
+  if (s.includes('ocr') || s.includes('扫描') || s.includes('待核实')) return 'ocr_uncertain';
   return 'normal';
 }
 

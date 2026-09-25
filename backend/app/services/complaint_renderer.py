@@ -7,13 +7,15 @@
 #     冲突字段         → 【高亮冲突：<值>】
 #     OCR/扫描来源     → ⚠️ 待核实：<值>
 #     正常             → 直接写入
-#   金额同时输出阿拉伯数字与人民币大写；日期统一 XXXX年XX月XX日。
+#   格式对齐律师诉状模板：金额只出阿拉伯数字（模板自带「¥…元」），日期写 2024年2月26日。
+#   逾期利息标准、管辖法院辖区为派生字段（derived_fields），缺则渲染时补推。
 #   冲突状态由本模块重跑 validators.run_all_checks 自行判定（律师改后即时反映），
 #   不依赖前端传入，保证与审核页一致。
 from __future__ import annotations
 
 import re
 
+from app.services.derived_fields import apply_derived_fields
 from app.services.prompt_loader import load_prompt
 from app.services.validators import parse_amount, parse_date, run_all_checks
 
@@ -116,16 +118,23 @@ def _format_arabic(num: float) -> str:
     return f"{num:.2f}".rstrip("0").rstrip(".")
 
 
+# 条款摘录后接模板自带的「。」，去掉摘录末尾标点避免「。。」
+_CLAUSE_TEXT_KEYS = {"payment_clause_text", "dispute_clause_text"}
+_TRAILING_PUNCT = "。；;，,.、 \n"
+
+
 def _base_display(key: str, value: object) -> str:
-    """按字段类型生成基础显示串：金额附大写、日期规整、其余原样。"""
+    """按字段类型生成基础显示串：金额取数字（模板自带 ¥/元）、日期规整、条款去尾标点。"""
     if key in _AMOUNT_KEYS:
         num = parse_amount(value)
         if num is not None:
-            return f"{_format_arabic(num)}元（人民币大写：{amount_to_chinese_rmb(num)}）"
+            return _format_arabic(num)
     elif key in _DATE_KEYS:
         d = parse_date(value)
         if d is not None:
-            return f"{d[0]}年{d[1]:02d}月{d[2]:02d}日"
+            return f"{d[0]}年{d[1]}月{d[2]}日"
+    elif key in _CLAUSE_TEXT_KEYS:
+        return str(value).strip().rstrip(_TRAILING_PUNCT)
     return str(value)
 
 
@@ -144,8 +153,36 @@ def _conflict_field_keys(fields: dict) -> set[str]:
     return keys
 
 
+def _contacts_display(contacts: object) -> str:
+    """联系人列表 → 「张三 13800000000」，多人以「；」分隔；任一项来自 OCR 则整体标待核实。"""
+    parts: list[str] = []
+    uncertain = False
+    for c in contacts if isinstance(contacts, list) else []:
+        if not isinstance(c, dict):
+            continue
+        vals = []
+        for sub in ("name", "phone"):
+            node = c.get(sub)
+            if isinstance(node, dict):
+                v = node.get("value")
+                if any(h in str(node.get("src") or "") for h in _OCR_HINTS):
+                    uncertain = uncertain or v is not None
+            else:
+                v = node
+            if v is not None and str(v).strip():
+                vals.append(str(v).strip())
+        if vals:
+            parts.append(" ".join(vals))
+    if not parts:
+        return "【待补充】"
+    text = "；".join(parts)
+    return f"⚠️ 待核实：{text}" if uncertain else text
+
+
 def _annotate(key: str, fields: dict, conflict_keys: set[str]) -> str:
     """对单个占位符按字段状态返回带标注的显示串。"""
+    if key == "contacts":
+        return _contacts_display(fields.get("contacts"))
     node = fields.get(key)
     if isinstance(node, dict):
         value = node.get("value")
@@ -171,12 +208,14 @@ _PLACEHOLDER_RE = re.compile(r"\{\{(\w+)\}\}")
 def render_complaint(fields: dict, template: str | None = None) -> str:
     """
     将律师确认的字段渲染为起诉状全文（确定性填槽 + 代码贴标注）。
-    模板中未知/缺失的占位符（如法院名、落款日期）一律填 【待补充】。
+    模板中未知/缺失的占位符一律填 【待补充】（落款日期由律师手写，模板留空）。
     """
     if template is None:
         # load_prompt 不传变量时原样返回模板（占位符保留）
         template = load_prompt("complaint-template.md")
 
+    # 派生字段（利息标准/管辖法院）缺失时补推；在副本上做，不改调用方数据
+    fields = apply_derived_fields(dict(fields))
     conflict_keys = _conflict_field_keys(fields)
 
     def _repl(m: re.Match[str]) -> str:

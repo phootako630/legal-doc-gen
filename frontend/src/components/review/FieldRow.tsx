@@ -10,7 +10,7 @@ const STATUS_CONFIG: Record<FieldStatus, { label: string; className: string }> =
   normal:        { label: '正常',    className: 'border-emerald-200 bg-emerald-50  text-emerald-700 hover:bg-emerald-50' },
   missing:       { label: '缺失',    className: 'border-red-200    bg-red-50     text-red-700     hover:bg-red-50' },
   conflict:      { label: '冲突',    className: 'border-orange-200 bg-orange-50  text-orange-700  hover:bg-orange-50' },
-  ocr_uncertain: { label: 'OCR 待核', className: 'border-amber-200  bg-amber-50   text-amber-700   hover:bg-amber-50' },
+  ocr_uncertain: { label: '待核实', className: 'border-amber-200  bg-amber-50   text-amber-700   hover:bg-amber-50' },
 };
 
 // 按状态着色的行背景（斑马纹叠加状态色）

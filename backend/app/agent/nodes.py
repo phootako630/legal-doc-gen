@@ -21,6 +21,7 @@ from app.services.extraction import (
     mark_ocr_fields,
 )
 from app.services.company_lookup import lookup_company
+from app.services.derived_fields import apply_derived_fields
 from app.services.llm_client import chat
 from app.services.ocr_engine import ocr_page
 from app.services.prompt_loader import load_prompt
@@ -28,9 +29,10 @@ from app.services.validators import ValidationCheck, check_to_dict, run_all_chec
 
 # 名称疑似分公司/门店的标记词：命中则该主体需补法人全称（联网或律师确认）
 _BRANCH_MARKERS = ("分公司", "分店", "营业部", "分中心", "办事处", "分理处", "支公司")
-# 需要核实法人全称的主体：展示字段 → 对应统一社会信用代码字段
+# 需要核实法人全称的主体：展示字段 → 对应统一社会信用代码字段。
+# 不含原告：律师模板注明安装合同的原告就是审批表「合同分公司」（如 XX 公司江苏分公司），
+# 分公司以自身名义起诉，无需换成总公司法人全称。
 _NAME_FIELDS = {
-    "plaintiff_name_final": "plaintiff_credit_code",
     "defendant_name": "defendant_credit_code",
 }
 
@@ -60,6 +62,7 @@ _READINESS_KEYS = [
     "paid_amount",
     "unpaid_amount",
     "acceptance_latest_date",
+    "court_district",
 ]
 
 
@@ -192,6 +195,8 @@ async def extract_node(state: GraphState) -> dict:
 async def validate_node(state: GraphState) -> dict:
     """确定性校验：有冲突则 interrupt 问律师，resume 后应用决定并复核。"""
     fields = copy.deepcopy(state["extracted_fields"])
+    # 派生字段（逾期利息标准、管辖法院辖区）进审核页，律师可见可改
+    apply_derived_fields(fields)
     checks = run_all_checks(fields)
     conflicts = [c for c in checks if c.is_conflict]
 
@@ -204,6 +209,7 @@ async def validate_node(state: GraphState) -> dict:
         # 暂停，把决策抛给前端；resume 时返回 {field_key: value}
         decisions = interrupt(payload)
         fields = _apply_decisions(fields, decisions or {})
+        apply_derived_fields(fields)  # 律师改了工程地点等依赖字段时刷新推定
         checks = run_all_checks(fields)
 
     # 冲突消解（若有）之后才进入 LLM 说明文本生成，进度对齐"校验高亮"阶段
@@ -384,7 +390,7 @@ def _build_company_pending(targets: list[tuple[str, str, str | None]]) -> dict:
 
 async def company_lookup_node(state: GraphState) -> dict:
     """
-    主体名称核实：疑为分公司的原告/被告名称需补法人全称。
+    主体名称核实：疑为分公司的被告名称需补法人全称（原告按律师模板直接用分公司名，不在此列）。
     预留联网查询（lookup_company，当前 stub 恒 None）；查得则回填，否则 interrupt
     走 HITL——暂停让律师自行查询后键入。internet_allowed=False 时直接走 HITL。
     """

@@ -32,6 +32,8 @@ export const fieldNameMap: Record<string, string> = {
   dispute_clause_text: '争议解决条款内容',
   project_site: '工程地点',
   internet_lookup_status: '联网查询状态',
+  interest_rate_basis: '逾期利息计算标准',
+  court_district: '管辖法院（辖区）',
 };
 
 /** 审核表格中展示的字段（有序） */
@@ -54,8 +56,12 @@ export const reviewFieldKeys: string[] = [
   'paid_amount',
   'unpaid_amount',
   'acceptance_latest_date',
+  'payment_clause_location',
   'payment_clause_text',
   'breach_interest_rate_text',
+  'interest_rate_basis',
+  'dispute_clause_location',
   'dispute_clause_text',
   'project_site',
+  'court_district',
 ];
