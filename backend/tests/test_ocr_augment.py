@@ -81,6 +81,30 @@ def test_augment_ocrs_fills_clauses_with_page(monkeypatch):
     # 条款字段拿到真实页码 + OCR 通道（逐页锚定所得）
     assert f["payment_clause_text"]["page"] == 2
     assert f["payment_clause_text"]["channel"] == "ocr"
+    # src 带 OCR 标记：审核页判「待核实」、起诉状标「⚠️ 待核实」都靠它
+    src = f["payment_clause_text"]["src"]
+    assert src.startswith("《安装合同.pdf》")
+    assert "OCR" in src
+
+
+def test_augment_marks_ocr_even_when_llm_omits_src(monkeypatch):
+    # LLM 没按要求写 src（空串）→ 仍补上《文件名》+ OCR 标记，不能被当成「正常」
+    no_src = {k: {"value": v["value"], "src": ""} for k, v in _CLAUSE_RESULT.items()}
+    monkeypatch.setattr(nodes_mod, "ocr_page", AsyncMock(side_effect=[_PAGE1, _PAGE2]))
+    monkeypatch.setattr(nodes_mod, "chat", AsyncMock(return_value=no_src))
+    state = {
+        "extracted_fields": _missing_clause_fields(),
+        "files": [_scanned_contract()],
+    }
+    f = asyncio.run(nodes_mod.ocr_augment_node(state))["extracted_fields"]
+    for key in (
+        "payment_clause_text",
+        "breach_interest_rate_text",
+        "dispute_clause_text",
+    ):
+        assert f[key]["src"] == "《安装合同.pdf》（OCR识别，请核实）"
+    # 已有来源（审批表）的非条款字段不受影响
+    assert "OCR" not in f["defendant_name"]["src"]
 
 
 def test_no_scanned_contract_is_noop(monkeypatch):
