@@ -95,6 +95,33 @@ def apply_acceptance_count(fields: dict, files: list[dict]) -> None:
     fields["elevator_qty_by_acceptance"] = {"value": qty, "src": src}
 
 
+# 律师规则（确认单第 5 题）：被告住址、法定代表人一律用工商登记信息，审批表上的地址不用
+_REGISTRY_ONLY_KEYS = ("defendant_address", "defendant_legal_rep")
+_REGISTRY_ONLY_NOTE = "按律师规则：被告住址、法定代表人用工商登记信息（企查查、爱企查、启信宝等），请查询后填写"
+_SUMMARY_MARK = "AI 归纳，待核实"
+
+
+def apply_rule_guards(fields: dict) -> None:
+    """
+    抽取后按律师规则把关（确定性代码，不依赖模型是否照做）：
+    - 被告住址 / 法定代表人若取自审批表 → 清空，提示律师查工商登记信息；
+    - 付款条款的 AI 归纳句不是合同原文 → src 标「AI 归纳，待核实」，审核页与起诉状都会提示。
+    """
+    for key in _REGISTRY_ONLY_KEYS:
+        node = fields.get(key)
+        if (
+            isinstance(node, dict)
+            and node.get("value") not in (None, "")
+            and "审批表" in str(node.get("src") or "")
+        ):
+            fields[key] = {"value": None, "src": _REGISTRY_ONLY_NOTE}
+    node = fields.get("payment_clause_summary")
+    if isinstance(node, dict) and node.get("value"):
+        src = str(node.get("src") or "")
+        if _SUMMARY_MARK not in src:
+            node["src"] = f"{src}（{_SUMMARY_MARK}）" if src else f"（{_SUMMARY_MARK}）"
+
+
 def enrich_provenance(data: Any, files: list[dict]) -> None:
     """
     递归遍历 extracted_fields，为每个 FieldValue 补充**已验证**的出处信息：

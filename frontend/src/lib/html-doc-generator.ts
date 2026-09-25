@@ -18,6 +18,19 @@ function escapeHtml(input: string): string {
 // 审核阶段的【高亮缺失：X】【高亮冲突：X】⚠️ 待核实：X 等标记只用于屏幕预览着色，
 // 最终 Word 文件里只保留裸值；但字面量【待补充】保留——它是留给律师手填的可见提示。
 
+// 渲染器把每个填空值包在 ⟦…⟧ 里（律师确认单第 19 题：导出的 Word 保留黄色高亮，最后人工复核）。
+// mso-highlight 是 Word 自己的「突出显示」，background 供 WPS / 浏览器显示
+const FILL_START = '<span style="background:yellow;mso-highlight:yellow">';
+const FILL_END = '</span>';
+
+function renderFills(escapedLine: string): string {
+  return escapedLine.replace(/⟦/g, FILL_START).replace(/⟧/g, FILL_END);
+}
+
+function stripFillMarkers(line: string): string {
+  return line.replace(/[⟦⟧]/g, '');
+}
+
 function stripReviewMarkers(text: string): string {
   return text
     .replace(/【高亮缺失：([^】]*)】/g, '$1')
@@ -106,7 +119,9 @@ function buildBodyHtml(doc: ComplaintDocument): string {
   const paragraphs: string[] = [];
 
   for (const rawLine of lines) {
-    const line = rawLine.trim();
+    const marked = rawLine.trim();
+    // 行分类看不带填空标记的纯文本；输出时再把标记换成高亮
+    const line = stripFillMarkers(marked);
     const isFirst = !firstNonEmptySeen && line.length > 0;
     if (line) firstNonEmptySeen = true;
 
@@ -114,7 +129,7 @@ function buildBodyHtml(doc: ComplaintDocument): string {
     const kind = classifyLine(line, isFirst, prevWasSalutation, party);
     prevWasSalutation = isSalutationLine(line);
 
-    const content = line ? escapeHtml(line) : '&nbsp;';
+    const content = line ? renderFills(escapeHtml(marked)) : '&nbsp;';
     paragraphs.push(`<p style="${paragraphStyle(kind)}">${content}</p>`);
   }
 

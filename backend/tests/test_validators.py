@@ -74,10 +74,22 @@ def test_qty_all_three_consistent():
     assert c.passed is True
 
 
-def test_qty_conflict():
-    c = check_elevator_qty(6, 6, 5)
+def test_qty_conflict_without_acceptance():
+    # 没有验收报告台数时，审批表与合同不一致仍是冲突（暂停问律师）
+    c = check_elevator_qty(6, 5, None)
     assert c.passed is False
     assert c.is_conflict is True
+
+
+def test_qty_mismatch_with_acceptance_follows_report():
+    # 律师规则：有验收报告台数时以其为准，不算冲突；审批表与合同一致而报告不同要提醒核验
+    c = check_elevator_qty(6, 6, 5)
+    assert c.is_conflict is False
+    assert "以验收报告 5 台为准" in c.message
+    assert "请律师核验" in c.message
+    c2 = check_elevator_qty(15, 14, 14)
+    assert c2.is_conflict is False
+    assert "请律师核验" not in c2.message
 
 
 def test_qty_two_sources_enough():
