@@ -119,7 +119,11 @@ def _format_arabic(num: float) -> str:
 
 
 # 条款摘录后接模板自带的「。」，去掉摘录末尾标点避免「。。」
-_CLAUSE_TEXT_KEYS = {"payment_clause_text", "dispute_clause_text"}
+_CLAUSE_TEXT_KEYS = {
+    "payment_clause_text",
+    "payment_clause_summary",
+    "dispute_clause_text",
+}
 _TRAILING_PUNCT = "。；;，,.、 \n"
 # 句中出现的条目编号（「1. 进度款：…；2. 验收款：…」）：起诉状里是连贯的一句话，去掉编号
 _ITEM_NO_RE = re.compile(r"(?:^|(?<=[。；;\n]))\s*\d{1,2}\s*[.、．]\s*(?!\d)")
@@ -192,10 +196,21 @@ def _contacts_display(contacts: object) -> str:
     return f"⚠️ 待核实：{text}" if uncertain else text
 
 
+# 随合同类型切换的模板措辞（安装/供货、安装价格/产品价格）：不是填空，不标注、不高亮
+_WORDING_KEYS = {"contract_action", "price_term"}
+# 主字段缺失时改用的字段：付款条款默认写 AI 归纳，没有归纳时退回合同原文（律师确认单第 8 题）
+_FALLBACK_KEYS = {"payment_clause_summary": "payment_clause_text"}
+# 填空值的包裹标记（mark_fills=True 时）：前端据此把填空处标黄（律师确认单第 19 题）
+FILL_OPEN, FILL_CLOSE = "⟦", "⟧"
+
+
 def _annotate(key: str, fields: dict, conflict_keys: set[str]) -> str:
     """对单个占位符按字段状态返回带标注的显示串。"""
     if key == "contacts":
         return _contacts_display(fields.get("contacts"))
+    fallback = _FALLBACK_KEYS.get(key)
+    if fallback and _is_blank(fields.get(key)) and not _is_blank(fields.get(fallback)):
+        key = fallback
     node = fields.get(key)
     if isinstance(node, dict):
         value = node.get("value")
@@ -214,24 +229,36 @@ def _annotate(key: str, fields: dict, conflict_keys: set[str]) -> str:
     return base
 
 
+def _is_blank(node: object) -> bool:
+    value = node.get("value") if isinstance(node, dict) else node
+    return value is None or (isinstance(value, str) and value.strip() == "")
+
+
 # ── 主入口 ────────────────────────────────────────────────────────────────────
 _PLACEHOLDER_RE = re.compile(r"\{\{(\w+)\}\}")
 
 
-def render_complaint(fields: dict, template: str | None = None) -> str:
+def render_complaint(
+    fields: dict, template: str | None = None, mark_fills: bool = False
+) -> str:
     """
     将律师确认的字段渲染为起诉状全文（确定性填槽 + 代码贴标注）。
     模板中未知/缺失的占位符一律填 【待补充】（落款日期由律师手写，模板留空）。
+    mark_fills=True 时每个填空值包在 ⟦…⟧ 里，供前端预览与 Word 导出标黄。
     """
     if template is None:
         # load_prompt 不传变量时原样返回模板（占位符保留）
         template = load_prompt("complaint-template.md")
 
-    # 派生字段（利息标准/管辖法院）缺失时补推；在副本上做，不改调用方数据
+    # 派生字段（原告、台数、利息、管辖、付款比例等）按律师规则补推；在副本上做，不改调用方数据
     fields = apply_derived_fields(dict(fields))
     conflict_keys = _conflict_field_keys(fields)
 
     def _repl(m: re.Match[str]) -> str:
-        return _annotate(m.group(1), fields, conflict_keys)
+        key = m.group(1)
+        text = _annotate(key, fields, conflict_keys)
+        if mark_fills and key not in _WORDING_KEYS:
+            return f"{FILL_OPEN}{text}{FILL_CLOSE}"
+        return text
 
     return _PLACEHOLDER_RE.sub(_repl, template).strip()

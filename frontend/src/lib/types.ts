@@ -94,6 +94,13 @@ export interface ExtractedFields {
   // 派生字段（后端 derived_fields 按律师话术/工程所在地推定，律师可改）；旧会话可能没有
   interest_rate_basis?: FieldValue;
   court_district?: FieldValue;
+  // 律师确认单规则引入的字段（后端抽取或派生；旧会话可能没有）
+  contract_type?: FieldValue;
+  payment_clause_summary?: FieldValue;
+  retention_ratio?: FieldValue;
+  claim_includes_retention?: FieldValue;
+  payable_ratio?: FieldValue;
+  jurisdiction_text?: FieldValue;
 }
 
 /** 交叉校验单项结果（②：由后端确定性代码判定，非 LLM） */

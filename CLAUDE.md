@@ -78,7 +78,7 @@ LLM 调用：     OpenAI SDK（兼容 DeepSeek API），启用 function calling 
 
 | 材料类别 | 典型文档 | 形态 | 可靠性 | agent 处理策略 |
 |---|---|---|---|---|
-| **审批表** | KA 大客户收款不良合同诉讼审批表 | 可解析文本、**键值表单** | ⭐⭐⭐ 最高（结构化，逐项直取） | **主数据源**：被告名称/地址/联系人、合同号、签约日期、台数（签约/实际）、合同总额、已付/未付、最后付款日等绝大多数字段直接取此 |
+| **审批表** | KA 大客户收款不良合同诉讼审批表 | 可解析文本、**键值表单** | ⭐⭐⭐ 最高（结构化，逐项直取） | **主数据源**：合同类型、合同分公司、被告名称、联系人、合同号、台数（签约/实际）、合同总额、已付/未付、最后付款日等字段直接取此（被告住址不取此，见起诉状生成） |
 | **验收/检验报告** | 电梯监督检验报告（监检报告） | 可解析文本 + 盖章图；每台电梯一份 | ⭐⭐ 中高 | **交叉校验源**：被告统一社会信用代码、安装地点、检验合格日期（→最晚验收日）、台数（验收口径 = 报告份数/设备代码数） |
 | **安装合同** | 电梯安装合同 | 常为**纯扫描件**（需 OCR，页数多） | ⭐ OCR 有噪声，需降权+待核实 | **条款文本源**：付款条款、违约利率条款、争议解决条款；台数（合同口径）。OCR 成本高，**按需只读相关页，不整份全抽** |
 
@@ -185,7 +185,8 @@ Word 文件仍默认在前端用 docx-js 按模板填槽生成（避免后端装
 - **台数一致**：`elevator_qty_by_approval == elevator_qty_by_contract == elevator_qty_by_acceptance`
 - **信用代码**：18 位、字符集、校验位
 - **日期**：合法性、`acceptance_latest_date` 取各验收报告最晚合格日
-- **名称**：被告疑为分公司 → 需律师/联网确认法人全称。原告**不在此列**：律师模板注明安装合同的原告就是审批表「合同分公司」（如「XX（中国）有限公司江苏分公司」），分公司以自身名义起诉
+- **名称**：不做分公司核实。原告按规则拼接（见起诉状生成）；被告是分公司时只起诉分公司，不列总公司（律师确认）
+- **台数**：有验收报告台数时以其为准、不暂停；只有审批表与合同一致而报告不同时标待核实。无验收报告台数时三源不一致仍暂停问律师
 
 校验产出：每个字段的 `status` 结论（正常/冲突/缺失）+ 供展示的高亮说明文本。
 `prompt-a-validate.md` **降级**为"仅生成给律师看的自然语言高亮说明"，不再承担一致性判断。
@@ -236,10 +237,21 @@ value=null 或锚定失败        → ❌ 缺失
   - OCR/扫描来源 → `⚠️ 待核实：<值>`
   - 正常 → 直接写入
 - 格式对齐律师模板：金额只写阿拉伯数字（模板自带 `¥…元`），日期 `2024年2月26日`（不补零）；未付款算式写 `（总额-已付）`。
-- 派生字段（`services/derived_fields.py`，律师可改、改后不覆盖）：
-  - `interest_rate_basis` 逾期利息标准：默认常规话术「全国银行间同业拆借中心公布的贷款市场报价利率」，自起诉之日起算；合同另有违约利率约定则标待核实
-  - `court_district` 管辖法院辖区：按工程所在地推定「市+区/县」，一律标待核实；约定仲裁则不推定
-- 字段来源以律师注释为准（见 `prompt-a-extract.md`「字段来源指引」）：原告=审批表「合同分公司」；被告=「合同买方名称」；被告信用代码/法定代表人/住址=企查查等查询；联系人=「联系人」「联系电话」；台数=「情况说明」；总额/已付/未付=「合同总额」「已付款」「未付款金额」；签约日期/合同名/编号=合同封面或盖章页；付款与争议条款只在合同中；验收日期=验收报告盖章落款，取最晚。
+- 导出 Word 保留黄色高亮：`/api/generate` 把每个填空值包在 `⟦…⟧` 里（`render_complaint(mark_fills=True)`），前端预览标浅黄、Word 导出转为黄色突出显示，供律师最后复核。
+- **律师确认的填写规则**（《起诉状规则确认单》，确定性代码实现于 `services/derived_fields.py`，律师改过的值不覆盖）：
+  - 原告：买卖合同 = 总公司全称（`PLAINTIFF_HQ_NAME`）；安装合同 = 总公司全称 + 审批表「合同分公司」路径中的第一个分公司；电话固定 `PLAINTIFF_PHONE`；信用代码 / 负责人 / 住址取分公司信息表（`services/branch_registry.py`，`backend/data/branch_info.json`，律师提供）
+  - 合同类型（审批表「合同类型」）切换措辞：买卖合同「安装」→「供货」、「安装价格」→「产品价格」
+  - 台数：以验收报告为准（代码按设备代码计数）；审批表与合同一致而报告不同 → 待核实
+  - 签约日期：合同盖章页日期；扫描合同未识别时暂取审批表「签约时间」
+  - 被告住址 / 法定代表人：一律用工商登记信息（企查查、爱企查、启信宝），审批表地址不用（`extraction.apply_rule_guards` 清空）
+  - 联系人：只取审批表「联系人」，不取「甲方收款联系人」
+  - 验收日期：检验报告的批准 / 盖章日期，多份取最晚一批
+  - 付款条款：原文（`payment_clause_text`）+ AI 归纳（`payment_clause_summary`，标「AI 归纳，待核实」），起诉状默认写归纳句
+  - 质保金：合同有质保金时 `retention` 节点暂停问律师本次是否起诉质保金；决定「支付至 X% 合同款」（不含则扣除质保金比例）
+  - 逾期利息：合同有甲方逾期付款利率 → 用约定（待核实）；否则 LPR 常规话术，自起诉之日起算，基数为欠款金额
+  - 争议条款提到工程所在地 / 签订地 / 履行地时，位置同时引用约定该地点的条款
+  - 管辖句 `jurisdiction_text` 按争议条款生成（一律待核实）：工程所在地 → 模板原句；原告 / 被告所在地 → 「故原告向 XX 人民法院提起诉讼」（XX 为该方住所地市辖区）；未约定地点 → 「依据《民诉法》第34条，故原告向（被告住所地）XX 人民法院提起诉讼」（条文号待律师复核）；约定仲裁或点名具体法院 → 留待补充交律师
+  - 不附付款进度表（由办案律师自行决定）
 
 ---
 
@@ -295,11 +307,13 @@ legal-doc-app/
 │   │   │   ├── llm_client.py        # DeepSeek 封装（OpenAI SDK，结构化输出）
 │   │   │   ├── prompt_loader.py     # 读取 prompts/，注入变量
 │   │   │   ├── validators.py        # ② 确定性交叉校验
-│   │   │   ├── derived_fields.py    # 派生字段：逾期利息话术、管辖法院推定
+│   │   │   ├── derived_fields.py    # 律师确认的填写规则（原告/台数/利息/管辖/质保金等）
+│   │   │   ├── branch_registry.py   # 分公司信息表（原告信用代码/负责人/住址）
 │   │   │   ├── confidence.py        # ③ 可信度评分
 │   │   │   ├── anchoring.py         # 值回原文命中/定位
 │   │   │   └── company_lookup.py    # 联网企业信息查询
 │   │   └── config.py
+│   ├── data/branch_info.json        # 分公司信息表（律师提供，未入库前不存在）
 │   ├── requirements.txt
 │   └── .env.example                 # DEEPSEEK_API_KEY, DASHSCOPE_API_KEY
 │
@@ -479,6 +493,12 @@ export interface ExtractedFields {
   internet_lookup_status: FieldValue;
   interest_rate_basis?: FieldValue;   // 派生：逾期利息计算标准
   court_district?: FieldValue;        // 派生：管辖法院辖区
+  contract_type?: FieldValue;         // 审批表「合同类型」
+  payment_clause_summary?: FieldValue; // AI 归纳的付款条款（写入起诉状）
+  retention_ratio?: FieldValue;       // 质保金比例
+  claim_includes_retention?: FieldValue; // 律师确认：本次是否起诉质保金
+  payable_ratio?: FieldValue;         // 派生：应付至合同款比例
+  jurisdiction_text?: FieldValue;     // 派生：管辖段落
 }
 
 /** 交叉校验单项结果（②） */
@@ -572,7 +592,7 @@ export const fieldNameMap: Record<string, string> = {
   amount_currency: '币种',
   acceptance_latest_date: '最晚验收日期',
   payment_clause_location: '付款条款位置',
-  payment_clause_text: '付款条款内容',
+  payment_clause_text: '付款条款原文',
   breach_interest_clause_location: '违约利率条款位置',
   breach_interest_rate_text: '违约利率',
   dispute_clause_location: '争议解决条款位置',
@@ -581,6 +601,12 @@ export const fieldNameMap: Record<string, string> = {
   internet_lookup_status: '联网查询状态',
   interest_rate_basis: '逾期利息计算标准',
   court_district: '管辖法院（辖区）',
+  contract_type: '合同类型',
+  payment_clause_summary: '付款条款（归纳，写入起诉状）',
+  retention_ratio: '质保金比例',
+  claim_includes_retention: '本次起诉是否包含质保金',
+  payable_ratio: '应付至合同款比例',
+  jurisdiction_text: '管辖段落',
 };
 
 /** 审核表格中展示的字段 */
@@ -597,13 +623,18 @@ export const reviewFieldKeys: string[] = [
   'contacts',
   'contract_no',
   'contract_title',
+  'contract_type',
   'contract_sign_date',
   'elevator_qty',
   'total_amount',
   'paid_amount',
   'unpaid_amount',
   'acceptance_latest_date',
+  'retention_ratio',
+  'claim_includes_retention',
+  'payable_ratio',
   'payment_clause_location',
+  'payment_clause_summary',
   'payment_clause_text',
   'breach_interest_rate_text',
   'interest_rate_basis',
@@ -611,6 +642,7 @@ export const reviewFieldKeys: string[] = [
   'dispute_clause_text',
   'project_site',
   'court_district',
+  'jurisdiction_text',
 ];
 ```
 

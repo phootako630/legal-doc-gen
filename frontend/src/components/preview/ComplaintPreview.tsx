@@ -3,7 +3,7 @@ import { cn } from '@/lib/utils';
 
 // ── 内联段落解析 ──────────────────────────────────────────────────────────────
 
-type SegType = 'normal' | 'missing' | 'conflict' | 'uncertain';
+type SegType = 'normal' | 'filled' | 'missing' | 'conflict' | 'uncertain';
 
 interface Seg {
   text: string;
@@ -33,6 +33,25 @@ function parseSegments(line: string): Seg[] {
   return segs;
 }
 
+// 渲染器把每个填空值包在 ⟦…⟧ 里：填空处浅黄底（与导出 Word 的黄色高亮一致），
+// 其中的缺失 / 冲突 / 待核实标记仍按原配色显示
+const FILL_RE = /⟦([^⟧]*)⟧/g;
+
+function parseLine(line: string): Seg[] {
+  const segs: Seg[] = [];
+  let last = 0;
+  for (const m of line.matchAll(FILL_RE)) {
+    const start = m.index!;
+    if (start > last) segs.push(...parseSegments(line.slice(last, start)));
+    for (const seg of parseSegments(m[1])) {
+      segs.push(seg.type === 'normal' ? { ...seg, type: 'filled' } : seg);
+    }
+    last = start + m[0].length;
+  }
+  if (last < line.length) segs.push(...parseSegments(line.slice(last)));
+  return segs;
+}
+
 // ── 行类型判断 ────────────────────────────────────────────────────────────────
 
 type LineKind = 'title' | 'section' | 'empty' | 'body';
@@ -50,6 +69,7 @@ function classifyLine(line: string, isFirstNonEmpty: boolean): LineKind {
 
 const SEG_CLASS: Record<SegType, string> = {
   normal:    '',
+  filled:    'rounded bg-yellow-100 px-0.5 text-inherit dark:bg-yellow-900/40',
   missing:   'rounded bg-red-100 px-0.5 text-red-800 ring-1 ring-red-200',
   conflict:  'rounded bg-orange-100 px-0.5 text-orange-800 ring-1 ring-orange-200',
   uncertain: 'rounded bg-amber-100 px-0.5 text-amber-800 ring-1 ring-amber-200',
@@ -72,13 +92,13 @@ export function ComplaintPreview({ text }: ComplaintPreviewProps) {
         const isFirst = !firstNonEmptySeen && trimmed.length > 0;
         if (trimmed) firstNonEmptySeen = true;
 
-        const kind = classifyLine(trimmed, isFirst);
+        const kind = classifyLine(trimmed.replace(/[⟦⟧]/g, ''), isFirst);
 
         if (kind === 'empty') {
           return <div key={idx} className="h-5" />;
         }
 
-        const segs = parseSegments(line);
+        const segs = parseLine(line);
 
         return (
           <p

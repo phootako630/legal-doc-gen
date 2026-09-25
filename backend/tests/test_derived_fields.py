@@ -39,13 +39,19 @@ def test_interest_basis_defaults_to_lpr():
     assert "待核实" not in node["src"]
 
 
-def test_interest_basis_flags_contract_rate():
+def test_interest_basis_uses_contract_rate():
+    # 律师规则：合同约定了甲方逾期付款利率就用约定（标待核实）
     fields = apply_derived_fields(
-        {"breach_interest_rate_text": {"value": "每日万分之五", "src": "《合同》"}}
+        {
+            "breach_interest_rate_text": {
+                "value": "每日万分之五的标准",
+                "src": "《合同》",
+            }
+        }
     )
     node = fields["interest_rate_basis"]
-    assert node["value"] == LPR_INTEREST_BASIS
-    assert "每日万分之五" in node["src"] and "待核实" in node["src"]
+    assert node["value"] == "每日万分之五的标准"
+    assert "待核实" in node["src"]
 
 
 def test_court_district_marked_uncertain():
@@ -91,3 +97,192 @@ def test_lawyer_edit_not_overwritten():
     apply_derived_fields(fields)
     assert fields["court_district"]["value"] == "南京市中级"
     assert fields["interest_rate_basis"]["value"] == "每日万分之五的标准"
+
+
+# ── 律师确认单规则 ────────────────────────────────────────────────────────────
+from app.services.derived_fields import derive_plaintiff_name  # noqa: E402
+
+HQ = "日立电梯（中国）有限公司"
+
+
+def _f(**kw):
+    return {k: {"value": v, "src": "《审批表》"} for k, v in kw.items()}
+
+
+@pytest.mark.parametrize(
+    ("kind", "raw", "expected"),
+    [
+        ("安装", "集团/营销网络/江苏分公司", (HQ + "江苏分公司", False)),
+        ("安装", "集团/营销网\n络/江苏分公司", (HQ + "江苏分公司", False)),  # 表格折行
+        ("安装", "集团/营销网络/江苏分公司/南京分公司", (HQ + "江苏分公司", True)),
+        ("买卖", "集团/营销网络/江苏分公司", (HQ, False)),
+        ("安装", "集团/营销网络", None),
+        ("安装", None, None),
+    ],
+)
+def test_derive_plaintiff_name(kind, raw, expected):
+    assert derive_plaintiff_name(kind, raw) == expected
+
+
+def test_plaintiff_name_overrides_llm_but_not_lawyer():
+    fields = _f(
+        contract_type="安装合同", plaintiff_branch_raw="集团/营销网络/江苏分公司"
+    )
+    fields["plaintiff_name_final"] = {"value": "江苏分公司", "src": "《审批表》"}
+    apply_derived_fields(fields)
+    assert fields["plaintiff_name_final"]["value"] == HQ + "江苏分公司"
+    fields["plaintiff_name_final"] = {
+        "value": "律师改的名称",
+        "src": "律师人工确认修改",
+    }
+    apply_derived_fields(fields)
+    assert fields["plaintiff_name_final"]["value"] == "律师改的名称"
+
+
+def test_plaintiff_phone_fixed():
+    fields = apply_derived_fields({})
+    assert fields["plaintiff_phone"]["value"] == "0755-83679974"
+
+
+def test_sale_contract_wording():
+    fields = apply_derived_fields(_f(contract_type="买卖合同"))
+    assert fields["contract_action"]["value"] == "供货"
+    assert fields["price_term"]["value"] == "产品价格"
+    assert fields["plaintiff_name_final"]["value"] == HQ
+    fields = apply_derived_fields(_f(contract_type="安装合同"))
+    assert fields["contract_action"]["value"] == "安装"
+    assert fields["price_term"]["value"] == "安装价格"
+
+
+def test_branch_registry_fills_plaintiff(tmp_path, monkeypatch):
+    import json
+
+    from app.services import branch_registry
+
+    path = tmp_path / "branch_info.json"
+    path.write_text(
+        json.dumps(
+            {
+                "headquarters": {
+                    "name": HQ,
+                    "credit_code": "HQCODE",
+                    "address": "总部地址",
+                },
+                "branches": [
+                    {
+                        "name": "江苏分公司",
+                        "credit_code": "JSCODE",
+                        "person_in_charge": "王某，总经理",
+                        "address": "南京某地址",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(branch_registry, "BRANCH_INFO_PATH", str(path))
+    fields = apply_derived_fields(
+        _f(contract_type="安装合同", plaintiff_branch_raw="集团/营销网络/江苏分公司")
+    )
+    assert fields["plaintiff_credit_code"]["value"] == "JSCODE"
+    assert fields["plaintiff_person_in_charge"]["value"] == "王某，总经理"
+    assert fields["plaintiff_address"]["value"] == "南京某地址"
+    assert fields["plaintiff_credit_code"]["src"] == "分公司信息表"
+
+
+def test_branch_registry_missing_file_leaves_blank():
+    fields = apply_derived_fields(
+        _f(contract_type="安装合同", plaintiff_branch_raw="集团/营销网络/江苏分公司")
+    )
+    assert "plaintiff_credit_code" not in fields
+
+
+@pytest.mark.parametrize(
+    ("approval", "contract", "acceptance", "expected", "uncertain"),
+    [
+        (15, 14, 14, 14, False),  # 本案：审批表填错，以验收报告为准
+        (14, 14, 13, 13, True),  # 审批表与合同一致、报告不同 → 待核实
+        (14, 14, 14, 14, False),
+    ],
+)
+def test_elevator_qty_follows_acceptance(
+    approval, contract, acceptance, expected, uncertain
+):
+    fields = apply_derived_fields(
+        _f(
+            elevator_qty=approval,
+            elevator_qty_by_approval=approval,
+            elevator_qty_by_contract=contract,
+            elevator_qty_by_acceptance=acceptance,
+        )
+    )
+    node = fields["elevator_qty"]
+    assert node["value"] == expected
+    assert ("待核实" in node["src"]) is uncertain
+
+
+def test_elevator_qty_kept_without_acceptance():
+    fields = apply_derived_fields(_f(elevator_qty=15, elevator_qty_by_approval=15))
+    assert fields["elevator_qty"]["value"] == 15
+    assert "derived" not in fields["elevator_qty"]
+
+
+@pytest.mark.parametrize(
+    ("dispute", "extra", "text_part", "court"),
+    [
+        (
+            "双方向工程所在地的当地法院提起诉讼",
+            {"project_site": "江苏省南京市雨花台区某某二期"},
+            "因工程所在地为江苏省南京市雨花台区某某二期，属南京市雨花台区法院辖区",
+            "南京市雨花台区",
+        ),
+        (
+            "向原告所在地人民法院起诉",
+            {"plaintiff_address": "南京市鼓楼区某路1号"},
+            "故原告向南京市鼓楼区人民法院提起诉讼。",
+            "南京市鼓楼区",
+        ),
+        (
+            "由甲方所在地人民法院管辖",
+            {"defendant_address": "南京市秦淮区某路2号"},
+            "故原告向南京市秦淮区人民法院提起诉讼。",
+            "南京市秦淮区",
+        ),
+        (
+            "双方可向人民法院提起诉讼",
+            {"defendant_address": "南京市秦淮区某路2号"},
+            "依据《民诉法》第34条，故原告向南京市秦淮区人民法院提起诉讼。",
+            "南京市秦淮区",
+        ),
+        ("提交南京仲裁委员会仲裁", {}, None, None),
+        ("由南京市中级人民法院管辖", {}, "故原告向【待补充】人民法院提起诉讼。", None),
+    ],
+)
+def test_jurisdiction_modes(dispute, extra, text_part, court):
+    fields = apply_derived_fields(_f(dispute_clause_text=dispute, **extra))
+    assert fields["court_district"]["value"] == court
+    text = fields["jurisdiction_text"]["value"]
+    if text_part is None:
+        assert text is None
+    else:
+        assert text_part in text
+        assert "待核实" in fields["jurisdiction_text"]["src"]
+
+
+@pytest.mark.parametrize(
+    ("ratio", "claim", "expected", "uncertain"),
+    [
+        ("无", None, "100%", False),
+        ("5%", "是", "100%", False),
+        ("5%", "否", "95%", False),
+        ("5%", None, "100%", True),
+        (None, None, "100%", True),
+    ],
+)
+def test_payable_ratio(ratio, claim, expected, uncertain):
+    fields = _f(retention_ratio=ratio, claim_includes_retention=claim)
+    apply_derived_fields(fields)
+    node = fields["payable_ratio"]
+    assert node["value"] == expected
+    assert ("待核实" in node["src"]) is uncertain

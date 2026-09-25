@@ -121,7 +121,7 @@ def check_amounts(
 def check_elevator_qty(
     by_approval: object, by_contract: object, by_acceptance: object
 ) -> ValidationCheck:
-    """台数三源比对：审批表 / 合同 / 验收报告口径应一致。少于两源则不适用。"""
+    """台数三源比对。少于两源不适用；有验收报告时以其为准不算冲突，否则不一致即冲突。"""
     key = "qty_consistency"
     related = [
         "elevator_qty_by_approval",
@@ -148,6 +148,14 @@ def check_elevator_qty(
             key, True, f"台数一致：{srcs}均为 {qty} 台。", related
         )
     detail = "；".join(f"{name} {qty} 台" for name, qty in present.items())
+    acceptance = present.get("验收报告")
+    if acceptance is not None:
+        # 律师规则（确认单第 3 题）：台数不一致时以验收报告为准，不再暂停；
+        # 审批表与合同一致、只有验收报告不同时，提醒律师核验（最终台数标待核实）
+        note = f"台数不一致：{detail}。按律师规则以验收报告 {acceptance} 台为准"
+        if present.get("审批表") is not None and present.get("审批表") == present.get("合同"):
+            note += "；审批表与合同一致而验收报告不同，请律师核验"
+        return ValidationCheck(key, True, note + "。", related)
     return ValidationCheck(
         key, False, f"台数不一致：{detail}。请律师核实以哪一口径为准。", related
     )

@@ -104,11 +104,31 @@ def test_render_ocr_source_marks_uncertain():
 
 
 def test_render_qty_conflict_marks_elevator_qty():
+    # 没有验收报告台数：审批表 6 台 vs 合同 5 台 → 冲突
+    out = render_complaint(
+        _fields(
+            elevator_qty_by_contract={"value": 5, "src": "《合同》"},
+            elevator_qty_by_acceptance={"value": None, "src": ""},
+        ),
+        TEMPLATE,
+    )
+    assert "【高亮冲突：6】台" in out
+
+
+def test_render_qty_follows_acceptance_report():
+    # 律师规则：以验收报告台数为准；审批表与合同一致（6）而报告为 5 → 写 5 并标待核实
     out = render_complaint(
         _fields(elevator_qty_by_acceptance={"value": 5, "src": "《验收报告》"}),
         TEMPLATE,
     )
-    assert "【高亮冲突：6】台" in out
+    assert "台数⚠️ 待核实：5台" in out
+    assert "【高亮冲突" not in out
+
+
+def test_render_mark_fills_wraps_values():
+    out = render_complaint(_fields(), TEMPLATE, mark_fills=True)
+    assert "款⟦256266.8⟧；" in out
+    assert "被告⟦北京华龙电梯有限公司⟧" in out
 
 
 def test_render_uses_real_template_when_none():
@@ -234,8 +254,9 @@ def test_render_lawyer_sample_matches_template_wording():
     ]:
         # 去掉待核实标注后比对正文措辞（导出 Word 时前端同样会去掉标注）
         assert expected in out.replace("⚠️ 待核实：", ""), expected
-    # 推定的管辖法院一律标待核实，交律师确认
-    assert "属⚠️ 待核实：南京市雨花台区法院辖区" in out
+    # 系统生成的管辖句与推定法院一律标待核实，交律师确认
+    assert "。⚠️ 待核实：因工程所在地为" in out
+    assert "此致\n⚠️ 待核实：南京市雨花台区人民法院" in out
     assert "{{" not in out and "【待补充】" not in out
 
 

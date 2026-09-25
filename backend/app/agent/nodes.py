@@ -17,26 +17,17 @@ from app.services import file_store, llm_progress
 from app.services.doc_search import locate_clause_bodies
 from app.services.extraction import (
     apply_acceptance_count,
+    apply_rule_guards,
     build_combined_text,
     enrich_provenance,
     format_checks_for_llm,
     mark_ocr_fields,
 )
-from app.services.company_lookup import lookup_company
-from app.services.derived_fields import apply_derived_fields
+from app.services.derived_fields import apply_derived_fields, parse_percent
 from app.services.llm_client import chat
 from app.services.ocr_engine import ocr_page, pdf_page_count
 from app.services.prompt_loader import load_prompt
 from app.services.validators import ValidationCheck, check_to_dict, run_all_checks
-
-# 名称疑似分公司/门店的标记词：命中则该主体需补法人全称（联网或律师确认）
-_BRANCH_MARKERS = ("分公司", "分店", "营业部", "分中心", "办事处", "分理处", "支公司")
-# 需要核实法人全称的主体：展示字段 → 对应统一社会信用代码字段。
-# 不含原告：律师模板注明安装合同的原告就是审批表「合同分公司」（如 XX 公司江苏分公司），
-# 分公司以自身名义起诉，无需换成总公司法人全称。
-_NAME_FIELDS = {
-    "defendant_name": "defendant_credit_code",
-}
 
 # 三类条款字段（按需 OCR 的目标）：indicator 为“该条款是否已拿到”的判定字段
 _CLAUSE_INDICATOR = {
@@ -51,10 +42,13 @@ _ALL_CLAUSE_KEYS = [
     "breach_interest_rate_text",
     "dispute_clause_location",
     "dispute_clause_text",
+    "payment_clause_summary",
+    "retention_ratio",
 ]
-# 以合同为准的字段：律师取合同封面/协议书（合同名称、合同台数、安装地址）。
+# 以合同为准的字段：律师取合同盖章页/封面/协议书（签约日期、合同名称、合同台数、安装地址）。
 # OCR 合同后若取得这些值，覆盖此前从审批表/验收报告推测的值。
 _CONTRACT_AUTHORITATIVE_KEYS = [
+    "contract_sign_date",  # 律师规则：签约日期以合同盖章页为准（确认单第 4 题）
     "contract_title",
     "elevator_qty_by_contract",
     "project_site",
@@ -198,6 +192,8 @@ async def extract_node(state: GraphState) -> dict:
     mark_ocr_fields(fields, set(state.get("scanned_filenames", [])))
     # 验收口径台数由代码数报告里的设备代码，不信 LLM 数数（实测会数错）
     apply_acceptance_count(fields, state.get("files", []))
+    # 律师规则把关：被告住址只用工商登记信息、AI 归纳的付款条款标待核实
+    apply_rule_guards(fields)
     # 值回原文逐页锚定：补充已验证页码 + 命中片段 + 通道 + confidence（出处可追溯）
     enrich_provenance(fields, state.get("files", []))
     return {"extracted_fields": fields}
@@ -360,6 +356,7 @@ async def ocr_augment_node(state: GraphState) -> dict:
             node = extracted.get(key)
             if isinstance(node, dict) and not _is_missing({key: node}, key):
                 fields[key] = _mark_ocr_src(node, filename)
+        apply_rule_guards(fields)
         missing = {c for c in missing if _is_missing(fields, _CLAUSE_INDICATOR[c])}
 
     if not did_ocr:
@@ -378,78 +375,35 @@ def _str_value(fields: dict, key: str) -> str | None:
     return s or None
 
 
-def _names_needing_confirmation(fields: dict) -> list[tuple[str, str, str | None]]:
-    """找出疑为分公司、需补法人全称的主体：返回 (名称字段, 原文值, 信用代码)。"""
-    targets: list[tuple[str, str, str | None]] = []
-    for name_key, code_key in _NAME_FIELDS.items():
-        raw = _str_value(fields, name_key)
-        if raw and any(marker in raw for marker in _BRANCH_MARKERS):
-            targets.append((name_key, raw, _str_value(fields, code_key)))
-    return targets
-
-
-def _set_confirmed_name(fields: dict, key: str, value: object, src: str) -> None:
-    """写回已确认的法人全称：法人全称来自联网/律师，不在案卷原文，清空页码/锚点。"""
-    node = fields.get(key) if isinstance(fields.get(key), dict) else {}
-    node = dict(node)
-    node.update(value=value, src=src, page=None, anchor=None, channel="text")
-    fields[key] = node
-
-
-def _build_company_pending(targets: list[tuple[str, str, str | None]]) -> dict:
-    """把待核实的主体名称汇成一个 confirm 断点，引导律师联网查询后键入法人全称。"""
-    lines = []
-    for _, raw, code in targets:
-        code_hint = f"（统一社会信用代码 {code}）" if code else "（信用代码缺失）"
-        lines.append(f"- {raw}{code_hint}")
-    question = (
-        "以下主体疑为分公司，起诉状需填写其法人全称。"
-        "请通过企查查 / 天眼查 / 国家企业信用信息公示系统按统一社会信用代码查询后，"
-        "填写法人全称：\n" + "\n".join(lines)
-    )
-    return {
-        "kind": "confirm",
-        "question": question,
-        "options": [],
-        "field_keys": [t[0] for t in targets],
-    }
-
-
-async def company_lookup_node(state: GraphState) -> dict:
+async def retention_node(state: GraphState) -> dict:
     """
-    主体名称核实：疑为分公司的被告名称需补法人全称（原告按律师模板直接用分公司名，不在此列）。
-    预留联网查询（lookup_company，当前 stub 恒 None）；查得则回填，否则 interrupt
-    走 HITL——暂停让律师自行查询后键入。internet_allowed=False 时直接走 HITL。
+    质保金确认（律师确认单第 9 题）：合同约定了质保金而律师尚未说明本次是否起诉质保金时，
+    暂停问律师。答案决定起诉状「被告应按合同约定支付至 X% 合同款」：
+    起诉含质保金或合同无质保金 → 100%；不含 → 扣除质保金比例（如 95%）。
     """
     fields = state.get("extracted_fields", {})
-    targets = _names_needing_confirmation(fields)
-    if not targets:
+    ratio = parse_percent(_str_value(fields, "retention_ratio"))
+    if not ratio or _str_value(fields, "claim_includes_retention"):
         return {}
-
+    decisions = interrupt(
+        {
+            "pending": {
+                "kind": "confirm",
+                "question": (
+                    f"合同约定了质保金（{ratio:g}%）。本次起诉金额是否包含质保金？\n"
+                    f"选「是」：起诉状写「支付至100%合同款」；"
+                    f"选「否」：写「支付至{100 - ratio:g}%合同款」。"
+                ),
+                "options": ["是", "否"],
+                "field_keys": ["claim_includes_retention"],
+            }
+        }
+    )
+    answer = (decisions or {}).get("claim_includes_retention")
+    if answer not in ("是", "否"):
+        return {}
     fields = copy.deepcopy(fields)
-
-    # 预留：联网自动查询（当前 stub 恒 None → 全部转 HITL）
-    remaining = targets
-    if state.get("internet_allowed"):
-        still: list[tuple[str, str, str | None]] = []
-        for name_key, raw, code in targets:
-            info = await lookup_company(code)
-            if info and info.name:
-                _set_confirmed_name(
-                    fields, name_key, info.name, f"联网查询（{info.source}）"
-                )
-            else:
-                still.append((name_key, raw, code))
-        remaining = still
-
-    if not remaining:
-        return {"extracted_fields": fields}
-
-    # 仍有待确认 → 暂停问律师（resume 时返回 {名称字段: 法人全称}）
-    decisions = interrupt({"pending": _build_company_pending(remaining)})
-    for key, value in (decisions or {}).items():
-        if value is not None and str(value).strip() != "":
-            _set_confirmed_name(fields, key, value, "律师查询确认")
+    fields["claim_includes_retention"] = {"value": answer, "src": "律师确认"}
     return {"extracted_fields": fields}
 
 

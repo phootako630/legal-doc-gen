@@ -8,20 +8,25 @@
 - **出处可追溯**：每个字段的 src 必须以《文件名》开头，后接具体位置，例如"《安装合同.pdf》第3条"。文件名请照抄下方"文件内容"中【文件：...】标注的原始文件名，不要省略、不要意译
 - **联网查询**：internet_allowed={{internet_allowed}}，若为 true 且文件中未找到原告完整名称，可说明需要联网补全
 
-## 字段来源指引（律师注释，按此优先级取值）
+## 字段来源指引（律师确认的规则，按此取值）
 
-- `plaintiff_name_final` / `plaintiff_branch_raw`：审批表「合同分公司」处，**照抄原文**。安装合同的原告就是该分公司（如「XX电梯（中国）有限公司江苏分公司」），不要改写成总公司名称
-- `defendant_name`：审批表「合同买方名称」处
-- `defendant_credit_code` / `defendant_legal_rep` / `defendant_address`：律师通常在企查查等网站查询；材料中（如验收报告）确有原文才填，否则填 null，不要猜
-- `contacts`：审批表「联系人」「联系电话」处，每人输出 `{"name": {...}, "phone": {...}}`
-- `contract_sign_date`：合同盖章页或合同封面的签订日期
+- `contract_type`：审批表「合同类型」栏，照抄（如「安装合同」「买卖合同」）
+- `plaintiff_branch_raw`：审批表「合同分公司」栏，**照抄原文**（如「集团/营销网络/江苏分公司」）。原告全称由系统按规则拼接，`plaintiff_name_final` 可填 null
+- 原告的统一社会信用代码、负责人、住址、电话由系统从分公司信息表补，材料里没有就填 null
+- `defendant_name`：审批表「合同买方名称」栏
+- `defendant_credit_code`：验收报告「使用单位统一社会信用代码」等处有原文才填
+- `defendant_legal_rep` / `defendant_address`：律师一律用企查查等工商登记信息，**不要取审批表「买方单位地址」**；材料里没有工商登记信息就填 null
+- `contacts`：只取审批表「联系人」「联系电话」栏，不取「甲方收款联系人」。每人输出 `{"name": {...}, "phone": {...}}`
+- `contract_sign_date`：合同盖章页的签署日期（不是封面的「合同订立时间」）；合同是扫描件暂未识别时，取审批表「签约时间」
 - `contract_title` / `contract_no`：合同封面；合同编号审批表上也有
-- `elevator_qty`：一般在审批表「情况说明」处；没有则取合同前部或合同设备表
+- `elevator_qty_by_approval`：审批表「签约台数」/「实际履行台数」；`elevator_qty_by_contract`：合同约定的台数；验收报告台数由系统按设备代码计数
 - `total_amount`：审批表「合同总额」处；或合同前部「合同总额」「合同金额」等表述
 - `paid_amount`：审批表「已付款」处；`unpaid_amount`：审批表「未付款金额」处
-- `acceptance_latest_date`：验收报告盖章落款处的日期，多份报告取**最晚**的一个
-- `payment_clause_location` / `payment_clause_text`：只在合同中（可能是列表或文字说明），location 写章节号如「第二十八章」
-- `dispute_clause_location` / `dispute_clause_text`：合同「争议解决」条款，location 写如「第二十章第1.1条」
+- `acceptance_latest_date`：验收报告上的**批准 / 盖章日期**（不是检验日期、制造日期或下次检验日期），多份报告取最晚的一个
+- `payment_clause_location` / `payment_clause_text`：只在合同中，location 写章节号如「第二十八章」，text 照抄原文
+- `payment_clause_summary`：把付款条款归纳成一句话，写明各付款节点与比例，例如「电梯安装完成后，30个工作日内支付合同总价的60%；电梯通过当地政府部门验收合格、完整移交并办理完工程结算手续后，30个工作日内支付至合同总价的100%」
+- `retention_ratio`：合同约定的质保金比例（如「5%」）；合同明确没有质保金填「无」；找不到填 null
+- `dispute_clause_location` / `dispute_clause_text`：合同「争议解决」条款，location 写如「第二十章第1.1条」。若条款提到「工程所在地」「合同签订地」「合同履行地」，location 同时写出合同中约定该地点的条款，如「第二十章第1.1条及第一条第2款」
 - `project_site`：工程所在地（含省市区的完整地址，如「江苏省南京市雨花台区XX项目」）
 
 ## 材料清点结果（第一步已确认）
@@ -38,6 +43,7 @@
 
 ```json
 {
+  "contract_type": {"value": null, "src": ""},
   "plaintiff_branch_raw": {"value": null, "src": ""},
   "plaintiff_name_final": {"value": null, "src": ""},
   "plaintiff_credit_code": {"value": null, "src": ""},
@@ -63,6 +69,8 @@
   "acceptance_latest_date": {"value": null, "src": ""},
   "payment_clause_location": {"value": null, "src": ""},
   "payment_clause_text": {"value": null, "src": ""},
+  "payment_clause_summary": {"value": null, "src": ""},
+  "retention_ratio": {"value": null, "src": ""},
   "breach_interest_clause_location": {"value": null, "src": ""},
   "breach_interest_rate_text": {"value": null, "src": ""},
   "dispute_clause_location": {"value": null, "src": ""},

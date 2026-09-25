@@ -53,5 +53,19 @@ AGENT_MAX_OCR_PAGES = 50
 # 未配置时 lookup_company 恒返回 None，agent 走 HITL 让律师自行查询键入法人全称。
 COMPANY_LOOKUP_API_KEY = os.getenv("COMPANY_LOOKUP_API_KEY")
 
+# ── 原告（律师确认的固定规则）────────────────────────────────────────────────
+# 买卖合同原告为总公司；安装合同原告为「总公司全称 + 审批表『合同分公司』中的分公司名」
+PLAINTIFF_HQ_NAME = "日立电梯（中国）有限公司"
+# 律师确认：原告电话一律用此号码
+PLAINTIFF_PHONE = "0755-83679974"
+# 分公司信息表（律师提供）：各分公司的统一社会信用代码、负责人、住址。
+# 文件不存在时不补这几项，起诉状留【待补充】。格式见 services/branch_registry.py
+BRANCH_INFO_PATH = os.getenv(
+    "BRANCH_INFO_PATH",
+    os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "data", "branch_info.json"
+    ),
+)
+
 # CORS 允许的前端地址
 CORS_ORIGINS = ["http://localhost:5173"]
