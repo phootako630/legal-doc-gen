@@ -3,13 +3,14 @@
 # 数据由律师提供（诉状中原告的这几项不在案件材料里），存为 JSON：
 #   {
 #     "headquarters": {"name": "日立电梯（中国）有限公司", "credit_code": "...",
-#                      "person_in_charge": "...", "address": "..."},
+#                      "legal_rep": "...", "address": "..."},
 #     "branches": [
 #       {"name": "江苏分公司", "credit_code": "...", "person_in_charge": "王凯，总经理",
 #        "address": "..."}
 #     ]
 #   }
 # branches[].name 可写简称（「江苏分公司」）或全称（「日立电梯（中国）有限公司江苏分公司」）。
+# 总公司写法定代表人（legal_rep），分公司写负责人（person_in_charge），两者都认。
 # 文件不存在或读不出时返回 None，调用方保持字段缺失（起诉状留【待补充】），不猜。
 from __future__ import annotations
 
@@ -47,7 +48,9 @@ def _to_info(entry: dict) -> PartyInfo:
         val = entry.get(key)
         return str(val).strip() or None if val is not None else None
 
-    return PartyInfo(s("credit_code"), s("person_in_charge"), s("address"))
+    return PartyInfo(
+        s("credit_code"), s("person_in_charge") or s("legal_rep"), s("address")
+    )
 
 
 def lookup_plaintiff(

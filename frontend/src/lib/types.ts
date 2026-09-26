@@ -98,9 +98,18 @@ export interface ExtractedFields {
   contract_type?: FieldValue;
   payment_clause_summary?: FieldValue;
   retention_ratio?: FieldValue;
-  claim_includes_retention?: FieldValue;
   payable_ratio?: FieldValue;
   jurisdiction_text?: FieldValue;
+  // 律师补充确认单规则引入的字段
+  contract_party_b?: FieldValue;
+  elevator_qty_contract?: FieldValue;
+  elevator_qty_vge?: FieldValue;
+  handover_text?: FieldValue;
+  retention_clause_text?: FieldValue;
+  retention_unpaid_amount?: FieldValue;
+  document_kind?: FieldValue;
+  arbitration_institution?: FieldValue;
+  addressee?: FieldValue;
 }
 
 /** 交叉校验单项结果（②：由后端确定性代码判定，非 LLM） */

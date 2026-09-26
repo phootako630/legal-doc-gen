@@ -15,6 +15,7 @@ from app.agent.state import GraphState
 from app.config import AGENT_MAX_OCR_PAGES, OCR_MAX_CONCURRENCY
 from app.services import file_store, llm_progress
 from app.services.doc_search import locate_clause_bodies
+from app.services.equipment_list import count_vge_units
 from app.services.extraction import (
     apply_acceptance_count,
     apply_rule_guards,
@@ -23,11 +24,20 @@ from app.services.extraction import (
     format_checks_for_llm,
     mark_ocr_fields,
 )
-from app.services.derived_fields import apply_derived_fields, parse_percent
+from app.services.derived_fields import (
+    apply_derived_fields,
+    parse_percent,
+    payable_ratio_options,
+)
 from app.services.llm_client import chat
 from app.services.ocr_engine import ocr_page, pdf_page_count
 from app.services.prompt_loader import load_prompt
-from app.services.validators import ValidationCheck, check_to_dict, run_all_checks
+from app.services.validators import (
+    ValidationCheck,
+    check_to_dict,
+    parse_qty,
+    run_all_checks,
+)
 
 # 三类条款字段（按需 OCR 的目标）：indicator 为“该条款是否已拿到”的判定字段
 _CLAUSE_INDICATOR = {
@@ -44,12 +54,15 @@ _ALL_CLAUSE_KEYS = [
     "dispute_clause_text",
     "payment_clause_summary",
     "retention_ratio",
+    "retention_clause_text",
+    "arbitration_institution",
 ]
 # 以合同为准的字段：律师取合同盖章页/封面/协议书（签约日期、合同名称、合同台数、安装地址）。
 # OCR 合同后若取得这些值，覆盖此前从审批表/验收报告推测的值。
 _CONTRACT_AUTHORITATIVE_KEYS = [
     "contract_sign_date",  # 律师规则：签约日期以合同盖章页为准（确认单第 4 题）
     "contract_title",
+    "contract_party_b",  # 补充确认单第 1 题：原告名称与合同盖章页乙方核对
     "elevator_qty_by_contract",
     "project_site",
 ]
@@ -268,6 +281,21 @@ async def _extract_clauses(file: dict) -> dict:
     return result if isinstance(result, dict) else {}
 
 
+async def _ocr_batch(pdf: bytes, page_nums: list[int]) -> list[dict]:
+    """并发 OCR 一批页；单页失败 / 超时跳过（实测密集表格页偶发超时），返回成功的页。"""
+    results = await asyncio.gather(
+        *(ocr_page(pdf, n) for n in page_nums), return_exceptions=True
+    )
+    pages: list[dict] = []
+    for page_num, res in zip(page_nums, results):
+        if isinstance(res, (RuntimeError, TimeoutError)):
+            continue
+        if isinstance(res, BaseException):
+            raise res
+        pages.append({"page": page_num, "text": res})
+    return pages
+
+
 async def ocr_augment_node(state: GraphState) -> dict:
     """
     按需 OCR：仅当付款/违约/争议条款字段仍缺失、且存在暂存了字节的扫描合同时，
@@ -321,19 +349,10 @@ async def ocr_augment_node(state: GraphState) -> dict:
             batch = list(
                 range(start, min(start + OCR_MAX_CONCURRENCY, total_pages + 1))
             )
-            results = await asyncio.gather(
-                *(ocr_page(pdf, n) for n in batch), return_exceptions=True
-            )
+            pages = await _ocr_batch(pdf, batch)
             budget -= len(batch)
-            ok = 0
-            for page_num, res in zip(batch, results):
-                if isinstance(res, (RuntimeError, TimeoutError)):
-                    continue  # 单页失败/超时 → 跳过该页（实测密集表格页偶发超时）
-                if isinstance(res, BaseException):
-                    raise res
-                ocr_pages.append({"page": page_num, "text": res})
-                ok += 1
-            if ok == 0:
+            ocr_pages.extend(pages)
+            if not pages:
                 break  # 整批失败 → OCR 不可用，停止，优雅降级
             did_ocr = True
             if targets <= locate_clause_bodies(ocr_pages):
@@ -375,35 +394,157 @@ def _str_value(fields: dict, key: str) -> str | None:
     return s or None
 
 
-async def retention_node(state: GraphState) -> dict:
+def _qty_mismatch(fields: dict) -> tuple[int, int] | None:
+    """合同台数与验收报告台数不一致时返回 (合同, 报告)；律师已定最终台数则不再过问。"""
+    node = fields.get("elevator_qty")
+    if isinstance(node, dict) and str(node.get("src") or "").startswith("律师"):
+        return None
+    contract = parse_qty(_str_value(fields, "elevator_qty_by_contract"))
+    acceptance = parse_qty(_str_value(fields, "elevator_qty_by_acceptance"))
+    if contract is None or acceptance is None or contract == acceptance:
+        return None
+    return contract, acceptance
+
+
+async def _ocr_rest_of_contracts(files: list[dict]) -> bool:
+    """把扫描合同尚未 OCR 的页补读完（受 AGENT_MAX_OCR_PAGES 约束），就地更新 files。"""
+    did = False
+    budget = AGENT_MAX_OCR_PAGES
+    for f in files:
+        if not (f.get("is_scanned") and f.get("identified_type") == "合同"):
+            continue
+        pdf = file_store.get(f.get("file_id")) if f.get("file_id") else None
+        if pdf is None:
+            continue
+        done = {p.get("page") for p in f.get("pages") or []}
+        budget -= len(done)
+        total = f.get("page_count") or pdf_page_count(pdf)
+        todo = [n for n in range(1, total + 1) if n not in done][: max(budget, 0)]
+        pages = list(f.get("pages") or [])
+        for start in range(0, len(todo), OCR_MAX_CONCURRENCY):
+            got = await _ocr_batch(pdf, todo[start : start + OCR_MAX_CONCURRENCY])
+            if not got:
+                break
+            pages.extend(got)
+            did = True
+        budget -= len(todo)
+        pages.sort(key=lambda p: p.get("page") or 0)
+        f["pages"] = pages
+        f["text"] = "\n\n".join(p["text"] for p in pages if p.get("text"))
+    return did
+
+
+async def contract_scan_node(state: GraphState) -> dict:
     """
-    质保金确认（律师确认单第 9 题）：合同约定了质保金而律师尚未说明本次是否起诉质保金时，
-    暂停问律师。答案决定起诉状「被告应按合同约定支付至 X% 合同款」：
-    起诉含质保金或合同无质保金 → 100%；不含 → 扣除质保金比例（如 95%）。
+    台数核对准备（补充确认单第 2 题）：合同台数与验收报告台数不一致时，把扫描合同剩余页
+    （设备清单通常在最后）补读完，数出 VGE 型号（家用电梯，无需验收报告）的台数。
+    与断点分成两个节点：断点恢复时节点会从头重跑，OCR 不能放在断点节点里。
     """
     fields = state.get("extracted_fields", {})
-    ratio = parse_percent(_str_value(fields, "retention_ratio"))
-    if not ratio or _str_value(fields, "claim_includes_retention"):
+    if _qty_mismatch(fields) is None:
         return {}
+    files = copy.deepcopy(state.get("files", []))
+    did_ocr = await _ocr_rest_of_contracts(files)
+    text = "\n".join(
+        f.get("text") or "" for f in files if f.get("identified_type") == "合同"
+    )
+    vge, seen = count_vge_units(text)
+    fields = copy.deepcopy(fields)
+    if seen:
+        fields["elevator_qty_vge"] = {
+            "value": vge or None,
+            "src": "合同设备清单中 VGE 型号（家用电梯）台数（代码计数）"
+            if vge
+            else "合同中出现 VGE 型号，但设备清单台数未能自动识别，待核实",
+        }
+    update: dict = {"extracted_fields": fields}
+    if did_ocr:
+        update["files"] = files
+    return update
+
+
+async def qty_check_node(state: GraphState) -> dict:
+    """
+    合同台数与验收报告台数不一致、且差额不是 VGE 家用电梯时，暂停提醒律师核对
+    （报告是否齐全 / 有无补充协议 / 是否口头取消部分电梯），由律师确定验收台数。
+    """
+    fields = state.get("extracted_fields", {})
+    mismatch = _qty_mismatch(fields)
+    if mismatch is None:
+        return {}
+    contract, acceptance = mismatch
+    vge_node = fields.get("elevator_qty_vge")
+    vge = parse_qty(_str_value(fields, "elevator_qty_vge")) or 0
+    if vge and acceptance == contract - vge:
+        return {}  # 差额正好是家用电梯：按验收报告台数继续（最终台数已标待核实提醒）
+    lines = [
+        f"合同约定 {contract} 台，验收报告 {acceptance} 台，两者不一致。请核对：",
+        "1、验收报告是否齐全（有无漏传）？",
+        "2、是否存在补充协议更改了电梯台数？如有，请补充上传后重新分析。",
+        "3、是否双方口头默认取消了部分电梯？",
+    ]
+    if isinstance(vge_node, dict):
+        lines.append(
+            f"另：合同中有 VGE 型号（家用电梯，无需验收报告）{vge} 台。"
+            if vge
+            else "另：合同中出现 VGE 型号（家用电梯，无需验收报告），台数请核对。"
+        )
+    lines.append("确认后，请选择起诉状「N 台电梯均于……验收合格」写几台。")
     decisions = interrupt(
         {
             "pending": {
                 "kind": "confirm",
-                "question": (
-                    f"合同约定了质保金（{ratio:g}%）。本次起诉金额是否包含质保金？\n"
-                    f"选「是」：起诉状写「支付至100%合同款」；"
-                    f"选「否」：写「支付至{100 - ratio:g}%合同款」。"
-                ),
-                "options": ["是", "否"],
-                "field_keys": ["claim_includes_retention"],
+                "question": "\n".join(lines),
+                "options": [str(acceptance), str(contract)],
+                "field_keys": ["elevator_qty"],
             }
         }
     )
-    answer = (decisions or {}).get("claim_includes_retention")
-    if answer not in ("是", "否"):
+    answer = (decisions or {}).get("elevator_qty")
+    if answer in (None, ""):
         return {}
     fields = copy.deepcopy(fields)
-    fields["claim_includes_retention"] = {"value": answer, "src": "律师确认"}
+    fields["elevator_qty"] = {"value": answer, "src": "律师确认"}
+    return {"extracted_fields": fields}
+
+
+async def retention_node(state: GraphState) -> dict:
+    """
+    质保金确认（确认单第 9 题、补充确认单第 4 题）：合同约定了质保金时暂停，请律师按本次
+    起诉是否包含质保金（或只含已到期的部分）选定起诉状「被告应按合同约定支付至 X% 合同款」。
+    选项按质保金条款的分期比例给出（如 5% → 100%/95%；满一年 2%、满二年 3% → 100%/97%/95%）。
+    """
+    fields = state.get("extracted_fields", {})
+    ratio = parse_percent(_str_value(fields, "retention_ratio"))
+    node = fields.get("payable_ratio")
+    lawyer_set = isinstance(node, dict) and str(node.get("src") or "").startswith(
+        "律师"
+    )
+    if not ratio or lawyer_set:
+        return {}
+    clause = _str_value(fields, "retention_clause_text")
+    unpaid = _str_value(fields, "retention_unpaid_amount")
+    lines = [f"合同约定了质保金（{ratio:g}%）" + (f"：{clause}" if clause else "。")]
+    lines.append(f"审批表「未付款项构成」中质保金为：{unpaid or '未识别'}。")
+    lines.append(
+        "审批表「未付款金额」即本次起诉的欠款金额。请按本次起诉是否包含质保金"
+        "（或只含已到期的部分），选择起诉状写「支付至多少合同款」。"
+    )
+    decisions = interrupt(
+        {
+            "pending": {
+                "kind": "confirm",
+                "question": "\n".join(lines),
+                "options": payable_ratio_options(fields),
+                "field_keys": ["payable_ratio"],
+            }
+        }
+    )
+    answer = (decisions or {}).get("payable_ratio")
+    if answer in (None, ""):
+        return {}
+    fields = copy.deepcopy(fields)
+    fields["payable_ratio"] = {"value": answer, "src": "律师确认"}
     return {"extracted_fields": fields}
 
 

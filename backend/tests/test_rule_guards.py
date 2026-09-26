@@ -45,7 +45,14 @@ _OK_CHECKLIST = {"can_proceed": True, "missing": [], "notes": ""}
 
 
 def test_retention_pauses_then_sets_ratio(monkeypatch):
-    extracted = {"retention_ratio": {"value": "5%", "src": "《审批表》"}}
+    extracted = {
+        "retention_ratio": {"value": "5%", "src": "《合同》"},
+        "retention_clause_text": {
+            "value": "质保期满一年支付2%，满二年支付3%",
+            "src": "《合同》",
+        },
+        "retention_unpaid_amount": {"value": "0.00元", "src": "《审批表》"},
+    }
     monkeypatch.setattr(
         nodes_mod,
         "chat",
@@ -54,14 +61,13 @@ def test_retention_pauses_then_sets_ratio(monkeypatch):
     state = asyncio.run(run_analyze([{"filename": "审批表.pdf", "text": "x"}], True))
     assert state.pending is not None
     assert state.pending.kind == "confirm"
-    assert state.pending.field_keys == ["claim_includes_retention"]
-    assert state.pending.options == ["是", "否"]
+    assert state.pending.field_keys == ["payable_ratio"]
+    assert state.pending.options == ["100%", "97%", "95%"]
+    assert "0.00元" in state.pending.question
 
-    resumed = asyncio.run(run_resume(state.run_id, {"claim_includes_retention": "否"}))
+    resumed = asyncio.run(run_resume(state.run_id, {"payable_ratio": "97%"}))
     assert resumed.pending is None
-    f = resumed.extracted_fields
-    assert f["claim_includes_retention"]["value"] == "否"
-    assert f["payable_ratio"]["value"] == "95%"
+    assert resumed.extracted_fields["payable_ratio"]["value"] == "97%"
 
 
 def test_no_retention_no_pause(monkeypatch):

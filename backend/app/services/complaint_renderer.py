@@ -197,7 +197,36 @@ def _contacts_display(contacts: object) -> str:
 
 
 # 随合同类型切换的模板措辞（安装/供货、安装价格/产品价格）：不是填空，不标注、不高亮
-_WORDING_KEYS = {"contract_action", "price_term"}
+_WORDING_KEYS = {"contract_action", "price_term", "plaintiff_rep_label"}
+
+# 约定仲裁时整篇改为仲裁申请书（律师补充确认单第 6 题）。只替换模板的固定文字，不动填入的值；
+# 按顺序替换，「原、被告」须先于单独的「原告」「被告」。
+_ARBITRATION_TERMS: list[tuple[str, str]] = [
+    ("民 事 起 诉 状", "仲 裁 申 请 书"),
+    ("诉讼请求", "仲裁请求"),
+    ("诉讼费用", "仲裁费用"),
+    ("提起诉讼", "提请仲裁"),
+    ("贵院", "贵委"),
+    ("判决", "裁决"),
+    ("判令", "裁决"),
+    ("原、被告", "申请人、被申请人"),
+    ("原告", "申请人"),
+    ("被告", "被申请人"),
+]
+
+
+def to_arbitration_template(template: str) -> str:
+    """把起诉状模板的固定措辞换成仲裁申请书措辞；占位符 {{…}} 原样保留。"""
+    parts = re.split(r"(\{\{\w+\}\})", template)
+    for i, part in enumerate(parts):
+        if part.startswith("{{"):
+            continue
+        for old, new in _ARBITRATION_TERMS:
+            part = part.replace(old, new)
+        parts[i] = part
+    return "".join(parts)
+
+
 # 主字段缺失时改用的字段：付款条款默认写 AI 归纳，没有归纳时退回合同原文（律师确认单第 8 题）
 _FALLBACK_KEYS = {"payment_clause_summary": "payment_clause_text"}
 # 填空值的包裹标记（mark_fills=True 时）：前端据此把填空处标黄（律师确认单第 19 题）
@@ -253,6 +282,9 @@ def render_complaint(
     # 派生字段（原告、台数、利息、管辖、付款比例等）按律师规则补推；在副本上做，不改调用方数据
     fields = apply_derived_fields(dict(fields))
     conflict_keys = _conflict_field_keys(fields)
+    kind = fields.get("document_kind")
+    if isinstance(kind, dict) and kind.get("value") == "仲裁申请书":
+        template = to_arbitration_template(template)
 
     def _repl(m: re.Match[str]) -> str:
         key = m.group(1)

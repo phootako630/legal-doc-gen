@@ -25,7 +25,11 @@
 - `acceptance_latest_date`：验收报告上的**批准 / 盖章日期**（不是检验日期、制造日期或下次检验日期），多份报告取最晚的一个
 - `payment_clause_location` / `payment_clause_text`：只在合同中，location 写章节号如「第二十八章」，text 照抄原文
 - `payment_clause_summary`：把付款条款归纳成一句话，写明各付款节点与比例，例如「电梯安装完成后，30个工作日内支付合同总价的60%；电梯通过当地政府部门验收合格、完整移交并办理完工程结算手续后，30个工作日内支付至合同总价的100%」
-- `retention_ratio`：合同约定的质保金比例（如「5%」）；合同明确没有质保金填「无」；找不到填 null
+- `retention_ratio`：合同约定的质保金比例合计（如「5%」）；合同明确没有质保金填「无」；找不到填 null
+- `retention_clause_text`：合同质保金条款原文（如「质保期满一年支付2%，满二年支付3%」），找不到填 null
+- `retention_unpaid_amount`：审批表「未付款项构成」中「质保金」一栏的金额（如「0.00元」），照抄
+- `contract_party_b`：合同盖章页（或协议书首部）乙方 / 卖方 / 安装方的全称，照抄
+- `arbitration_institution`：争议条款约定仲裁时，仲裁机构全称（如「南京仲裁委员会」）；不涉及仲裁填 null
 - `dispute_clause_location` / `dispute_clause_text`：合同「争议解决」条款，location 写如「第二十章第1.1条」。若条款提到「工程所在地」「合同签订地」「合同履行地」，location 同时写出合同中约定该地点的条款，如「第二十章第1.1条及第一条第2款」
 - `project_site`：工程所在地（含省市区的完整地址，如「江苏省南京市雨花台区XX项目」）
 
@@ -71,6 +75,10 @@
   "payment_clause_text": {"value": null, "src": ""},
   "payment_clause_summary": {"value": null, "src": ""},
   "retention_ratio": {"value": null, "src": ""},
+  "retention_clause_text": {"value": null, "src": ""},
+  "retention_unpaid_amount": {"value": null, "src": ""},
+  "contract_party_b": {"value": null, "src": ""},
+  "arbitration_institution": {"value": null, "src": ""},
   "breach_interest_clause_location": {"value": null, "src": ""},
   "breach_interest_rate_text": {"value": null, "src": ""},
   "dispute_clause_location": {"value": null, "src": ""},

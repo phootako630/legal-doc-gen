@@ -208,13 +208,14 @@ _SAMPLE = {
     },
     "contract_no": {"value": "AH0000001", "src": "《审批表》"},
     "elevator_qty": {"value": 14, "src": "《审批表》情况说明"},
+    "elevator_qty_by_contract": {"value": 14, "src": "《合同》协议书"},
     "total_amount": {"value": 894934, "src": "《审批表》合同总额"},
     "paid_amount": {"value": 638667.2, "src": "《审批表》已付款"},
     "unpaid_amount": {"value": 256266.8, "src": "《审批表》未付款金额"},
     "acceptance_latest_date": {"value": "2024年10月25日", "src": "《验收报告》"},
     "payment_clause_location": {"value": "第二十八章", "src": "《合同》"},
     "payment_clause_text": {
-        "value": "电梯安装完成后，30个工作日内支付合同总价的60%",
+        "value": "电梯安装完成后，30个工作日内支付合同总价的60%；电梯验收合格、移交并办理结算手续后支付至合同总价的100%",
         "src": "《合同》",
     },
     "dispute_clause_location": {
@@ -239,11 +240,11 @@ def test_render_lawyer_sample_matches_template_wording():
         "联系人：李四 13800000000",
         "1、判令被告向原告支付剩余合同款¥256266.8元；",
         "2、判令被告向原告支付逾期付款利息（以¥256266.8元为基数，自起诉之日起，"
-        "按照全国银行间同业拆借中心公布的贷款市场报价利率计至实际付清之日止）；",
+        "按照全国银行间同业拆借中心公布的一年期贷款市场报价利率计至实际付清之日止）；",
         "2024年2月26日，原、被告双方签订了《南京某某二期电梯安装工程合同》"
         "（合同编号：AH0000001），约定原告负责安装14台电梯，合同总价为¥894934元。",
-        "依据合同第二十八章约定，电梯安装完成后，30个工作日内支付合同总价的60%。",
-        "案涉合同项下14台电梯均于2024年10月25日前验收合格。",
+        "依据合同第二十八章约定，电梯安装完成后，30个工作日内支付合同总价的60%；",
+        "案涉合同项下14台电梯均于2024年10月25日前验收合格。案涉电梯已全部移交物业并办理结算，",
         # 未付 = 总额 - 已付（律师样例此处误写为 894934-256266.8，这里按正确算式）
         "尚欠剩余合同款¥256266.8元（894934-638667.2）未付",
         "依据案涉合同第二十章第1.1条及第一条第2款约定，履行合同时发生争议，"
@@ -283,3 +284,34 @@ def test_render_clause_keeps_article_numbers():
         TEMPLATE,
     )
     assert "条款按第1.1条约定付款。" in out
+
+
+def test_render_arbitration_becomes_application():
+    # 律师补充确认单第 6 题：约定仲裁 → 整篇改为仲裁申请书
+    fields = dict(_SAMPLE)
+    fields["dispute_clause_text"] = {
+        "value": "提交南京仲裁委员会仲裁",
+        "src": "《合同》",
+    }
+    out = render_complaint(fields).replace("⚠️ 待核实：", "")
+    assert out.startswith("仲 裁 申 请 书")
+    assert "申请人：某电梯（中国）有限公司江苏分公司" in out
+    assert "被申请人：南京某置业有限公司" in out
+    assert "仲裁请求：" in out and "诉讼请求" not in out
+    assert "1、裁决被申请人向申请人支付剩余合同款" in out
+    assert "申请人、被申请人双方签订了" in out
+    assert "3、裁决被申请人承担本案全部的仲裁费用。" in out
+    assert "故申请人向南京仲裁委员会提请仲裁。" in out
+    assert "此致\n南京仲裁委员会" in out
+    assert "贵委" in out and "贵院" not in out
+    # 填入的值不被替换（原告名称里没有「原告」二字，这里验证替换只作用于模板文字）
+    assert "原告" not in out
+
+
+def test_render_sale_contract_hq_legal_rep_label():
+    fields = dict(_SAMPLE)
+    fields["contract_type"] = {"value": "买卖合同", "src": "《审批表》"}
+    out = render_complaint(fields)
+    assert "\n法定代表人：张三，总经理\n" in out
+    assert "约定原告负责供货14台电梯" in out
+    assert "双方对产品价格、付款方式" in out

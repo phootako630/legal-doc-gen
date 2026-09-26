@@ -25,8 +25,11 @@ export function PreviewStep({ complaintText, onBack, onReset }: PreviewStepProps
     try {
       // TODO: headerText 目前用固定文案占位；若后续把当事人姓名/案号一路传到本组件，
       // 可以在这里换成真实案件名（如"XX诉XX安装合同纠纷"）
-      const html = buildComplaintHtml(complaintText, { headerText: '民事起诉状' });
-      downloadAsWord(html, '起诉状.doc');
+      // 合同约定仲裁时渲染器输出的是仲裁申请书（首行「仲 裁 申 请 书」）
+      const isArbitration = complaintText.trimStart().startsWith('仲 裁');
+      const docName = isArbitration ? '仲裁申请书' : '民事起诉状';
+      const html = buildComplaintHtml(complaintText, { headerText: docName });
+      downloadAsWord(html, isArbitration ? '仲裁申请书.doc' : '起诉状.doc');
     } finally {
       setDownloading(false);
     }

@@ -252,10 +252,10 @@ def test_elevator_qty_kept_without_acceptance():
         (
             "双方可向人民法院提起诉讼",
             {"defendant_address": "南京市秦淮区某路2号"},
-            "依据《民诉法》第34条，故原告向南京市秦淮区人民法院提起诉讼。",
+            "依据《民诉法》第24条，故原告向南京市秦淮区人民法院提起诉讼。",
             "南京市秦淮区",
         ),
-        ("提交南京仲裁委员会仲裁", {}, None, None),
+        ("提交南京仲裁委员会仲裁", {}, "故申请人向南京仲裁委员会提请仲裁。", None),
         ("由南京市中级人民法院管辖", {}, "故原告向【待补充】人民法院提起诉讼。", None),
     ],
 )
@@ -271,18 +271,126 @@ def test_jurisdiction_modes(dispute, extra, text_part, court):
 
 
 @pytest.mark.parametrize(
-    ("ratio", "claim", "expected", "uncertain"),
+    ("ratio", "expected", "uncertain"),
     [
-        ("无", None, "100%", False),
-        ("5%", "是", "100%", False),
-        ("5%", "否", "95%", False),
-        ("5%", None, "100%", True),
-        (None, None, "100%", True),
+        ("无", "100%", False),
+        ("5%", "100%", True),  # 有质保金：等律师在断点选定
+        (None, "100%", True),
     ],
 )
-def test_payable_ratio(ratio, claim, expected, uncertain):
-    fields = _f(retention_ratio=ratio, claim_includes_retention=claim)
+def test_payable_ratio_default(ratio, expected, uncertain):
+    fields = _f(retention_ratio=ratio)
     apply_derived_fields(fields)
     node = fields["payable_ratio"]
     assert node["value"] == expected
     assert ("待核实" in node["src"]) is uncertain
+
+
+@pytest.mark.parametrize(
+    ("ratio", "clause", "options"),
+    [
+        ("5%", "质保金为合同总价的5%", ["100%", "95%"]),
+        ("5%", "质保期满一年支付2%，满二年支付3%", ["100%", "97%", "95%"]),
+        ("5%", None, ["100%", "95%"]),
+        ("5%", "质保期满一年支付2%", ["100%", "95%"]),  # 分期对不上总比例 → 按一期
+    ],
+)
+def test_payable_ratio_options(ratio, clause, options):
+    from app.services.derived_fields import payable_ratio_options
+
+    assert (
+        payable_ratio_options(_f(retention_ratio=ratio, retention_clause_text=clause))
+        == options
+    )
+
+
+def test_lpr_wording_one_year():
+    fields = apply_derived_fields({})
+    assert (
+        fields["interest_rate_basis"]["value"]
+        == "全国银行间同业拆借中心公布的一年期贷款市场报价利率"
+    )
+
+
+@pytest.mark.parametrize(
+    ("clause", "expected"),
+    [
+        ("验收合格、完整移交并办理完工程结算手续后支付", "已全部移交物业并办理结算"),
+        ("验收合格后30日内支付至100%", "已全部移交物业"),
+        (None, "已全部移交物业"),
+    ],
+)
+def test_handover_text(clause, expected):
+    fields = apply_derived_fields(_f(payment_clause_text=clause))
+    assert fields["handover_text"]["value"] == expected
+
+
+def test_plaintiff_follows_contract_party_b_when_different():
+    fields = _f(
+        contract_type="安装合同",
+        plaintiff_branch_raw="集团/营销网络/湖南分公司/郴州分公司",
+        contract_party_b="日立电梯（中国）有限公司湖南分公司",
+    )
+    apply_derived_fields(fields)
+    node = fields["plaintiff_name_final"]
+    assert node["value"] == HQ + "湖南分公司"
+    assert "与合同盖章页乙方一致" in node["src"]
+
+    fields = _f(
+        contract_type="安装合同",
+        plaintiff_branch_raw="集团/营销网络/湖南分公司",
+        contract_party_b="日立电梯（中国）有限公司郴州分公司",
+    )
+    apply_derived_fields(fields)
+    node = fields["plaintiff_name_final"]
+    assert node["value"] == HQ + "郴州分公司"
+    assert "以合同盖章页乙方名称为准" in node["src"] and "待核实" in node["src"]
+
+
+def test_plaintiff_rep_label():
+    assert (
+        apply_derived_fields(_f(contract_type="买卖合同"))["plaintiff_rep_label"][
+            "value"
+        ]
+        == "法定代表人"
+    )
+    assert (
+        apply_derived_fields(_f(contract_type="安装合同"))["plaintiff_rep_label"][
+            "value"
+        ]
+        == "负责人"
+    )
+
+
+def test_qty_slots_contract_and_acceptance():
+    fields = apply_derived_fields(
+        _f(
+            elevator_qty_by_approval=15,
+            elevator_qty_by_contract=15,
+            elevator_qty_by_acceptance=14,
+            elevator_qty_vge=1,
+        )
+    )
+    assert fields["elevator_qty_contract"]["value"] == 15
+    assert fields["elevator_qty"]["value"] == 14
+    assert "家用电梯" in fields["elevator_qty"]["src"]
+    # 合同没识别到：约定台数暂取审批表并标待核实
+    fields = apply_derived_fields(
+        _f(elevator_qty_by_approval=15, elevator_qty_by_acceptance=15)
+    )
+    assert fields["elevator_qty_contract"]["value"] == 15
+    assert "待核实" in fields["elevator_qty_contract"]["src"]
+
+
+def test_document_kind_and_addressee():
+    fields = apply_derived_fields(_f(dispute_clause_text="提交南京仲裁委员会仲裁"))
+    assert fields["document_kind"]["value"] == "仲裁申请书"
+    assert fields["addressee"]["value"] == "南京仲裁委员会"
+    fields = apply_derived_fields(
+        _f(
+            dispute_clause_text="向工程所在地法院起诉",
+            project_site="江苏省南京市雨花台区某项目",
+        )
+    )
+    assert fields["document_kind"]["value"] == "民事起诉状"
+    assert fields["addressee"]["value"] == "南京市雨花台区人民法院"
