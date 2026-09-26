@@ -1,13 +1,15 @@
 # 派生字段：按律师确认的填写规则，由已抽取字段确定性推出起诉状里的若干取值与措辞。
 #
-# 规则来源：律师诉状模板的红字注释 + 《起诉状规则确认单》的答复（题号见各函数）。
-#   - 原告名称：买卖合同 = 总公司全称；安装合同 = 总公司全称 + 审批表「合同分公司」中的第一个分公司（第 6 题）
+# 规则来源：律师诉状模板的红字注释 + 两份《起诉状规则确认单》的答复（题号见各函数，「补」=补充单）。
+#   - 原告：买卖合同 = 总公司全称；安装合同 = 总公司全称 + 审批表「合同分公司」中的第一个分公司；
+#     再与合同盖章页乙方核对，不一致以合同乙方为准（第 6 题、补 1）；总公司写「法定代表人」（补 7）
 #   - 原告电话固定；信用代码 / 负责人 / 住址取分公司信息表（第 7 题）
 #   - 买卖合同措辞：「安装」→「供货」，「安装价格」→「产品价格」（第 18 题）
-#   - 最终台数：三源不一致时以验收报告为准；审批表与合同一致而报告不同，标待核实（第 3 题）
-#   - 逾期利息：合同有甲方逾期付款利率则用合同约定，否则用 LPR 常规话术（第 14 题）
-#   - 管辖：按争议条款约定的地点写管辖句与致送法院（第 13 题），推定结果一律待核实
-#   - 付款比例：合同有质保金且本次不起诉质保金时，「支付至 100%」改为扣除质保金比例（第 9 题）
+#   - 台数：约定台数取合同，验收台数取验收报告；合同含 VGE 家用电梯时核对差额（第 3 题、补 2）
+#   - 逾期利息：合同有甲方逾期付款利率则用合同约定，否则用 LPR 常规话术（第 14 题、补 3）
+#   - 管辖：按争议条款约定的地点写管辖句与致送法院；约定仲裁则整篇改为仲裁申请书（第 13 题、补 6）
+#   - 「已全部移交物业并办理结算」：合同付款条件有「结算」才写「并办理结算」（补 5）
+#   - 付款比例：合同有质保金时按律师选择写「支付至 X% 合同款」（第 9 题、补 4）
 # 律师改过的值（src 以「律师」开头）一律保留，不覆盖：AI 只提议，律师拍板。
 from __future__ import annotations
 
@@ -19,9 +21,10 @@ from app.services.branch_registry import lookup_plaintiff
 from app.services.validators import parse_qty
 
 # 逾期付款利息的常规话术（诉状中"按照……计至实际付清之日止"）
-LPR_INTEREST_BASIS = "全国银行间同业拆借中心公布的贷款市场报价利率"
-# 律师提供的条文写法（第 13 题，待律师复核条文号）
-_GENERAL_JURISDICTION_BASIS = "依据《民诉法》第34条"
+# 补充确认单第 3 题：以「全国银行间同业拆借中心公布的一年期贷款市场报价利率」为准
+LPR_INTEREST_BASIS = "全国银行间同业拆借中心公布的一年期贷款市场报价利率"
+# 未约定管辖地点时的依据（补充确认单第 6 题：第24条，不引条文原文）
+_GENERAL_JURISDICTION_BASIS = "依据《民诉法》第24条"
 _MISSING = "【待补充】"
 
 _CJK = "\\u4e00-\\u9fa5"  # 常用汉字区间（正则转义形式）
@@ -41,6 +44,9 @@ _DEFENDANT_SEAT_RE = re.compile(f"(?:{_DEFENDANT_SIDE})(?:所在地|住所地)")
 _SITE_RE = re.compile(r"工程所在地|项目所在地|合同履行地|履行地")
 _SIGN_PLACE_RE = re.compile(r"合同签订地|签订地")
 _PERCENT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%")
+# 争议条款里的仲裁机构名（LLM 未抽出时的兜底）；去掉前面的动词
+_ARBITRATION_BODY_RE = re.compile(f"([{_CJK}]{{2,20}}?仲裁委员会)")
+_LEADING_VERBS_RE = re.compile(r"^(?:提交|提请|交由|申请|向|由|至|到|报)+")
 
 
 def _node(fields: dict, key: str) -> dict:
@@ -100,12 +106,23 @@ def derive_plaintiff_name(kind: str, branch_raw: str | None) -> tuple[str, bool]
     return full, len(branches) > 1
 
 
+def _compact(text: str | None) -> str | None:
+    return re.sub(r"\s+", "", text) if text else None
+
+
 def plaintiff_name_field(fields: dict) -> dict | None:
+    """
+    原告全称：先按审批表规则推出，再与合同盖章页乙方（卖方 / 安装方）核对；
+    不一致以合同乙方为准并标待核实（补充确认单第 1 题）。
+    """
     kind = contract_kind(fields)
     branch_raw = _str_value(fields, "plaintiff_branch_raw")
     derived = derive_plaintiff_name(kind, branch_raw)
+    party_b = _compact(_str_value(fields, "contract_party_b"))
     if derived is None:
-        return None
+        if not party_b:
+            return None
+        return {"value": party_b, "src": "取自合同盖章页乙方名称", "channel": "text"}
     name, uncertain = derived
     if kind == "买卖":
         src = "按律师规则：买卖合同原告为总公司"
@@ -113,7 +130,21 @@ def plaintiff_name_field(fields: dict) -> dict | None:
         src = f"按律师规则：总公司全称 + 审批表「合同分公司」（{branch_raw}）中的分公司"
         if uncertain:
             src += "；路径中有多个分公司，待核实"
+    if party_b and party_b != name:
+        return {
+            "value": party_b,
+            "src": f"按律师规则：以合同盖章页乙方名称为准；与审批表推出的「{name}」不一致，待核实",
+            "channel": "text",
+        }
+    if party_b:
+        src += "；与合同盖章页乙方一致"
     return {"value": name, "src": src, "channel": "text"}
+
+
+def plaintiff_rep_label_field(fields: dict) -> dict:
+    """原告第三行标签：总公司（买卖合同）写「法定代表人」，分公司写「负责人」（补充确认单第 7 题）。"""
+    label = "法定代表人" if contract_kind(fields) == "买卖" else "负责人"
+    return {"value": label, "src": "合同类型"}
 
 
 def plaintiff_phone_field(_fields: dict) -> dict:
@@ -152,26 +183,61 @@ def price_term_field(fields: dict) -> dict:
 
 
 # ── 台数 ──────────────────────────────────────────────────────────────────────
+def elevator_qty_contract_field(fields: dict) -> dict | None:
+    """「约定原告负责安装 N 台」：取合同约定台数；合同没识别到时退回审批表签约台数（补 2）。"""
+    contract = parse_qty(_str_value(fields, "elevator_qty_by_contract"))
+    if contract is not None:
+        return {"value": contract, "src": "合同约定台数", "channel": "text"}
+    approval = parse_qty(_str_value(fields, "elevator_qty_by_approval"))
+    if approval is not None:
+        return {"value": approval, "src": "合同台数未识别，暂取审批表签约台数，待核实"}
+    return None
+
+
 def elevator_qty_field(fields: dict) -> dict | None:
-    """最终台数：有验收报告台数就用它；没有则不派生（保留抽取值，三源冲突仍会暂停）。"""
+    """
+    「N 台电梯均于……验收合格」：取验收报告台数；没有则不派生（保留抽取值）。
+    合同台数与报告不一致时：差额正好是 VGE 家用电梯（无需验收报告）→ 继续并提醒；
+    其余情况由 qty_check 断点问律师（补充确认单第 2 题）。
+    """
     acceptance = parse_qty(_str_value(fields, "elevator_qty_by_acceptance"))
     if acceptance is None:
         return None
     approval = parse_qty(_str_value(fields, "elevator_qty_by_approval"))
     contract = parse_qty(_str_value(fields, "elevator_qty_by_contract"))
-    src = "按验收报告台数（律师规则：台数不一致时以验收报告为准）"
-    if approval is not None and approval == contract and approval != acceptance:
+    vge = parse_qty(_str_value(fields, "elevator_qty_vge")) or 0
+    src = "按验收报告台数"
+    if contract is not None and contract != acceptance:
+        if vge and acceptance == contract - vge:
+            src += (
+                f"；合同 {contract} 台中含 VGE 家用电梯 {vge} 台（无需验收报告），"
+                "存在家用电梯，待核实"
+            )
+        else:
+            src += f"；与合同 {contract} 台不一致，待核实"
+    elif approval is not None and approval == contract and approval != acceptance:
         src += (
             f"；审批表与合同均为 {approval} 台，与验收报告 {acceptance} 台不同，待核实"
         )
-    elif {q for q in (approval, contract) if q is not None} - {acceptance}:
-        others = "、".join(
-            f"{name} {q} 台"
-            for name, q in (("审批表", approval), ("合同", contract))
-            if q is not None and q != acceptance
-        )
-        src += f"（{others}）"
+    elif approval is not None and approval != acceptance:
+        src += f"（审批表 {approval} 台）"
     return {"value": acceptance, "src": src, "channel": "text"}
+
+
+def handover_text_field(fields: dict) -> dict:
+    """
+    「案涉电梯___，被告应按合同约定支付至…」：至少写「已全部移交物业」；
+    合同付款条件提到「结算」才加「并办理结算」（补充确认单第 5 题）。
+    """
+    clause = _str_value(fields, "payment_clause_text") or ""
+    if not clause:
+        return {
+            "value": "已全部移交物业",
+            "src": "未识别到付款条款，是否写「并办理结算」待核实",
+        }
+    if "结算" in clause:
+        return {"value": "已全部移交物业并办理结算", "src": "合同付款条件含「结算」"}
+    return {"value": "已全部移交物业", "src": "合同付款条件未约定结算"}
 
 
 # ── 逾期利息 ──────────────────────────────────────────────────────────────────
@@ -199,7 +265,7 @@ def _jurisdiction(fields: dict) -> tuple[str, str | None, str]:
     """
     dispute = re.sub(r"\s+", "", _str_value(fields, "dispute_clause_text") or "")
     if "仲裁" in dispute:
-        return "arbitration", None, "合同约定仲裁，请律师确定"
+        return "arbitration", None, "合同约定仲裁，改为仲裁申请书，待核实"
     if _NAMED_COURT_RE.search(dispute) and not (
         _PLAINTIFF_SEAT_RE.search(dispute) or _DEFENDANT_SEAT_RE.search(dispute)
     ):
@@ -243,13 +309,32 @@ def court_district_field(fields: dict) -> dict:
     return {"value": district, "src": note, "channel": "text"}
 
 
+def arbitration_institution(fields: dict) -> str | None:
+    """仲裁机构全称：优先 LLM 抽取值，否则从争议条款截取（去掉前面的动词）。"""
+    name = _compact(_str_value(fields, "arbitration_institution"))
+    if name:
+        return name
+    dispute = _compact(_str_value(fields, "dispute_clause_text")) or ""
+    m = _ARBITRATION_BODY_RE.search(dispute)
+    return _LEADING_VERBS_RE.sub("", m.group(1)) if m else None
+
+
+def document_kind_field(fields: dict) -> dict:
+    """文书类型：争议条款约定仲裁 → 仲裁申请书，否则民事起诉状（补充确认单第 6 题）。"""
+    mode, _, _ = _jurisdiction(fields)
+    if mode == "arbitration":
+        return {"value": "仲裁申请书", "src": "争议条款约定仲裁，待核实"}
+    return {"value": "民事起诉状", "src": "争议条款约定诉讼"}
+
+
 def jurisdiction_text_field(fields: dict) -> dict:
-    """争议条款之后的管辖句（第 13 题三种写法 + 工程所在地的模板原句）。"""
+    """争议条款之后的管辖句（第 13 题、补 6 的各种写法 + 工程所在地的模板原句）。"""
     mode, _, note = _jurisdiction(fields)
     court = _str_value(fields, "court_district") or _MISSING
     if mode == "arbitration":
-        return {"value": None, "src": note}
-    if mode == "site":
+        body = arbitration_institution(fields) or _MISSING
+        text = f"故申请人向{body}提请仲裁。"
+    elif mode == "site":
         site = _str_value(fields, "project_site") or _MISSING
         text = f"因工程所在地为{site}，属{court}法院辖区，故原告向{court}人民法院提起诉讼。"
     elif mode == "general":
@@ -261,6 +346,18 @@ def jurisdiction_text_field(fields: dict) -> dict:
         "src": note + "（管辖句由系统按律师规则生成，待核实）",
         "channel": "text",
     }
+
+
+def addressee_field(fields: dict) -> dict:
+    """「此致」下一行：XX人民法院 / XX仲裁委员会。"""
+    mode, _, note = _jurisdiction(fields)
+    if mode == "arbitration":
+        body = arbitration_institution(fields)
+        return {"value": body or _MISSING, "src": "合同约定的仲裁机构，待核实"}
+    court = _str_value(fields, "court_district")
+    if court:
+        return {"value": f"{court}人民法院", "src": note}
+    return {"value": f"{_MISSING}人民法院", "src": note or "请律师填写受理法院"}
 
 
 # ── 付款比例（质保金）────────────────────────────────────────────────────────
@@ -275,26 +372,37 @@ def parse_percent(raw: str | None) -> float | None:
     return float(m.group(1)) if m else None
 
 
+def retention_stages(fields: dict) -> list[float]:
+    """
+    质保金分期比例：从质保金条款原文里取百分比（如「满一年付2%，满二年付3%」→ [2, 3]）；
+    原文取不到或与质保金总比例对不上时，按总比例一期处理（如 [5]）。无质保金返回 []。
+    """
+    total = parse_percent(_str_value(fields, "retention_ratio"))
+    text = _str_value(fields, "retention_clause_text") or ""
+    stages = [float(x) for x in _PERCENT_RE.findall(text)]
+    stages = [x for x in stages if 0 < x < 100]
+    if stages and (total is None or abs(sum(stages) - total) < 1e-6):
+        return stages
+    return [total] if total else []
+
+
+def payable_ratio_options(fields: dict) -> list[str]:
+    """律师可选的「支付至 X%」：全部质保金到期 100%，逐期扣除未到期部分（如 100% / 97% / 95%）。"""
+    stages = retention_stages(fields)
+    options = []
+    for k in range(len(stages) + 1):
+        options.append(f"{100 - sum(stages[k:]):g}%")
+    return sorted(set(options), key=lambda x: -float(x.rstrip("%")))
+
+
 def payable_ratio_field(fields: dict) -> dict:
-    """「被告应按合同约定支付至__合同款」：默认 100%；有质保金且本次不起诉质保金则扣除。"""
+    """「被告应按合同约定支付至__合同款」：无质保金 100%；有质保金由 retention 断点问律师。"""
     ratio = parse_percent(_str_value(fields, "retention_ratio"))
-    claim = _str_value(fields, "claim_includes_retention")
     if ratio == 0:
         return {"value": "100%", "src": "合同无质保金"}
     if ratio is None:
         return {"value": "100%", "src": "未识别到质保金约定，待核实"}
-    pct = f"{ratio:g}%"
-    if claim == "是":
-        return {"value": "100%", "src": f"合同质保金 {pct}，本次起诉包含质保金"}
-    if claim == "否":
-        return {
-            "value": f"{100 - ratio:g}%",
-            "src": f"合同质保金 {pct}，本次起诉不含质保金",
-        }
-    return {
-        "value": "100%",
-        "src": f"合同质保金 {pct}，请确认本次是否起诉质保金，待核实",
-    }
+    return {"value": "100%", "src": f"合同质保金 {ratio:g}%，请确认支付比例，待核实"}
 
 
 # ── 统一入口 ──────────────────────────────────────────────────────────────────
@@ -303,16 +411,21 @@ def payable_ratio_field(fields: dict) -> dict:
 # 管辖辖区在管辖句之前，台数在前。
 _DERIVERS: list[tuple[str, Callable[[dict], dict | None], bool]] = [
     ("plaintiff_name_final", plaintiff_name_field, True),
+    ("plaintiff_rep_label", plaintiff_rep_label_field, True),
     ("plaintiff_phone", plaintiff_phone_field, True),
     ("plaintiff_credit_code", _registry_field("credit_code"), True),
     ("plaintiff_person_in_charge", _registry_field("person_in_charge"), True),
     ("plaintiff_address", _registry_field("address"), True),
     ("contract_action", contract_action_field, True),
     ("price_term", price_term_field, True),
+    ("elevator_qty_contract", elevator_qty_contract_field, True),
     ("elevator_qty", elevator_qty_field, True),
+    ("handover_text", handover_text_field, False),
     ("interest_rate_basis", interest_basis_field, False),
+    ("document_kind", document_kind_field, False),
     ("court_district", court_district_field, False),
     ("jurisdiction_text", jurisdiction_text_field, False),
+    ("addressee", addressee_field, False),
     ("payable_ratio", payable_ratio_field, False),
 ]
 

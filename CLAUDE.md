@@ -238,19 +238,21 @@ value=null 或锚定失败        → ❌ 缺失
   - 正常 → 直接写入
 - 格式对齐律师模板：金额只写阿拉伯数字（模板自带 `¥…元`），日期 `2024年2月26日`（不补零）；未付款算式写 `（总额-已付）`。
 - 导出 Word 保留黄色高亮：`/api/generate` 把每个填空值包在 `⟦…⟧` 里（`render_complaint(mark_fills=True)`），前端预览标浅黄、Word 导出转为黄色突出显示，供律师最后复核。
-- **律师确认的填写规则**（《起诉状规则确认单》，确定性代码实现于 `services/derived_fields.py`，律师改过的值不覆盖）：
-  - 原告：买卖合同 = 总公司全称（`PLAINTIFF_HQ_NAME`）；安装合同 = 总公司全称 + 审批表「合同分公司」路径中的第一个分公司；电话固定 `PLAINTIFF_PHONE`；信用代码 / 负责人 / 住址取分公司信息表（`services/branch_registry.py`，`backend/data/branch_info.json`，律师提供）
+- **律师确认的填写规则**（两份《起诉状规则确认单》，确定性代码实现于 `services/derived_fields.py`，律师改过的值不覆盖）：
+  - 原告：买卖合同 = 总公司全称（`PLAINTIFF_HQ_NAME`，第三行写「法定代表人」）；安装合同 = 总公司全称 + 审批表「合同分公司」路径中的第一个分公司（第三行写「负责人」）；再与合同盖章页乙方（`contract_party_b`）核对，不一致以合同乙方为准并标待核实；电话固定 `PLAINTIFF_PHONE`；信用代码 / 负责人 / 住址取分公司信息表（`services/branch_registry.py`，`backend/data/branch_info.json`，律师提供）
   - 合同类型（审批表「合同类型」）切换措辞：买卖合同「安装」→「供货」、「安装价格」→「产品价格」
-  - 台数：以验收报告为准（代码按设备代码计数）；审批表与合同一致而报告不同 → 待核实
+  - 台数：「约定原告负责安装 N 台」取合同台数（`elevator_qty_contract`），「N 台均于……验收合格」取验收报告台数（`elevator_qty`，代码按设备代码计数）。合同与报告不一致时，`contract_scan` 节点补读合同设备清单、数 VGE 型号（家用电梯，无需验收报告，`services/equipment_list.py`）：报告 = 合同 − VGE → 继续并提醒家用电梯；否则 `qty_check` 节点暂停，提醒律师核对报告是否齐全 / 有无补充协议 / 是否口头取消部分电梯，由律师定台数
   - 签约日期：合同盖章页日期；扫描合同未识别时暂取审批表「签约时间」
   - 被告住址 / 法定代表人：一律用工商登记信息（企查查、爱企查、启信宝），审批表地址不用（`extraction.apply_rule_guards` 清空）
   - 联系人：只取审批表「联系人」，不取「甲方收款联系人」
   - 验收日期：检验报告的批准 / 盖章日期，多份取最晚一批
   - 付款条款：原文（`payment_clause_text`）+ AI 归纳（`payment_clause_summary`，标「AI 归纳，待核实」），起诉状默认写归纳句
-  - 质保金：合同有质保金时 `retention` 节点暂停问律师本次是否起诉质保金；决定「支付至 X% 合同款」（不含则扣除质保金比例）
-  - 逾期利息：合同有甲方逾期付款利率 → 用约定（待核实）；否则 LPR 常规话术，自起诉之日起算，基数为欠款金额
+  - 诉请金额 = 审批表「未付款金额」。质保金：合同有质保金时 `retention` 节点暂停，附质保金条款原文与审批表未付质保金，按分期比例给出选项（如 5% → 100% / 95%；满一年 2%、满二年 3% → 100% / 97% / 95%），律师选定「支付至 X% 合同款」
+  - 「案涉电梯已全部移交物业」固定；合同付款条件含「结算」才加「并办理结算」（`handover_text`）
+  - 逾期利息：合同有甲方逾期付款利率 → 用约定（待核实）；否则「全国银行间同业拆借中心公布的一年期贷款市场报价利率」，自起诉之日起算，基数为欠款金额
   - 争议条款提到工程所在地 / 签订地 / 履行地时，位置同时引用约定该地点的条款
-  - 管辖句 `jurisdiction_text` 按争议条款生成（一律待核实）：工程所在地 → 模板原句；原告 / 被告所在地 → 「故原告向 XX 人民法院提起诉讼」（XX 为该方住所地市辖区）；未约定地点 → 「依据《民诉法》第34条，故原告向（被告住所地）XX 人民法院提起诉讼」（条文号待律师复核）；约定仲裁或点名具体法院 → 留待补充交律师
+  - 管辖句 `jurisdiction_text` 按争议条款生成（一律待核实）：工程所在地 → 模板原句；原告 / 被告所在地 → 「故原告向 XX 人民法院提起诉讼」（XX 为该方住所地市辖区）；未约定地点 → 「依据《民诉法》第24条，故原告向（被告住所地）XX 人民法院提起诉讼」；点名具体法院 → 留待补充交律师；不考虑中级法院
+  - 约定仲裁 → 整篇改为仲裁申请书（`document_kind`）：模板固定文字替换 民事起诉状→仲裁申请书、原告→申请人、被告→被申请人、诉讼请求→仲裁请求、诉讼费用→仲裁费用、提起诉讼→提请仲裁、贵院→贵委、判令/判决→裁决；管辖句「故申请人向 XX 仲裁委员会提请仲裁」，致送合同约定的仲裁机构（`addressee`）
   - 不附付款进度表（由办案律师自行决定）
 
 ---
@@ -309,6 +311,7 @@ legal-doc-app/
 │   │   │   ├── validators.py        # ② 确定性交叉校验
 │   │   │   ├── derived_fields.py    # 律师确认的填写规则（原告/台数/利息/管辖/质保金等）
 │   │   │   ├── branch_registry.py   # 分公司信息表（原告信用代码/负责人/住址）
+│   │   │   ├── equipment_list.py    # 合同设备清单中 VGE 家用电梯计数
 │   │   │   ├── confidence.py        # ③ 可信度评分
 │   │   │   ├── anchoring.py         # 值回原文命中/定位
 │   │   │   └── company_lookup.py    # 联网企业信息查询
@@ -496,9 +499,17 @@ export interface ExtractedFields {
   contract_type?: FieldValue;         // 审批表「合同类型」
   payment_clause_summary?: FieldValue; // AI 归纳的付款条款（写入起诉状）
   retention_ratio?: FieldValue;       // 质保金比例
-  claim_includes_retention?: FieldValue; // 律师确认：本次是否起诉质保金
   payable_ratio?: FieldValue;         // 派生：应付至合同款比例
   jurisdiction_text?: FieldValue;     // 派生：管辖段落
+  contract_party_b?: FieldValue;      // 合同盖章页乙方
+  elevator_qty_contract?: FieldValue; // 派生：约定台数（合同）
+  elevator_qty_vge?: FieldValue;      // 合同中 VGE 家用电梯台数
+  handover_text?: FieldValue;         // 派生：移交 / 结算表述
+  retention_clause_text?: FieldValue; // 质保金条款原文
+  retention_unpaid_amount?: FieldValue; // 审批表未付质保金
+  document_kind?: FieldValue;         // 派生：民事起诉状 / 仲裁申请书
+  arbitration_institution?: FieldValue; // 仲裁机构
+  addressee?: FieldValue;             // 派生：致送法院 / 仲裁委
 }
 
 /** 交叉校验单项结果（②） */
@@ -582,7 +593,7 @@ export const fieldNameMap: Record<string, string> = {
   contract_no: '合同编号',
   contract_title: '合同标题',
   contract_sign_date: '签约日期',
-  elevator_qty: '电梯台数（最终）',
+  elevator_qty: '台数（验收，写入起诉状）',
   elevator_qty_by_approval: '台数（审批表）',
   elevator_qty_by_contract: '台数（合同）',
   elevator_qty_by_acceptance: '台数（验收报告）',
@@ -604,9 +615,17 @@ export const fieldNameMap: Record<string, string> = {
   contract_type: '合同类型',
   payment_clause_summary: '付款条款（归纳，写入起诉状）',
   retention_ratio: '质保金比例',
-  claim_includes_retention: '本次起诉是否包含质保金',
   payable_ratio: '应付至合同款比例',
   jurisdiction_text: '管辖段落',
+  contract_party_b: '合同乙方（盖章页）',
+  elevator_qty_contract: '台数（约定，写入起诉状）',
+  elevator_qty_vge: 'VGE 家用电梯台数',
+  handover_text: '移交 / 结算表述',
+  retention_clause_text: '质保金条款',
+  retention_unpaid_amount: '审批表未付质保金',
+  document_kind: '文书类型',
+  arbitration_institution: '仲裁机构',
+  addressee: '致送（法院 / 仲裁委）',
 };
 
 /** 审核表格中展示的字段 */
@@ -623,16 +642,22 @@ export const reviewFieldKeys: string[] = [
   'contacts',
   'contract_no',
   'contract_title',
+  'document_kind',
   'contract_type',
+  'contract_party_b',
   'contract_sign_date',
+  'elevator_qty_contract',
   'elevator_qty',
+  'elevator_qty_vge',
   'total_amount',
   'paid_amount',
   'unpaid_amount',
   'acceptance_latest_date',
   'retention_ratio',
-  'claim_includes_retention',
+  'retention_clause_text',
+  'retention_unpaid_amount',
   'payable_ratio',
+  'handover_text',
   'payment_clause_location',
   'payment_clause_summary',
   'payment_clause_text',
@@ -643,6 +668,8 @@ export const reviewFieldKeys: string[] = [
   'project_site',
   'court_district',
   'jurisdiction_text',
+  'arbitration_institution',
+  'addressee',
 ];
 ```
 

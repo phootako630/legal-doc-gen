@@ -10,8 +10,10 @@ from langgraph.graph import END, StateGraph
 from app.agent.nodes import (
     after_checklist,
     checklist_node,
+    contract_scan_node,
     extract_node,
     ocr_augment_node,
+    qty_check_node,
     retention_node,
     validate_node,
 )
@@ -30,7 +32,10 @@ def get_graph():
         builder.add_node("extract", extract_node)
         # 按需 OCR：缺条款且有扫描合同时，逐页 OCR 定向补齐（命中即停）
         builder.add_node("ocr_augment", ocr_augment_node)
-        # 质保金确认：合同有质保金时暂停问律师本次是否起诉质保金（决定「支付至 X%」）
+        # 台数核对：合同与验收报告台数不一致时补读合同设备清单数 VGE 家用电梯，仍对不上则暂停问律师
+        builder.add_node("contract_scan", contract_scan_node)
+        builder.add_node("qty_check", qty_check_node)
+        # 质保金确认：合同有质保金时暂停问律师起诉状写「支付至 X% 合同款」
         builder.add_node("retention", retention_node)
         builder.add_node("validate", validate_node)
 
@@ -39,7 +44,9 @@ def get_graph():
             "intake", after_checklist, {"extract": "extract", "end": END}
         )
         builder.add_edge("extract", "ocr_augment")
-        builder.add_edge("ocr_augment", "retention")
+        builder.add_edge("ocr_augment", "contract_scan")
+        builder.add_edge("contract_scan", "qty_check")
+        builder.add_edge("qty_check", "retention")
         builder.add_edge("retention", "validate")
         builder.add_edge("validate", END)
 

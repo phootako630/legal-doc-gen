@@ -12,11 +12,14 @@
 
 ## 抽取要求
 
-- 只抽取下列 12 个字段；找不到的字段 value 填 null。
+- 只抽取下列 15 个字段；找不到的字段 value 填 null。
 - 付款条款取**专用条款**里约定付款节点与比例的那一章（如「合同价款支付」：进度款/验收款各付合同总价的百分之几），不要取通用条款里的付款申请程序；目录页只列章名，不是条款正文。
 - 争议条款取「争议」章中关于向哪里起诉/仲裁的约定。若条款提到「工程所在地」「合同签订地」「合同履行地」，`dispute_clause_location` 同时写出合同中约定该地点的条款（如协议书写安装地址的那一款），例如「第二十章第1.1条及第一条第2款」。
 - `payment_clause_summary`：把付款条款归纳成一句话，写明各付款节点与比例，例如「电梯安装完成后，30个工作日内支付合同总价的60%；电梯通过当地政府部门验收合格、完整移交并办理完工程结算手续后，30个工作日内支付至合同总价的100%」。数字必须与原文一致。
-- `retention_ratio`：合同约定的质保金（保修金）比例，如「5%」；合同明确没有质保金填「无」；找不到填 null。
+- `retention_ratio`：合同约定的质保金（保修金）比例合计，如「5%」；合同明确没有质保金填「无」；找不到填 null。
+- `retention_clause_text`：质保金条款原文（照抄，如「质保期满一年支付2%，满二年支付3%」），找不到填 null。
+- `contract_party_b`：合同盖章页（协议书末尾签署处）乙方 / 卖方 / 安装方的全称，照抄。
+- `arbitration_institution`：争议条款约定仲裁时的仲裁机构全称（如「南京仲裁委员会」）；不涉及仲裁填 null。
 - `contract_sign_date`：合同盖章页（协议书末尾签署处）的签署日期，写成「2024年2月26日」；不要取封面的「合同订立时间」。双方日期不同取较晚的，都没有填 null。
 - `contract_title`：合同封面上的合同全称（不含书名号）。
 - `elevator_qty_by_contract`：合同约定的安装台数（协议书「承包范围」或计价清单的合计台数），只填数字。
@@ -43,6 +46,9 @@
   "project_site": {"value": null, "src": ""},
   "payment_clause_summary": {"value": null, "src": ""},
   "retention_ratio": {"value": null, "src": ""},
+  "retention_clause_text": {"value": null, "src": ""},
+  "contract_party_b": {"value": null, "src": ""},
+  "arbitration_institution": {"value": null, "src": ""},
   "contract_sign_date": {"value": null, "src": ""}
 }
 ```

@@ -48,19 +48,20 @@ type Party = 'plaintiff' | 'defendant' | null;
 // 编号诉讼请求项：一、 / （一） / (一) / 1. 等
 const CLAIM_RE = /^([一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十]+[)）]|\d+[.、．])/;
 // 标准小节标题
-const HEADING_RE = /^(诉讼请求|事实与理由|事实和理由)[:：]?\s*$/;
+const HEADING_RE = /^(诉讼请求|仲裁请求|事实与理由|事实和理由)[:：]?\s*$/;
 // 此致敬语（其下一行通常是法院名称，同样不缩进，见 classifyLine 的 prevWasSalutation 参数）
 const SALUTATION_RE = /^此致[:：]?\s*$/;
 // 当事人信息行、落款、日期——起诉状惯例中这些行不首行缩进
 const NO_INDENT_RE =
-  /^(原告|被告|具状人|起诉人|上诉人)[:：]|^\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日\s*$|^年\s+月\s+日\s*$/;
+  /^(原告|被告|申请人|被申请人|具状人|起诉人|上诉人)[:：]|^\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日\s*$|^年\s+月\s+日\s*$/;
 // 当事人明细行（信用代码/负责人/住址等）：律师模板中原告明细顶格、被告明细对齐到「被告：」之后
 const PARTY_DETAIL_RE = /^(统一社会信用代码|负责人|法定代表人|住址|住所地|电话|联系电话|联系人)[:：]/;
 
 /** 根据当前行更新所处的当事人信息块（遇到原告/被告行进入，遇到小节标题退出） */
 function nextParty(line: string, current: Party): Party {
-  if (/^原告[:：]/.test(line)) return 'plaintiff';
-  if (/^被告[:：]/.test(line)) return 'defendant';
+  // 仲裁申请书的当事人称谓为申请人 / 被申请人（「被申请人」须先于「申请人」判断）
+  if (/^(原告|申请人)[:：]/.test(line)) return 'plaintiff';
+  if (/^(被告|被申请人)[:：]/.test(line)) return 'defendant';
   if (HEADING_RE.test(line)) return null;
   return current;
 }
