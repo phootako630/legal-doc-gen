@@ -231,6 +231,8 @@ def to_arbitration_template(template: str) -> str:
 _FALLBACK_KEYS = {"payment_clause_summary": "payment_clause_text"}
 # 填空值的包裹标记（mark_fills=True 时）：前端据此把填空处标黄（律师确认单第 19 题）
 FILL_OPEN, FILL_CLOSE = "⟦", "⟧"
+# 缺失字段在正文中的字面提示（预览页按此统计「N 处待补充」）
+_MISSING_MARK = "【待补充】"
 
 
 def _annotate(key: str, fields: dict, conflict_keys: set[str]) -> str:
@@ -248,7 +250,7 @@ def _annotate(key: str, fields: dict, conflict_keys: set[str]) -> str:
         value, src = node, ""
 
     if value is None or (isinstance(value, str) and value.strip() == ""):
-        return "【待补充】"  # 缺失：字面提示，留给律师手填
+        return _MISSING_MARK  # 缺失：字面提示，留给律师手填
 
     base = _base_display(key, value)
     if key in conflict_keys:
@@ -267,6 +269,37 @@ def _is_blank(node: object) -> bool:
 _PLACEHOLDER_RE = re.compile(r"\{\{(\w+)\}\}")
 
 
+def _prepare(fields: dict, template: str | None) -> tuple[dict, str]:
+    """渲染前准备：补推派生字段（在副本上做，不改调用方数据）；约定仲裁时换成仲裁申请书措辞。"""
+    if template is None:
+        # load_prompt 不传变量时原样返回模板（占位符保留）
+        template = load_prompt("complaint-template.md")
+    # 派生字段（原告、台数、利息、管辖、付款比例等）按律师规则补推
+    fields = apply_derived_fields(dict(fields))
+    kind = fields.get("document_kind")
+    if isinstance(kind, dict) and kind.get("value") == "仲裁申请书":
+        template = to_arbitration_template(template)
+    return fields, template
+
+
+def fill_status(
+    fields: dict, template: str | None = None
+) -> tuple[list[str], set[str]]:
+    """返回 (模板中的填空字段，去重保序；其中会渲染成【待补充】的字段)。
+
+    供「起诉状就绪度」使用：与预览页统计的【待补充】处数口径一致。措辞类占位符
+    （安装/供货等）由合同类型决定、恒有值，不计入。
+    """
+    fields, template = _prepare(fields, template)
+    keys = [
+        k
+        for k in dict.fromkeys(_PLACEHOLDER_RE.findall(template))
+        if k not in _WORDING_KEYS
+    ]
+    missing = {k for k in keys if _MISSING_MARK in _annotate(k, fields, set())}
+    return keys, missing
+
+
 def render_complaint(
     fields: dict, template: str | None = None, mark_fills: bool = False
 ) -> str:
@@ -275,16 +308,8 @@ def render_complaint(
     模板中未知/缺失的占位符一律填 【待补充】（落款日期由律师手写，模板留空）。
     mark_fills=True 时每个填空值包在 ⟦…⟧ 里，供前端预览与 Word 导出标黄。
     """
-    if template is None:
-        # load_prompt 不传变量时原样返回模板（占位符保留）
-        template = load_prompt("complaint-template.md")
-
-    # 派生字段（原告、台数、利息、管辖、付款比例等）按律师规则补推；在副本上做，不改调用方数据
-    fields = apply_derived_fields(dict(fields))
+    fields, template = _prepare(fields, template)
     conflict_keys = _conflict_field_keys(fields)
-    kind = fields.get("document_kind")
-    if isinstance(kind, dict) and kind.get("value") == "仲裁申请书":
-        template = to_arbitration_template(template)
 
     def _repl(m: re.Match[str]) -> str:
         key = m.group(1)

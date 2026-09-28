@@ -6,7 +6,7 @@ interface ValidationReportProps {
   validations?: ValidationCheck[];
 }
 
-/** 确定性校验结论小面板：绿=通过，橙=冲突，灰=信息不足未校验 */
+/** 确定性校验结论小面板：绿=通过，琥珀=通过但需留意，橙=冲突，灰=信息不足未校验 */
 function DeterministicChecks({ checks }: { checks: ValidationCheck[] }) {
   if (checks.length === 0) return null;
 
@@ -17,10 +17,16 @@ function DeterministicChecks({ checks }: { checks: ValidationCheck[] }) {
         {checks.map((c) => {
           const color = !c.applicable
             ? 'bg-gray-300'
-            : c.passed
-              ? 'bg-emerald-500'
-              : 'bg-orange-500';
-          const textColor = c.is_conflict ? 'text-orange-700 font-medium' : 'text-foreground/80';
+            : !c.passed
+              ? 'bg-orange-500'
+              : c.needs_review
+                ? 'bg-amber-500'
+                : 'bg-emerald-500';
+          const textColor = c.is_conflict
+            ? 'text-orange-700 font-medium'
+            : c.needs_review
+              ? 'text-amber-800'
+              : 'text-foreground/80';
           return (
             <li key={c.key} className="flex items-start gap-2 text-[13px]">
               <span className={`mt-1.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full ${color}`} />

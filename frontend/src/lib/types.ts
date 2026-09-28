@@ -118,6 +118,7 @@ export interface ValidationCheck {
   passed: boolean;
   applicable: boolean; // false 表示输入不足、本次跳过（既非通过也非冲突）
   is_conflict: boolean; // applicable 且未通过 = 真冲突
+  needs_review?: boolean; // 通过但需律师留意（如台数不一致已按规则取验收报告口径）
   message: string; // 中文说明
   related_fields: string[];
 }
