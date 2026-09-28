@@ -192,3 +192,47 @@ export type FlowStep = 'upload' | 'processing' | 'review' | 'preview';
 
 /** 处理子步骤 */
 export type ProcessingSubStep = 'parsing' | 'extracting' | 'validating';
+
+/** 原告信息表的一行（总公司 / 分公司 / 子公司） */
+export interface BranchEntry {
+  name: string;
+  credit_code: string;
+  address: string;
+  representative: string; // 法定代表人或负责人
+  phone: string;
+}
+
+/** GET /api/branches：当前生效的原告信息表 */
+export interface BranchTable {
+  entries: BranchEntry[];
+  updated_at: string | null;
+  source_file: string | null;
+  age_days: number | null;
+  stale: boolean; // 从未上传或超过 stale_days 天未更新
+  stale_days: number;
+  warnings: string[];
+}
+
+/** 上传预览中相对当前版本的一处变更 */
+export interface BranchDiffItem {
+  name: string;
+  kind: 'added' | 'removed' | 'changed';
+  changes: { field: string; label: string; old: string; new: string }[];
+}
+
+/** POST /api/branches/preview：解析结果 + 校验问题 + 变更（尚未保存） */
+export interface BranchPreview {
+  source_file: string;
+  entries: BranchEntry[];
+  errors: string[];
+  warnings: string[];
+  diff: BranchDiffItem[];
+}
+
+/** 原告信息表的历史版本 */
+export interface BranchHistoryItem {
+  id: string;
+  updated_at: string | null;
+  source_file: string | null;
+  count: number;
+}

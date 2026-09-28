@@ -58,14 +58,23 @@ COMPANY_LOOKUP_API_KEY = os.getenv("COMPANY_LOOKUP_API_KEY")
 PLAINTIFF_HQ_NAME = "日立电梯（中国）有限公司"
 # 律师确认：原告电话一律用此号码
 PLAINTIFF_PHONE = "0755-83679974"
-# 分公司信息表（律师提供）：各分公司的统一社会信用代码、负责人、住址。
-# 文件不存在时不补这几项，起诉状留【待补充】。格式见 services/branch_registry.py
+# 原告信息表：总公司及各分公司的统一社会信用代码、法定代表人 / 负责人、住址。
+# 管理员在前端「原告信息表」页面上传 Excel 维护，存在服务器本地（不进 git）。
+# 文件不存在时不补这几项，起诉状留【待补充】。格式见 services/branch_table.py
+_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 BRANCH_INFO_PATH = os.getenv(
-    "BRANCH_INFO_PATH",
-    os.path.join(
-        os.path.dirname(os.path.dirname(__file__)), "data", "branch_info.json"
-    ),
+    "BRANCH_INFO_PATH", os.path.join(_DATA_DIR, "branch_info.json")
 )
+# 每次更新前把旧版本存到这里，可在页面上回退
+BRANCH_HISTORY_DIR = os.getenv(
+    "BRANCH_HISTORY_DIR", os.path.join(_DATA_DIR, "branch_history")
+)
+# 超过这么多天没更新，上传页提醒「负责人可能已变更」
+BRANCH_TABLE_STALE_DAYS = 90
+
+# 管理员口令：只有持口令者能上传 / 回退原告信息表（查看、下载不限）。
+# 系统暂无用户账号体系，先用一个服务器端口令；未配置时任何人都不能更新。
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN")
 
 # CORS 允许的前端地址
 CORS_ORIGINS = ["http://localhost:5173"]

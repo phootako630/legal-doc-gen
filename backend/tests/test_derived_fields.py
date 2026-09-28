@@ -188,7 +188,7 @@ def test_branch_registry_fills_plaintiff(tmp_path, monkeypatch):
     assert fields["plaintiff_credit_code"]["value"] == "JSCODE"
     assert fields["plaintiff_person_in_charge"]["value"] == "王某，总经理"
     assert fields["plaintiff_address"]["value"] == "南京某地址"
-    assert fields["plaintiff_credit_code"]["src"] == "分公司信息表"
+    assert fields["plaintiff_credit_code"]["src"] == "《原告信息表》"  # 早期格式没有更新日期
 
 
 def test_branch_registry_missing_file_leaves_blank():

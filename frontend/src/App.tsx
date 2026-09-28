@@ -1,4 +1,6 @@
-// 根组件：单页面 Stepper 容器，管理 upload → processing → review → preview 四步流程
+// 根组件：单页面 Stepper 容器，管理 upload → processing → review → preview 四步流程；
+// 页头「原告信息表」切换到表格维护页（不打断正在进行的案件，返回后流程状态仍在）
+import { useState } from 'react';
 import { useComplaintFlow } from '@/hooks/useComplaintFlow';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Stepper } from '@/components/layout/Stepper';
@@ -6,9 +8,12 @@ import { UploadStep } from '@/components/upload/UploadStep';
 import { ProcessingStep } from '@/components/processing/ProcessingStep';
 import { ReviewStep } from '@/components/review/ReviewStep';
 import { PreviewStep } from '@/components/preview/PreviewStep';
+import { BranchTablePage } from '@/components/branches/BranchTablePage';
+import { Building2 } from 'lucide-react';
 
 export default function App() {
   const flow = useComplaintFlow();
+  const [view, setView] = useState<'flow' | 'branches'>('flow');
 
   return (
     <TooltipProvider delay={300}>
@@ -29,12 +34,32 @@ export default function App() {
               <p className="text-[11px] leading-tight text-muted-foreground">安装合同纠纷 · 自动化生成系统</p>
             </div>
           </div>
-          <span className="rounded-full border border-border bg-muted px-3 py-1 text-[11px] font-medium text-muted-foreground">
-            v1.0 内部版
-          </span>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setView(view === 'branches' ? 'flow' : 'branches')}
+              className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                view === 'branches'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+              }`}
+            >
+              <Building2 className="h-4 w-4" />
+              原告信息表
+            </button>
+            <span className="rounded-full border border-border bg-muted px-3 py-1 text-[11px] font-medium text-muted-foreground">
+              v1.0 内部版
+            </span>
+          </div>
         </div>
       </header>
 
+      {view === 'branches' ? (
+        <main className="mx-auto max-w-5xl px-8 py-8">
+          <BranchTablePage onBack={() => setView('flow')} />
+        </main>
+      ) : (
+      <>
       {/* 步骤条 */}
       <div className="border-b border-border bg-white px-8 py-4">
         <div className="mx-auto max-w-5xl">
@@ -58,6 +83,7 @@ export default function App() {
               flow.setUploadResult(result, internetAllowed);
               flow.goToStep('processing');
             }}
+            onOpenBranches={() => setView('branches')}
           />
         )}
 
@@ -91,6 +117,8 @@ export default function App() {
           />
         )}
       </main>
+      </>
+      )}
 
       {/* Footer */}
       <footer className="mt-12 border-t border-border bg-white px-8 py-4">

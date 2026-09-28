@@ -1,75 +1,66 @@
-# 分公司信息表：按原告名称查分公司（或总公司）的统一社会信用代码、负责人、住址。
+# 原告信息表查询：按原告名称取统一社会信用代码、法定代表人 / 负责人、住址。
 #
-# 数据由律师提供（诉状中原告的这几项不在案件材料里），存为 JSON：
-#   {
-#     "headquarters": {"name": "日立电梯（中国）有限公司", "credit_code": "...",
-#                      "legal_rep": "...", "address": "..."},
-#     "branches": [
-#       {"name": "江苏分公司", "credit_code": "...", "person_in_charge": "王凯，总经理",
-#        "address": "..."}
-#     ]
-#   }
-# branches[].name 可写简称（「江苏分公司」）或全称（「日立电梯（中国）有限公司江苏分公司」）。
-# 总公司写法定代表人（legal_rep），分公司写负责人（person_in_charge），两者都认。
-# 文件不存在或读不出时返回 None，调用方保持字段缺失（起诉状留【待补充】），不猜。
+# 表由管理员在「原告信息表」页面上传维护（读写与格式见 branch_table.py），
+# 这里只读当前生效版本。名称比对前统一去空白、半角括号转全角——律师表里有的行写
+# 「日立电梯(中国)有限公司珠海分公司」，而系统拼出的原告名称用全角括号。
+# 先按全称精确匹配；早期手写表里分公司只写简称（「江苏分公司」），再按「以简称结尾」匹配。
+# 表不存在或查不到时返回 None，调用方保持字段缺失（起诉状留【待补充】），不猜。
 from __future__ import annotations
 
-import json
 import os
 from dataclasses import dataclass
-from functools import lru_cache
 
 from app.config import BRANCH_INFO_PATH
+from app.services.branch_table import BranchTable, load_table, normalize_name
 
 
 @dataclass(frozen=True)
 class PartyInfo:
-    """原告主体的固定信息（来自分公司信息表）。"""
+    """原告主体的固定信息（来自原告信息表）。"""
 
     credit_code: str | None
     person_in_charge: str | None
     address: str | None
+    version: str | None = None  # 表的更新日期（YYYY-MM-DD），写进字段来源便于追溯
 
 
-@lru_cache(maxsize=4)
-def _load(path: str) -> dict | None:
-    if not os.path.exists(path):
-        return None
+# 按 (路径, 修改时间) 缓存：管理员上传新表后文件 mtime 变化，下次查询自动读新版
+_cache: dict[str, tuple[float, BranchTable | None]] = {}
+
+
+def _current(path: str) -> BranchTable | None:
     try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, json.JSONDecodeError):
+        mtime = os.path.getmtime(path)
+    except OSError:
         return None
-    return data if isinstance(data, dict) else None
-
-
-def _to_info(entry: dict) -> PartyInfo:
-    def s(key: str) -> str | None:
-        val = entry.get(key)
-        return str(val).strip() or None if val is not None else None
-
-    return PartyInfo(
-        s("credit_code"), s("person_in_charge") or s("legal_rep"), s("address")
-    )
+    cached = _cache.get(path)
+    if cached and cached[0] == mtime:
+        return cached[1]
+    table = load_table(path)
+    _cache[path] = (mtime, table)
+    return table
 
 
 def lookup_plaintiff(
     plaintiff_name: str | None, path: str | None = None
 ) -> PartyInfo | None:
-    """按原告全称查信息表：总公司全称精确匹配；分公司按全称或「以简称结尾」匹配。"""
+    """按原告全称查信息表：全称精确匹配优先，其次按「以简称结尾」匹配。"""
     if not plaintiff_name:
         return None
-    data = _load(path or BRANCH_INFO_PATH)
-    if not data:
+    table = _current(path or BRANCH_INFO_PATH)
+    if not table:
         return None
-    name = plaintiff_name.strip()
-    hq = data.get("headquarters")
-    if isinstance(hq, dict) and str(hq.get("name") or "").strip() == name:
-        return _to_info(hq)
-    for entry in data.get("branches") or []:
-        if not isinstance(entry, dict):
-            continue
-        short = str(entry.get("name") or "").strip()
-        if short and (name == short or name.endswith(short)):
-            return _to_info(entry)
-    return None
+    name = normalize_name(plaintiff_name)
+    match = next((e for e in table.entries if e["name"] == name), None)
+    if match is None:
+        match = next(
+            (e for e in table.entries if e["name"] and name.endswith(e["name"])), None
+        )
+    if match is None:
+        return None
+    return PartyInfo(
+        match["credit_code"] or None,
+        match["representative"] or None,
+        match["address"] or None,
+        (table.updated_at or "")[:10] or None,
+    )
