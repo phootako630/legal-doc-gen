@@ -60,7 +60,8 @@ export function FieldRow({ field, onSave, isEven }: FieldRowProps) {
     >
       {/* 字段名 */}
       <td className="py-3 pl-4 pr-3 align-top">
-        <span className="text-xs font-semibold text-foreground/75 whitespace-nowrap">
+        {/* 字段名列定宽，长名称（如「付款条款（归纳，写入起诉状）」）换行，不压到值列 */}
+        <span className="block break-words text-xs font-semibold leading-snug text-foreground/75">
           {field.label}
         </span>
       </td>

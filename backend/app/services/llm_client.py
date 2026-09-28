@@ -74,6 +74,33 @@ def _unwrap_json_envelope(obj: Any) -> Any:
     return rest
 
 
+def _parse_json_content(cleaned: str) -> Any:
+    """
+    解析 JSON 模式的返回。模型偶尔先吐一个空外壳再给正文，即
+    `{"type": "json_object"}\n{...真正的结果...}`（两个对象首尾相接，json.loads 报 Extra data）：
+    逐个解码顶层对象，丢掉只剩外壳的，取第一个有内容的。都没有内容时抛 JSONDecodeError 走重试。
+    """
+    try:
+        return _unwrap_json_envelope(json.loads(cleaned))
+    except json.JSONDecodeError as e:
+        if not e.msg.startswith("Extra data"):
+            raise
+    decoder = json.JSONDecoder()
+    pos, values = 0, []
+    while pos < len(cleaned):
+        obj, end = decoder.raw_decode(cleaned, pos)
+        values.append(obj)
+        pos = end
+        while pos < len(cleaned) and cleaned[pos].isspace():
+            pos += 1
+    for obj in values:
+        try:
+            return _unwrap_json_envelope(obj)
+        except json.JSONDecodeError:
+            continue  # 空外壳，看下一个
+    raise json.JSONDecodeError("模型只返回了 JSON 外壳，没有内容", cleaned, 0)
+
+
 def _translate_error(exc: Exception) -> RuntimeError:
     """将 OpenAI SDK 异常转换为带中文说明的 RuntimeError。"""
     if isinstance(exc, openai.AuthenticationError):
@@ -153,7 +180,7 @@ async def chat(
 
             # JSON 模式：去除可能的 markdown 包裹，再解析、剥外壳（JSONDecodeError 往下走重试路径）
             cleaned = _strip_markdown_json(content)
-            return _unwrap_json_envelope(json.loads(cleaned))
+            return _parse_json_content(cleaned)
 
         except (
             openai.AuthenticationError,

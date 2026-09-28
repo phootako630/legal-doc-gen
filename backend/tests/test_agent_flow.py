@@ -94,3 +94,25 @@ def test_resume_unknown_run_id_raises(monkeypatch):
     except KeyError:
         return
     raise AssertionError("未知 run_id 应抛 KeyError")
+
+
+def test_readiness_counts_template_fills():
+    # 就绪度按模板实际填空统计：原告 / 被告的待补充项会拉低就绪度（原先固定 10 个字段，缺这些仍 100%）
+    from app.agent.nodes import _readiness
+    from app.services.complaint_renderer import fill_status
+
+    fields = {
+        "plaintiff_branch_raw": {"value": "集团/江苏分公司", "src": "《审批表》"},
+        "contract_type": {"value": "安装合同", "src": "《审批表》"},
+        "defendant_name": {"value": "某某置业有限公司", "src": "《审批表》"},
+        "total_amount": {"value": 894934, "src": "《审批表》"},
+        "paid_amount": {"value": 638667.2, "src": "《审批表》"},
+        "unpaid_amount": {"value": 256266.8, "src": "《审批表》"},
+    }
+    keys, missing = fill_status(fields)
+    assert "contract_action" not in keys  # 措辞类不计入
+    assert {"plaintiff_credit_code", "defendant_address", "defendant_legal_rep"} <= missing
+    assert "unpaid_amount" not in missing
+    score = _readiness(fields, [])
+    assert 0 < score < 100
+    assert score == round((len(keys) - len(missing)) / len(keys) * 100)

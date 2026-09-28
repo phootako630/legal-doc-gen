@@ -14,6 +14,7 @@ from langgraph.types import interrupt
 from app.agent.state import GraphState
 from app.config import AGENT_MAX_OCR_PAGES, OCR_MAX_CONCURRENCY
 from app.services import file_store, llm_progress
+from app.services.complaint_renderer import fill_status
 from app.services.doc_search import locate_clause_bodies
 from app.services.equipment_list import count_vge_units
 from app.services.extraction import (
@@ -67,25 +68,6 @@ _CONTRACT_AUTHORITATIVE_KEYS = [
     "project_site",
 ]
 
-# 起诉状就绪度关注的关键字段（齐全且非冲突才计入）
-_READINESS_KEYS = [
-    "plaintiff_name_final",
-    "defendant_name",
-    "contract_no",
-    "contract_sign_date",
-    "elevator_qty",
-    "total_amount",
-    "paid_amount",
-    "unpaid_amount",
-    "acceptance_latest_date",
-    "court_district",
-]
-
-
-def _field_value(fields: dict, key: str) -> object:
-    node = fields.get(key)
-    return node.get("value") if isinstance(node, dict) else node
-
 
 def _conflict_keys(checks: list[ValidationCheck]) -> set[str]:
     keys: set[str] = set()
@@ -98,15 +80,17 @@ def _conflict_keys(checks: list[ValidationCheck]) -> set[str]:
 
 
 def _readiness(fields: dict, checks: list[ValidationCheck]) -> int:
-    """起诉状就绪度 0–100：关键字段齐全且非冲突的占比。"""
+    """起诉状就绪度 0–100：模板里的填空中，有值且不冲突的占比。
+
+    原先只看 10 个固定字段，原告信用代码 / 负责人 / 住址、被告法定代表人 / 住址等
+    缺失时仍显示 100%；改为按模板实际填空统计，与预览页「N 处待补充」口径一致。
+    """
+    keys, missing = fill_status(fields)
+    if not keys:
+        return 0
     conflicted = _conflict_keys(checks)
-    good = 0
-    for k in _READINESS_KEYS:
-        val = _field_value(fields, k)
-        present = val is not None and not (isinstance(val, str) and val.strip() == "")
-        if present and k not in conflicted:
-            good += 1
-    return round(good / len(_READINESS_KEYS) * 100)
+    good = sum(1 for k in keys if k not in missing and k not in conflicted)
+    return round(good / len(keys) * 100)
 
 
 def _build_conflict_pending(conflicts: list[ValidationCheck]) -> dict:

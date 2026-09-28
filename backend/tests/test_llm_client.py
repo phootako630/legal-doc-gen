@@ -113,6 +113,9 @@ def test_text_mode_has_no_system_prompt(monkeypatch):
         '{"type": "json_object", "content": {"a": 1}}',
         '{"type": "json_object", "content": "{\\"a\\": 1}"}',
         '{"type": "json_object", "a": 1}',
+        # 实测：先吐一个空外壳，再给正文（两个对象首尾相接）
+        '{"type": "json_object"}\n{"a": 1}',
+        '{"type": "json_object"} {"type": "json_object", "content": {"a": 1}}',
     ],
 )
 def test_json_envelope_unwrapped(monkeypatch, raw):
@@ -125,6 +128,19 @@ def test_bare_envelope_retries(monkeypatch):
     # 只回外壳 → 视为失败重试，不把空结果当成功
     create = AsyncMock(
         side_effect=[_resp('{"type": "json_object"}'), _resp('{"a": 1}')]
+    )
+    _patch_client(monkeypatch, create)
+    assert _run_chat(json_mode=True) == {"a": 1}
+    assert create.await_count == 2
+
+
+def test_concatenated_bare_envelopes_retry(monkeypatch):
+    # 两个都是空外壳 → 仍算失败，重试
+    create = AsyncMock(
+        side_effect=[
+            _resp('{"type": "json_object"}\n{"type": "json_object"}'),
+            _resp('{"a": 1}'),
+        ]
     )
     _patch_client(monkeypatch, create)
     assert _run_chat(json_mode=True) == {"a": 1}

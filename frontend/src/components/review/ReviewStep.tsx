@@ -21,10 +21,13 @@ interface ReviewStepProps {
   onDone: (complaintText: string) => void;
 }
 
-/** 起绪度徽标：按就绪度分档着色，帮律师一眼判断关键字段是否齐备 */
+/**
+ * 就绪度徽标：只有全部填空齐备且无冲突（100%）才显示绿色；
+ * 还有【待补充】时一律琥珀色起步，避免律师看到绿色误以为可以直接使用
+ */
 function ReadinessBadge({ readiness }: { readiness: number }) {
   const tone =
-    readiness >= 80
+    readiness >= 100
       ? 'border-green-300 bg-green-50 text-green-700'
       : readiness >= 50
         ? 'border-amber-300 bg-amber-50 text-amber-700'

@@ -25,6 +25,8 @@ class ValidationCheck:
     related_fields: list[str] = field(default_factory=list)
     # applicable=False 表示输入不足、本次检查跳过（既非通过也非冲突）
     applicable: bool = True
+    # 通过但需律师留意（如台数不一致、已按律师规则取验收报告口径）：前端标橙色提醒，不算冲突
+    needs_review: bool = False
 
     @property
     def is_conflict(self) -> bool:
@@ -104,15 +106,21 @@ def check_amounts(
         return ValidationCheck(
             key,
             True,
-            f"金额勾稽通过：总价 {t:g} = 已付 {p:g} + 未付 {u:g}。",
+            f"金额勾稽通过：总价 {_yuan(t)} = 已付 {_yuan(p)} + 未付 {_yuan(u)}。",
             related,
         )
     return ValidationCheck(
         key,
         False,
-        f"金额勾稽不一致：总价 {t:g} ≠ 已付 {p:g} + 未付 {u:g}（差 {t - (p + u):g}）。",
+        f"金额勾稽不一致：总价 {_yuan(t)} ≠ 已付 {_yuan(p)} + 未付 {_yuan(u)}"
+        f"（差 {_yuan(t - (p + u))}）。",
         related,
     )
+
+
+def _yuan(amount: float) -> str:
+    """金额展示：千分位 + 两位小数（原先用 :g 只保留 6 位有效数字，638667.2 会显示成 638667）。"""
+    return f"{amount:,.2f} 元"
 
 
 # ── 台数三源一致：签约(审批) / 合同 / 验收 ──────────────────────────────────
@@ -155,7 +163,7 @@ def check_elevator_qty(
         note = f"台数不一致：{detail}。按律师规则以验收报告 {acceptance} 台为准"
         if present.get("审批表") is not None and present.get("审批表") == present.get("合同"):
             note += "；审批表与合同一致而验收报告不同，请律师核验"
-        return ValidationCheck(key, True, note + "。", related)
+        return ValidationCheck(key, True, note + "。", related, needs_review=True)
     return ValidationCheck(
         key, False, f"台数不一致：{detail}。请律师核实以哪一口径为准。", related
     )
@@ -279,6 +287,7 @@ def check_to_dict(check: ValidationCheck) -> dict[str, object]:
         "passed": check.passed,
         "applicable": check.applicable,
         "is_conflict": check.is_conflict,
+        "needs_review": check.needs_review,
         "message": check.message,
         "related_fields": list(check.related_fields),
     }

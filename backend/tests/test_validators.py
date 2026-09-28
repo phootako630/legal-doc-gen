@@ -90,6 +90,19 @@ def test_qty_mismatch_with_acceptance_follows_report():
     c2 = check_elevator_qty(15, 14, 14)
     assert c2.is_conflict is False
     assert "请律师核验" not in c2.message
+    # 通过但需留意：前端标橙色，而非「正常」的绿色
+    assert c.needs_review is True and c2.needs_review is True
+    assert check_elevator_qty(14, 14, 14).needs_review is False
+
+
+def test_amount_message_keeps_cents():
+    # :g 只保留 6 位有效数字，曾把 638667.2 显示成 638667
+    ok = check_amounts(894934, 638667.2, 256266.8)
+    assert ok.passed
+    assert "894,934.00 元" in ok.message and "638,667.20 元" in ok.message
+    assert "256,266.80 元" in ok.message
+    bad = check_amounts(900000, 638667.2, 256266.8)
+    assert "差 5,066.00 元" in bad.message
 
 
 def test_qty_two_sources_enough():
