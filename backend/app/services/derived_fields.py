@@ -156,14 +156,15 @@ def plaintiff_phone_field(_fields: dict) -> dict:
 
 
 def _registry_field(attr: str) -> Callable[[dict], dict | None]:
-    """从分公司信息表取原告的某一项；表里没有则不派生（保持缺失）。"""
+    """从原告信息表取原告的某一项；表里没有则不派生（保持缺失）。来源注明表的版本日期。"""
 
     def derive(fields: dict) -> dict | None:
         info = lookup_plaintiff(_str_value(fields, "plaintiff_name_final"))
         value = getattr(info, attr, None) if info else None
         if not value:
             return None
-        return {"value": value, "src": "分公司信息表", "channel": "text"}
+        src = f"《原告信息表》{info.version} 版" if info.version else "《原告信息表》"
+        return {"value": value, "src": src, "channel": "text"}
 
     return derive
 

@@ -171,6 +171,15 @@ POST /api/generate
   输入：{ validated_state: CaseState }
   处理：render_complaint（模板填槽，非 LLM 自由生成）
   输出：{ complaint_text }            # 或直接返回结构化字段供前端 docx-js 渲染
+
+# 原告信息表（查看 / 下载不限；标 🔒 的须请求头 X-Admin-Token = 管理员口令）
+GET  /api/branches                 # 当前表 + 更新时间 + 是否过期
+GET  /api/branches/export          # 下载 .xlsx
+GET  /api/branches/history         # 历史版本列表
+POST /api/branches/admin-check  🔒 # 核对口令
+POST /api/branches/preview      🔒 # 上传 Excel → 解析 / 校验 / 变更比对（不保存）
+POST /api/branches              🔒 # 确认保存（旧版本存档）
+POST /api/branches/restore      🔒 # 恢复历史版本
 ```
 
 Word 文件仍默认在前端用 docx-js 按模板填槽生成（避免后端装 Node 依赖）；后端 docxtpl 为可选备选。
@@ -239,7 +248,7 @@ value=null 或锚定失败        → ❌ 缺失
 - 格式对齐律师模板：金额只写阿拉伯数字（模板自带 `¥…元`），日期 `2024年2月26日`（不补零）；未付款算式写 `（总额-已付）`。
 - 导出 Word 保留黄色高亮：`/api/generate` 把每个填空值包在 `⟦…⟧` 里（`render_complaint(mark_fills=True)`），前端预览标浅黄、Word 导出转为黄色突出显示，供律师最后复核。
 - **律师确认的填写规则**（两份《起诉状规则确认单》，确定性代码实现于 `services/derived_fields.py`，律师改过的值不覆盖）：
-  - 原告：买卖合同 = 总公司全称（`PLAINTIFF_HQ_NAME`，第三行写「法定代表人」）；安装合同 = 总公司全称 + 审批表「合同分公司」路径中的第一个分公司（第三行写「负责人」）；再与合同盖章页乙方（`contract_party_b`）核对，不一致以合同乙方为准并标待核实；电话固定 `PLAINTIFF_PHONE`；信用代码 / 负责人 / 住址取分公司信息表（`services/branch_registry.py`，`backend/data/branch_info.json`，律师提供）
+  - 原告：买卖合同 = 总公司全称（`PLAINTIFF_HQ_NAME`，第三行写「法定代表人」）；安装合同 = 总公司全称 + 审批表「合同分公司」路径中的第一个分公司（第三行写「负责人」）；再与合同盖章页乙方（`contract_party_b`）核对，不一致以合同乙方为准并标待核实；电话固定 `PLAINTIFF_PHONE`；信用代码 / 负责人 / 住址取原告信息表（见下「原告信息表」）
   - 合同类型（审批表「合同类型」）切换措辞：买卖合同「安装」→「供货」、「安装价格」→「产品价格」
   - 台数：「约定原告负责安装 N 台」取合同台数（`elevator_qty_contract`），「N 台均于……验收合格」取验收报告台数（`elevator_qty`，代码按设备代码计数）。合同与报告不一致时，`contract_scan` 节点补读合同设备清单、数 VGE 型号（家用电梯，无需验收报告，`services/equipment_list.py`）：报告 = 合同 − VGE → 继续并提醒家用电梯；否则 `qty_check` 节点暂停，提醒律师核对报告是否齐全 / 有无补充协议 / 是否口头取消部分电梯，由律师定台数
   - 签约日期：合同盖章页日期；扫描合同未识别时暂取审批表「签约时间」
@@ -254,6 +263,15 @@ value=null 或锚定失败        → ❌ 缺失
   - 管辖句 `jurisdiction_text` 按争议条款生成（一律待核实）：工程所在地 → 模板原句；原告 / 被告所在地 → 「故原告向 XX 人民法院提起诉讼」（XX 为该方住所地市辖区）；未约定地点 → 「依据《民诉法》第24条，故原告向（被告住所地）XX 人民法院提起诉讼」；点名具体法院 → 留待补充交律师；不考虑中级法院
   - 约定仲裁 → 整篇改为仲裁申请书（`document_kind`）：模板固定文字替换 民事起诉状→仲裁申请书、原告→申请人、被告→被申请人、诉讼请求→仲裁请求、诉讼费用→仲裁费用、提起诉讼→提请仲裁、贵院→贵委、判令/判决→裁决；管辖句「故申请人向 XX 仲裁委员会提请仲裁」，致送合同约定的仲裁机构（`addressee`）
   - 不附付款进度表（由办案律师自行决定）
+
+### 原告信息表（全所共用底表，管理员维护）
+
+- 原告的统一社会信用代码、法定代表人 / 负责人、住所地不在案件材料里，取自律师维护的《原告信息表》（Excel：原告名称 | 统一社会信用代码 | 住所地 | 法定代表人\负责人 | 联系方式）。它是全所共用的底表，**不是**每个案件上传的材料。
+- 前端页头「原告信息表」入口：所有人可查看、下载当前 Excel；**只有管理员**（输入服务器 `ADMIN_TOKEN` 口令）能上传新版本或恢复历史版本。系统暂无账号体系，口令经请求头 `X-Admin-Token`（encodeURIComponent 编码）传给后端比对；未配置 `ADMIN_TOKEN` 时任何人都不能更新。
+- 更新分两步：`POST /api/branches/preview` 解析 + 校验 + 与当前版本比对（不保存）→ 管理员确认后 `POST /api/branches` 保存。重名 / 缺名称阻止保存；信用代码校验位不符、缺负责人或住址只提醒。
+- 存储：`BRANCH_INFO_PATH`（默认 `backend/data/branch_info.json`），每次更新前旧版本存入 `BRANCH_HISTORY_DIR`，可 `POST /api/branches/restore` 回退。数据留在部署服务器，不进 git。
+- 名称比对前去空白、半角括号转全角（律师表里部分行写「日立电梯(中国)」）。查询按文件修改时间缓存，上传后立即生效、无需重启。
+- 字段来源写「《原告信息表》YYYY-MM-DD 版」；超过 `BRANCH_TABLE_STALE_DAYS`（90 天）未更新或尚未上传时，上传页提醒负责人可能已变更。
 
 ---
 
@@ -277,7 +295,8 @@ legal-doc-app/
 │   │   │   ├── upload/              # FileDropzone, FileList
 │   │   │   ├── processing/          # StepProgress（消费 SSE 进展）
 │   │   │   ├── review/              # FieldTable, FieldRow, ValidationReport, HighlightList, ConflictResolver
-│   │   │   └── preview/             # ComplaintPreview
+│   │   │   ├── preview/             # ComplaintPreview
+│   │   │   └── branches/            # 原告信息表页面（查看 / 管理员上传 / 历史回退）
 │   │   ├── hooks/
 │   │   │   ├── useFileUpload.ts
 │   │   │   └── useComplaintFlow.ts  # 流程状态 + analyze/resume 往返
@@ -298,7 +317,8 @@ legal-doc-app/
 │   │   │   ├── files.py             # POST /api/upload
 │   │   │   ├── analyze.py           # POST /api/analyze（启动 agent，SSE）
 │   │   │   ├── resume.py            # POST /api/resume（断点恢复）
-│   │   │   └── generate.py          # POST /api/generate
+│   │   │   ├── generate.py          # POST /api/generate
+│   │   │   └── branches.py          # /api/branches（原告信息表，更新须管理员口令）
 │   │   ├── agent/
 │   │   │   ├── graph.py             # LangGraph 状态图定义（节点/边/interrupt）
 │   │   │   ├── state.py             # CaseState（Pydantic）
@@ -310,13 +330,14 @@ legal-doc-app/
 │   │   │   ├── prompt_loader.py     # 读取 prompts/，注入变量
 │   │   │   ├── validators.py        # ② 确定性交叉校验
 │   │   │   ├── derived_fields.py    # 律师确认的填写规则（原告/台数/利息/管辖/质保金等）
-│   │   │   ├── branch_registry.py   # 分公司信息表（原告信用代码/负责人/住址）
+│   │   │   ├── branch_table.py      # 原告信息表：Excel 解析/校验/变更比对/存档回退
+│   │   │   ├── branch_registry.py   # 按原告名称查信息表（信用代码/负责人/住址）
 │   │   │   ├── equipment_list.py    # 合同设备清单中 VGE 家用电梯计数
 │   │   │   ├── confidence.py        # ③ 可信度评分
 │   │   │   ├── anchoring.py         # 值回原文命中/定位
 │   │   │   └── company_lookup.py    # 联网企业信息查询
 │   │   └── config.py
-│   ├── data/branch_info.json        # 分公司信息表（律师提供，未入库前不存在）
+│   ├── data/                        # 原告信息表当前版 + 历史版（管理员页面上传，不进 git）
 │   ├── requirements.txt
 │   └── .env.example                 # DEEPSEEK_API_KEY, DASHSCOPE_API_KEY
 │
@@ -712,6 +733,12 @@ AGENT_MAX_OCR_PAGES = 50      # 单次运行最多按需 OCR 的页数（成本�
 # 可信度阈值
 CONFIDENCE_UNCERTAIN_BELOW = 60   # 低于此值标记为"待核实"
 
+# 原告信息表（管理员上传维护，不进 git）
+BRANCH_INFO_PATH = os.getenv("BRANCH_INFO_PATH", "backend/data/branch_info.json")
+BRANCH_HISTORY_DIR = os.getenv("BRANCH_HISTORY_DIR", "backend/data/branch_history")
+BRANCH_TABLE_STALE_DAYS = 90
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN")   # 管理员口令；未设置则不能更新原告信息表
+
 # CORS 允许的前端地址
 CORS_ORIGINS = ["http://localhost:5173"]
 ```
@@ -721,6 +748,8 @@ CORS_ORIGINS = ["http://localhost:5173"]
 DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxx
 # 阿里云 DashScope，用于 Qwen 多模态模型识别扫描件 PDF
 DASHSCOPE_API_KEY=sk-xxxxxxxxxxxxxxxx
+# 管理员口令：更新原告信息表时输入
+ADMIN_TOKEN=
 ```
 
 ---

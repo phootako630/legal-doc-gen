@@ -39,3 +39,7 @@ Thumbs.db
 
 # Sample/test case files (real-looking case documents, not for the repo)
 docs-examples/
+
+# 原告信息表（管理员在页面上传维护，存在部署服务器本地，不进仓库）
+backend/data/branch_info.json
+backend/data/branch_history/

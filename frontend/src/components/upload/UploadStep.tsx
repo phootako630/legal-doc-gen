@@ -7,15 +7,17 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Progress } from '@/components/ui/progress';
 import { FileDropzone } from './FileDropzone';
 import { FileList } from './FileList';
+import { BranchTableNotice } from '@/components/branches/BranchTableNotice';
 import { uploadFiles, fetchUploadProgress } from '@/lib/api';
 import type { UploadResponse, UploadProgress } from '@/lib/types';
 import { Globe, Loader2, TriangleAlert, ArrowRight, ScanText } from 'lucide-react';
 
 interface UploadStepProps {
   onDone: (result: UploadResponse, internetAllowed: boolean) => void;
+  onOpenBranches: () => void;
 }
 
-export function UploadStep({ onDone }: UploadStepProps) {
+export function UploadStep({ onDone, onOpenBranches }: UploadStepProps) {
   const [files, setFiles] = useState<File[]>([]);
   const [internetAllowed, setInternetAllowed] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -90,6 +92,7 @@ export function UploadStep({ onDone }: UploadStepProps) {
       </CardHeader>
 
       <CardContent className="flex flex-col gap-5 pt-6">
+        <BranchTableNotice onOpen={onOpenBranches} />
         <FileDropzone onFiles={handleNewFiles} />
 
         {files.length > 0 && <FileList files={files} onRemove={removeFile} />}
