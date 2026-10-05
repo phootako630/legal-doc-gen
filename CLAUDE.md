@@ -12,7 +12,7 @@
 
 **核心用户**：中国大陆律师团队，不懂技术，不看 JSON，不看英文。所有面向用户的内容必须是中文。
 
-**目标**：验证 AI 抽取准确率和律师使用体验。支持可解析 PDF、扫描件 PDF（OCR）和 Word 文件。无数据库，无用户认证，案件不持久化（agent 状态仅在单次会话内存活）。
+**目标**：验证 AI 抽取准确率和律师使用体验。支持可解析 PDF、扫描件 PDF（OCR）和 Word 文件。无用户认证；案件状态（agent checkpoint、上传的扫描件）落盘到 `backend/data/`（SQLite + 文件），服务重启后仍可 resume，超过 `CASE_RETENTION_DAYS`（默认 7 天）自动清除；不引入业务数据库。
 
 ---
 
@@ -60,7 +60,7 @@ LLM 调用：     OpenAI SDK（兼容 DeepSeek API），启用 function calling 
 ### 关于 agent 框架的取舍（①）
 
 - **不引入 LangChain 本体**：抽象层深、prompt 不透明、版本易 breaking，对"可审计"要求高的法律场景是负担。结构化输出、重试等零件自行实现或用轻量库。
-- **采用 LangGraph 的图 + checkpoint + interrupt**：正好承载"抽取→发现冲突→定位重读→暂停问律师→恢复"的控制流。v1 无持久化，用 in-memory checkpointer 即可；未来接 DB 时零重构。
+- **采用 LangGraph 的图 + checkpoint + interrupt**：正好承载"抽取→发现冲突→定位重读→暂停问律师→恢复"的控制流。checkpoint 存 SQLite（`agent/checkpoint.py`）；未来接 PostgreSQL 时替换 saver 即可，零重构。
 - **工具层与校验层保持框架无关**：所有工具（解析、OCR、校验、查询、渲染）是纯 Python 函数/service，不依赖 LangGraph，便于单测与替换编排器。
 
 ### 为什么用 Python 后端
@@ -323,8 +323,10 @@ legal-doc-app/
 │   │   ├── agent/
 │   │   │   ├── graph.py             # LangGraph 状态图定义（节点/边/interrupt）
 │   │   │   ├── state.py             # CaseState（Pydantic）
+│   │   │   ├── checkpoint.py        # SQLite checkpoint 连接、会话登记、过期清理
 │   │   │   └── nodes.py             # 清点/抽取/校验/生成节点
 │   │   ├── services/                # 工具层（框架无关，纯函数，可单测）
+│   │   │   ├── file_store.py        # 上传原始字节落盘（按需 OCR 取回；过期清理）
 │   │   │   ├── file_parser.py       # PDF/Word 文本提取调度
 │   │   │   ├── ocr_engine.py        # Qwen-VL-OCR（DashScope）；RapidOCR 备用注释
 │   │   │   ├── llm_client.py        # DeepSeek 封装（OpenAI SDK，结构化输出）
@@ -754,6 +756,8 @@ DASHSCOPE_API_KEY=sk-xxxxxxxxxxxxxxxx
 ADMIN_TOKEN=
 # 运行日志（backend/data/run_log.jsonl，不进 git）；设为 0 关闭
 RUN_LOG_ENABLED=1
+# 案件数据保留天数（checkpoint + 上传文件），超期自动清除
+CASE_RETENTION_DAYS=7
 ```
 
 ---
