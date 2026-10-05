@@ -13,7 +13,7 @@ from langgraph.types import interrupt
 
 from app.agent.state import GraphState
 from app.config import AGENT_MAX_OCR_PAGES, OCR_MAX_CONCURRENCY
-from app.services import file_store, llm_progress
+from app.services import file_store, llm_progress, run_log
 from app.services.complaint_renderer import fill_status
 from app.services.doc_search import locate_clause_bodies
 from app.services.equipment_list import count_vge_units
@@ -277,6 +277,8 @@ async def _ocr_batch(pdf: bytes, page_nums: list[int]) -> list[dict]:
         if isinstance(res, BaseException):
             raise res
         pages.append({"page": page_num, "text": res})
+    # OCR 是主要成本项：记请求页数与成功页数，供按需 OCR 的成本复盘
+    run_log.log_event("ocr_batch", requested=len(page_nums), ok=len(pages))
     return pages
 
 

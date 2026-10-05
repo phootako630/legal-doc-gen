@@ -71,7 +71,7 @@ export function ReviewStep({ caseState, onBack, onDone }: ReviewStepProps) {
     setGenLoading(true);
     setGenError(null);
     try {
-      const result = await generateComplaint(editedFields);
+      const result = await generateComplaint(editedFields, current.run_id);
       onDone(result.complaint_text);
     } catch (e) {
       setGenError(e instanceof Error ? e.message : '生成失败，请重试');

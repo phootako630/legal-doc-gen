@@ -140,11 +140,12 @@ export async function resumeCase(
 /** 调用 LLM 生成起诉状全文 */
 export async function generateComplaint(
   validatedJson: ExtractedFields,
+  runId?: string, // 可选：关联 agent 会话，后端据此统计律师改动
 ): Promise<GenerateResponse> {
   const res = await safeFetch(`${BASE}/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ validated_json: validatedJson }),
+    body: JSON.stringify({ validated_json: validatedJson, run_id: runId }),
   });
   if (!res.ok) throw await extractError(res, '起诉状生成失败');
   return res.json() as Promise<GenerateResponse>;
