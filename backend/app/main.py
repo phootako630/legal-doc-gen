@@ -8,11 +8,12 @@ import sys
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+# 以下 import 必须在上面的 stdout 重设之后，故豁免 E402
+from fastapi import FastAPI  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
-from app.config import CORS_ORIGINS
-from app.routers import analyze, branches, extract, files, generate, resume
+from app.config import CORS_ORIGINS  # noqa: E402
+from app.routers import analyze, branches, extract, files, generate, resume  # noqa: E402
 
 app = FastAPI(title="安装合同纠纷起诉状生成系统", version="1.0.0")
 
