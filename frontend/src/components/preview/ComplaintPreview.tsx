@@ -10,7 +10,9 @@ interface Seg {
   type: SegType;
 }
 
+// 字符类里的 ⚠️（⚠ + U+FE0F）有意作为两个码位排除，规则误报，故豁免
 const HIGHLIGHT_RE =
+  // eslint-disable-next-line no-misleading-character-class
   /【高亮缺失：([^】]*)】|【待补充】|【高亮冲突：([^】]*)】|⚠️\s*待核实[：:]\s*([^【⚠️\n]*)/g;
 
 function parseSegments(line: string): Seg[] {

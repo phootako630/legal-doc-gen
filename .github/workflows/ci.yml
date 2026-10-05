@@ -47,5 +47,6 @@ jobs:
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-      # build 含 tsc -b 类型检查；lint 暂不接入（仓库尚无 eslint.config，pnpm lint 目前跑不起来）
+      - run: pnpm lint
+      # build 含 tsc -b 类型检查
       - run: pnpm build
