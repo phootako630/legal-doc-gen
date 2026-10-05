@@ -72,25 +72,26 @@ async def _collect(run_id: str, config: dict) -> CaseState:
     return case
 
 
-# 过期清理最多每小时跑一次：长期运行的服务不重启也能按保留期清除案件数据
+# 保留期是对客户机密的承诺，不能依赖"恰好有新案件进来"才清理：
+# 由服务启动时起的后台循环定时执行（见 main.py lifespan），resume 时也会单独拒绝过期会话。
 _PURGE_INTERVAL_S = 3600
-_last_purge = 0.0
 
 
-async def record_and_purge(run_id: str) -> None:
-    """登记新会话；到点则顺带清除过期的 checkpoint 与上传文件。清理失败不影响主流程。"""
-    global _last_purge
-    await checkpoint.record_run(run_id)
-    now = time.monotonic()
-    if now - _last_purge < _PURGE_INTERVAL_S:
-        return
-    _last_purge = now
+async def purge_expired_cases() -> None:
+    """清除过期的 checkpoint 与上传文件。清理失败只记日志，不影响服务。"""
     try:
         runs = await checkpoint.purge_expired()
         files = await asyncio.to_thread(file_store.purge_expired)
         run_log.log_event("purge", runs=runs, files=files)
     except Exception as exc:  # noqa: BLE001 — 清理是尽力而为
         run_log.log_event("purge_error", error=type(exc).__name__)
+
+
+async def retention_loop(interval_s: float = _PURGE_INTERVAL_S) -> None:
+    """启动时立即清理一次，之后每隔 interval_s 清理一次；随服务关闭被取消。"""
+    while True:
+        await purge_expired_cases()
+        await asyncio.sleep(interval_s)
 
 
 async def run_analyze(files: list[dict], internet_allowed: bool) -> CaseState:
@@ -111,7 +112,7 @@ async def run_analyze(files: list[dict], internet_allowed: bool) -> CaseState:
         "pending": None,
     }
     t0 = time.monotonic()
-    await record_and_purge(run_id)
+    await checkpoint.record_run(run_id)
     graph = await get_graph()
     await graph.ainvoke(initial, config)
     run_log.log_event("run_pass", duration_ms=round((time.monotonic() - t0) * 1000))
@@ -122,6 +123,9 @@ async def run_resume(run_id: str, decisions: dict) -> CaseState:
     """在断点处提交律师决定并恢复 agent。run_id 未知则抛 KeyError。"""
     config = _config(run_id)
     graph = await get_graph()
+    if await checkpoint.is_expired(run_id):
+        await purge_expired_cases()  # 过期会话当场清除，再按"会话不存在"处理
+        raise KeyError(run_id)
     snapshot = await graph.aget_state(config)
     if not snapshot.tasks and not snapshot.values:
         raise KeyError(run_id)  # 无此会话（进程重启或 run_id 失效）

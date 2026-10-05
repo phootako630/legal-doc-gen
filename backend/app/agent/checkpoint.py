@@ -4,8 +4,9 @@
 # 单进程、少量律师使用，SQLite 足够；将来多实例时只需替换这里的 saver 实现，
 # 图与节点层零改动（见 CLAUDE.md「未来接 DB 时零重构」）。
 #
-# 保密：checkpoint 里含案件字段与全文，属客户机密；run_meta 记录每个会话的创建时间，
-# 供 purge_expired 按 CASE_RETENTION_DAYS 连同 checkpoint 一并清除。
+# 保密：checkpoint 里含案件字段与全文，属客户机密。库文件 0600（SQLite 的 -wal/-shm
+# 会沿用主库权限），且不依赖 umask；run_meta 记录每个会话的创建时间，供 purge_expired 按
+# CASE_RETENTION_DAYS 连同 checkpoint 一并清除，is_expired 供 resume 时拒绝过期会话。
 from __future__ import annotations
 
 import asyncio
@@ -45,7 +46,11 @@ async def get_saver() -> AsyncSqliteSaver:
             await close()  # 换了事件循环：关掉旧连接，下面重新打开同一个文件
         path = config.CHECKPOINT_DB_PATH
         if path != ":memory:":
-            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            os.makedirs(os.path.dirname(path) or ".", mode=0o700, exist_ok=True)
+            # 先以 0600 建好空库文件，SQLite 创建 -wal/-shm 时会沿用它的权限；
+            # 库文件已存在（含旧版本留下的）也一并收紧
+            os.close(os.open(path, os.O_CREAT | os.O_RDWR, 0o600))
+            os.chmod(path, 0o600)
         conn = await aiosqlite.connect(path)
         try:
             await conn.execute("PRAGMA journal_mode=WAL")  # 读写互不阻塞，崩溃后更安全
@@ -81,6 +86,18 @@ async def record_run(run_id: str) -> None:
         (run_id, time.time()),
     )
     await _conn.commit()
+
+
+async def is_expired(run_id: str, retention_days: float | None = None) -> bool:
+    """会话是否已超过保留期。没有登记记录的视为未过期（由 checkpoint 是否存在另行判断）。"""
+    await get_saver()
+    assert _conn is not None
+    days = config.CASE_RETENTION_DAYS if retention_days is None else retention_days
+    async with _conn.execute(
+        "SELECT created_at FROM run_meta WHERE thread_id = ?", (run_id,)
+    ) as cur:
+        row = await cur.fetchone()
+    return row is not None and row[0] < time.time() - days * 86400
 
 
 async def purge_expired(retention_days: float | None = None) -> int:

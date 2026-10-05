@@ -38,3 +38,26 @@ def test_purge_expired_removes_only_old_files():
 
 def test_purge_on_missing_dir_is_noop():
     assert file_store.purge_expired(retention_days=1) == 0
+
+
+def test_put_creates_owner_only_file_and_dir():
+    fid = file_store.put(b"x")
+    assert (os.stat(os.path.join(file_store.UPLOAD_DIR, fid)).st_mode & 0o777) == 0o600
+    assert (os.stat(file_store.UPLOAD_DIR).st_mode & 0o777) == 0o700
+
+
+def test_existing_loose_dir_is_tightened():
+    os.makedirs(file_store.UPLOAD_DIR)
+    os.chmod(file_store.UPLOAD_DIR, 0o755)
+    file_store.put(b"x")
+    assert (os.stat(file_store.UPLOAD_DIR).st_mode & 0o777) == 0o700
+
+
+def test_get_treats_expired_file_as_missing_and_deletes_it():
+    # 不等清理任务：读取时就按保留期判过期
+    fid = file_store.put(b"old")
+    path = os.path.join(file_store.UPLOAD_DIR, fid)
+    long_ago = time.time() - 30 * 86400
+    os.utime(path, (long_ago, long_ago))
+    assert file_store.get(fid) is None
+    assert not os.path.exists(path)

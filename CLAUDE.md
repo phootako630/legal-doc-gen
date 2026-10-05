@@ -12,7 +12,7 @@
 
 **核心用户**：中国大陆律师团队，不懂技术，不看 JSON，不看英文。所有面向用户的内容必须是中文。
 
-**目标**：验证 AI 抽取准确率和律师使用体验。支持可解析 PDF、扫描件 PDF（OCR）和 Word 文件。无用户认证；案件状态（agent checkpoint、上传的扫描件）落盘到 `backend/data/`（SQLite + 文件），服务重启后仍可 resume，超过 `CASE_RETENTION_DAYS`（默认 7 天）自动清除；不引入业务数据库。
+**目标**：验证 AI 抽取准确率和律师使用体验。支持可解析 PDF、扫描件 PDF（OCR）和 Word 文件。无用户认证；案件状态（agent checkpoint、上传的扫描件）落盘到 `backend/data/`（SQLite + 文件），服务重启后仍可 resume，超过 `CASE_RETENTION_DAYS`（默认 7 天）自动清除（服务启动即清、之后每小时清，resume / 读取时也拒绝过期数据）；落盘文件仅属主可读写（目录 0700、文件 0600）；不引入业务数据库。
 
 ---
 

@@ -9,20 +9,26 @@ sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 
 # 以下 import 必须在上面的 stdout 重设之后，故豁免 E402
-from contextlib import asynccontextmanager  # noqa: E402
+import asyncio  # noqa: E402
+from contextlib import asynccontextmanager, suppress  # noqa: E402
 
 from fastapi import FastAPI  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
 from app.agent.graph import get_graph, reset_graph  # noqa: E402
+from app.agent.runner import retention_loop  # noqa: E402
 from app.config import CORS_ORIGINS  # noqa: E402
 from app.routers import analyze, branches, extract, files, generate, resume  # noqa: E402
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """启动时建好 checkpoint 库（尽早暴露路径/权限问题），关闭时释放连接。"""
+    """启动时建好 checkpoint 库（尽早暴露路径/权限问题）并开始定时清理过期案件数据，关闭时收尾。"""
     await get_graph()
+    purge_task = asyncio.create_task(retention_loop())
     yield
+    purge_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await purge_task
     await reset_graph()
 
 
