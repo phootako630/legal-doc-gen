@@ -72,6 +72,17 @@ BRANCH_HISTORY_DIR = os.getenv(
 # 超过这么多天没更新，上传页提醒「负责人可能已变更」
 BRANCH_TABLE_STALE_DAYS = 90
 
+# ── 案件状态持久化（均在 backend/data/ 下，不进 git）────────────────────────────
+# agent 的 checkpoint（含 interrupt 断点）存 SQLite，服务重启后律师仍可 resume；
+# 扫描件原始字节落盘到 UPLOAD_DIR，供按需 OCR 取回。
+CHECKPOINT_DB_PATH = os.getenv(
+    "CHECKPOINT_DB_PATH", os.path.join(_DATA_DIR, "checkpoints.sqlite")
+)
+UPLOAD_DIR = os.getenv("UPLOAD_DIR", os.path.join(_DATA_DIR, "uploads"))
+# 案件数据（checkpoint 里的字段与原文、上传的原始文件）保留天数，超期自动清除。
+# 这些是客户机密：保留期应由律所明确，此处先给保守默认值。
+CASE_RETENTION_DAYS = int(os.getenv("CASE_RETENTION_DAYS", "7"))
+
 # 管理员口令：只有持口令者能上传 / 回退原告信息表（查看、下载不限）。
 # 系统暂无用户账号体系，先用一个服务器端口令；未配置时任何人都不能更新。
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN")

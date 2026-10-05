@@ -44,3 +44,5 @@ docs-examples/
 backend/data/branch_info.json
 backend/data/branch_history/
 backend/data/run_log.jsonl
+backend/data/checkpoints.sqlite*
+backend/data/uploads/

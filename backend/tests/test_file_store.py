@@ -1,4 +1,7 @@
-# file_store 单测：字节暂存 put/get 往返、未知 id、容量淘汰。
+# file_store 单测：落盘 put/get 往返、未知/非法 id、路径穿越防护、过期清理。
+import os
+import time
+
 from app.services import file_store
 
 
@@ -11,13 +14,50 @@ def test_put_get_roundtrip():
 def test_get_unknown_or_none_returns_none():
     assert file_store.get(None) is None
     assert file_store.get("nonexistent-id") is None
+    assert file_store.get("0" * 32) is None  # 格式合法但不存在
 
 
-def test_capacity_eviction_drops_oldest():
-    file_store.clear()
-    first = file_store.put(b"first")
-    # 塞满超过上限，最早一份应被淘汰
-    for i in range(70):
-        file_store.put(f"f{i}".encode())
-    assert file_store.get(first) is None
-    file_store.clear()
+def test_get_rejects_path_traversal(tmp_path):
+    # file_id 来自客户端请求：即使目录外有这个文件，也不能被读到
+    (tmp_path / "secret").write_bytes(b"secret")
+    assert file_store.get("../secret") is None
+    assert file_store.get(str(tmp_path / "secret")) is None
+
+
+def test_purge_expired_removes_only_old_files():
+    old = file_store.put(b"old")
+    fresh = file_store.put(b"fresh")
+    two_days_ago = time.time() - 2 * 86400
+    path = os.path.join(file_store.UPLOAD_DIR, old)
+    os.utime(path, (two_days_ago, two_days_ago))
+
+    assert file_store.purge_expired(retention_days=1) == 1
+    assert file_store.get(old) is None
+    assert file_store.get(fresh) == b"fresh"
+
+
+def test_purge_on_missing_dir_is_noop():
+    assert file_store.purge_expired(retention_days=1) == 0
+
+
+def test_put_creates_owner_only_file_and_dir():
+    fid = file_store.put(b"x")
+    assert (os.stat(os.path.join(file_store.UPLOAD_DIR, fid)).st_mode & 0o777) == 0o600
+    assert (os.stat(file_store.UPLOAD_DIR).st_mode & 0o777) == 0o700
+
+
+def test_existing_loose_dir_is_tightened():
+    os.makedirs(file_store.UPLOAD_DIR)
+    os.chmod(file_store.UPLOAD_DIR, 0o755)
+    file_store.put(b"x")
+    assert (os.stat(file_store.UPLOAD_DIR).st_mode & 0o777) == 0o700
+
+
+def test_get_treats_expired_file_as_missing_and_deletes_it():
+    # 不等清理任务：读取时就按保留期判过期
+    fid = file_store.put(b"old")
+    path = os.path.join(file_store.UPLOAD_DIR, fid)
+    long_ago = time.time() - 30 * 86400
+    os.utime(path, (long_ago, long_ago))
+    assert file_store.get(fid) is None
+    assert not os.path.exists(path)
