@@ -336,6 +336,7 @@ legal-doc-app/
 │   │   │   ├── equipment_list.py    # 合同设备清单中 VGE 家用电梯计数
 │   │   │   ├── confidence.py        # ③ 可信度评分
 │   │   │   ├── anchoring.py         # 值回原文命中/定位
+│   │   │   ├── run_log.py           # 运行日志（JSONL：节点耗时/断点/LLM token/OCR 页数/律师改动；只记 key 不记取值）
 │   │   │   └── company_lookup.py    # 联网企业信息查询
 │   │   └── config.py
 │   ├── data/                        # 原告信息表当前版 + 历史版（管理员页面上传，不进 git）
@@ -751,6 +752,8 @@ DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxx
 DASHSCOPE_API_KEY=sk-xxxxxxxxxxxxxxxx
 # 管理员口令：更新原告信息表时输入
 ADMIN_TOKEN=
+# 运行日志（backend/data/run_log.jsonl，不进 git）；设为 0 关闭
+RUN_LOG_ENABLED=1
 ```
 
 ---

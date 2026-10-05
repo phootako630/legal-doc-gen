@@ -76,5 +76,11 @@ BRANCH_TABLE_STALE_DAYS = 90
 # 系统暂无用户账号体系，先用一个服务器端口令；未配置时任何人都不能更新。
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN")
 
+# ── 运行日志 ─────────────────────────────────────────────────────────────────
+# agent 每次运行的结构化事件（JSONL，仅含字段 key / 耗时 / token，不含案件内容）。
+# RUN_LOG_ENABLED=0 可关闭；日志在 backend/data/ 下，与原告信息表一样不进 git。
+RUN_LOG_ENABLED = os.getenv("RUN_LOG_ENABLED", "1") != "0"
+RUN_LOG_PATH = os.getenv("RUN_LOG_PATH", os.path.join(_DATA_DIR, "run_log.jsonl"))
+
 # CORS 允许的前端地址
 CORS_ORIGINS = ["http://localhost:5173"]

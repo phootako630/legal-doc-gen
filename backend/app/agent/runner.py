@@ -3,12 +3,14 @@
 # run_id 即 LangGraph 的 thread_id；in-memory checkpointer 按此隔离每次会话。
 from __future__ import annotations
 
+import time
 import uuid
 
 from langgraph.types import Command
 
 from app.agent.graph import get_graph
 from app.agent.state import CaseState, PendingDecision
+from app.services import run_log
 
 
 def _config(run_id: str) -> dict:
@@ -52,21 +54,42 @@ async def _collect(run_id: str, config: dict) -> CaseState:
     snapshot = await graph.aget_state(config)
     payload = _interrupt_payload(snapshot)
     if payload:
-        return _case_from_interrupt(run_id, snapshot.values, payload)
-    return _case_from_values(run_id, snapshot.values)
+        case = _case_from_interrupt(run_id, snapshot.values, payload)
+    else:
+        case = _case_from_values(run_id, snapshot.values)
+    # 记下交付给律师的字段取值，generate 时据此统计律师改动（只存内存，不落盘）
+    run_log.remember_fields(run_id, case.extracted_fields)
+    run_log.log_event(
+        "run_state",
+        run_id=run_id,
+        pending_kind=case.pending.kind if case.pending else None,
+        readiness=case.readiness,
+        conflicts=sum(1 for v in case.validations if v.get("is_conflict")),
+        **run_log.field_summary(case.extracted_fields),
+    )
+    return case
 
 
 async def run_analyze(files: list[dict], internet_allowed: bool) -> CaseState:
     """启动一次 agent 会话，返回结果 CaseState（可能带 pending 断点）。"""
     run_id = uuid.uuid4().hex
     config = _config(run_id)
+    run_log.set_run_id(run_id)
+    run_log.log_event(
+        "run_start",
+        files=len(files),
+        scanned=sum(1 for f in files if f.get("is_scanned")),
+        internet_allowed=internet_allowed,
+    )
     initial = {
         "files": files,
         "internet_allowed": internet_allowed,
         "scanned_filenames": [f["filename"] for f in files if f.get("is_scanned")],
         "pending": None,
     }
+    t0 = time.monotonic()
     await get_graph().ainvoke(initial, config)
+    run_log.log_event("run_pass", duration_ms=round((time.monotonic() - t0) * 1000))
     return await _collect(run_id, config)
 
 
@@ -76,5 +99,10 @@ async def run_resume(run_id: str, decisions: dict) -> CaseState:
     snapshot = await get_graph().aget_state(config)
     if not snapshot.tasks and not snapshot.values:
         raise KeyError(run_id)  # 无此会话（进程重启或 run_id 失效）
+    run_log.set_run_id(run_id)
+    # 只记律师本次决定了哪些字段，不记取值
+    run_log.log_event("resume", decided_keys=sorted(decisions))
+    t0 = time.monotonic()
     await get_graph().ainvoke(Command(resume=decisions), config)
+    run_log.log_event("run_pass", duration_ms=round((time.monotonic() - t0) * 1000))
     return await _collect(run_id, config)

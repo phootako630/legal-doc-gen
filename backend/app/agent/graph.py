@@ -18,6 +18,7 @@ from app.agent.nodes import (
     validate_node,
 )
 from app.agent.state import GraphState
+from app.services.run_log import traced_node
 
 _graph = None
 
@@ -28,16 +29,16 @@ def get_graph():
     if _graph is None:
         builder = StateGraph(GraphState)
         # 节点名不能与状态 key 同名（LangGraph 限制），故清点节点取名 intake
-        builder.add_node("intake", checklist_node)
-        builder.add_node("extract", extract_node)
+        builder.add_node("intake", traced_node("intake", checklist_node))
+        builder.add_node("extract", traced_node("extract", extract_node))
         # 按需 OCR：缺条款且有扫描合同时，逐页 OCR 定向补齐（命中即停）
-        builder.add_node("ocr_augment", ocr_augment_node)
+        builder.add_node("ocr_augment", traced_node("ocr_augment", ocr_augment_node))
         # 台数核对：合同与验收报告台数不一致时补读合同设备清单数 VGE 家用电梯，仍对不上则暂停问律师
-        builder.add_node("contract_scan", contract_scan_node)
-        builder.add_node("qty_check", qty_check_node)
+        builder.add_node("contract_scan", traced_node("contract_scan", contract_scan_node))
+        builder.add_node("qty_check", traced_node("qty_check", qty_check_node))
         # 质保金确认：合同有质保金时暂停问律师起诉状写「支付至 X% 合同款」
-        builder.add_node("retention", retention_node)
-        builder.add_node("validate", validate_node)
+        builder.add_node("retention", traced_node("retention", retention_node))
+        builder.add_node("validate", traced_node("validate", validate_node))
 
         builder.set_entry_point("intake")
         builder.add_conditional_edges(

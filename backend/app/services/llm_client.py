@@ -18,6 +18,7 @@ from app.config import (
     LLM_TEMPERATURE,
     LLM_TIMEOUT,
 )
+from app.services import run_log
 
 # 单例客户端，避免重复创建连接
 _client: AsyncOpenAI | None = None
@@ -163,6 +164,13 @@ async def chat(
                 f"[LLM] finish_reason={choice.finish_reason} content_len={len(content)}"
                 + (f" tokens={usage.completion_tokens}/{usage.total_tokens}" if usage else ""),
                 flush=True,
+            )
+            run_log.log_event(
+                "llm_call",
+                attempt=attempt,
+                finish_reason=choice.finish_reason,
+                prompt_tokens=getattr(usage, "prompt_tokens", None),
+                completion_tokens=getattr(usage, "completion_tokens", None),
             )
 
             # 推理模型可能把 max_tokens 全部耗在思维链上（finish_reason=length），

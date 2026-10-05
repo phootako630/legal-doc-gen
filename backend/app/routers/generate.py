@@ -6,6 +6,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from app.services import run_log
 from app.services.complaint_renderer import render_complaint
 
 router = APIRouter()
@@ -13,6 +14,8 @@ router = APIRouter()
 
 class GenerateRequest(BaseModel):
     validated_json: dict  # type: ignore[type-arg]
+    # 可选：关联 agent 会话，用于统计律师相对 agent 的改动（缺省则不统计）
+    run_id: str | None = None
 
 
 class GenerateResponse(BaseModel):
@@ -22,6 +25,8 @@ class GenerateResponse(BaseModel):
 @router.post("/generate", response_model=GenerateResponse)
 async def generate(req: GenerateRequest) -> GenerateResponse:
     """将律师确认的字段模板填槽为起诉状全文（确定性渲染，非 LLM）。"""
+    if req.run_id:
+        run_log.log_lawyer_edits(req.run_id, req.validated_json)
     try:
         complaint_text = render_complaint(req.validated_json, mark_fills=True)
     except FileNotFoundError as e:
