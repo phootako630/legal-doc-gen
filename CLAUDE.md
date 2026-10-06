@@ -265,6 +265,18 @@ value=null 或锚定失败        → ❌ 缺失
   - 约定仲裁 → 整篇改为仲裁申请书（`document_kind`）：模板固定文字替换 民事起诉状→仲裁申请书、原告→申请人、被告→被申请人、诉讼请求→仲裁请求、诉讼费用→仲裁费用、提起诉讼→提请仲裁、贵院→贵委、判令/判决→裁决；管辖句「故申请人向 XX 仲裁委员会提请仲裁」，致送合同约定的仲裁机构（`addressee`）
   - 不附付款进度表（由办案律师自行决定）
 
+### 落实律师答复时的改动点
+
+律师确认单的答复变成规则时，按此清单逐项检查，避免漏改：
+
+1. **规则代码**：`backend/app/services/derived_fields.py`（派生字段、措辞切换；律师改过的值不覆盖，自身来源前缀写「按律师规则：」）；涉及抽取的改 `services/extraction.py` 的 `apply_rule_guards`
+2. **模板**：`prompts/complaint-template.md`（新占位符），仲裁措辞改 `complaint_renderer.py` 的 `_ARBITRATION_TERMS`
+3. **抽取提示词**：`prompts/prompt-a-extract.md` / `prompt-a-clauses.md`（新字段、取值说明）
+4. **需要律师拍板的**：在 `agent/nodes.py` 加 interrupt 断点（参照 `qty_check_node` / `retention_node`）
+5. **前端**：`lib/field-map.ts`（中文名 + `reviewFieldKeys`）、`lib/types.ts`（`ExtractedFields`）
+6. **测试**：`backend/tests/test_derived_fields.py` 等，用虚构数据
+7. **文档**：本文件「律师确认的填写规则」、核心类型定义、字段名映射
+
 ### 原告信息表（全所共用底表，管理员维护）
 
 - 原告的统一社会信用代码、法定代表人 / 负责人、住所地不在案件材料里，取自律师维护的《原告信息表》（Excel：原告名称 | 统一社会信用代码 | 住所地 | 法定代表人\负责人 | 联系方式）。它是全所共用的底表，**不是**每个案件上传的材料。
@@ -281,6 +293,7 @@ value=null 或锚定失败        → ❌ 缺失
 ```
 legal-doc-app/
 ├── CLAUDE.md
+├── .claude/                         # Claude Code 辅助：启动脚本 + skills（见「本地开发启动」）
 ├── prompts/                         # LLM Prompt 模板（纯文本）
 │   ├── prompt-a-checklist.md        # 材料清点（JSON）
 │   ├── prompt-a-extract.md          # 字段抽取（JSON，结构化输出）
@@ -792,6 +805,14 @@ pnpm dev                   # 默认 http://localhost:5173
 
 # 前端通过 vite.config.ts 的 proxy 将 /api/* 转发到 localhost:8000
 ```
+
+### Claude Code 辅助（`.claude/`）
+
+- `hooks/session-start.sh`：云端会话启动时安装后端 requirements 与前端依赖（与 CI 一致），ruff / pytest / ESLint / build 开箱可跑
+- `skills/run-app`：启动前后端（数据隔离到临时目录），Playwright 走完四步截图，并保存分析结果与生成的诉状文本
+- `skills/case-review`：律师发来新案卷时解压、盘点材料、看扫描页，用系统跑一遍并与律师诉状逐句对比
+- `skills/lawyer-questionnaire`：把要问律师的问题生成为 Word 确认单（律师在中国大陆，确认单一律用 Word），并说明如何读取回复
+- 真实案卷只放会话临时目录（scratchpad），**绝不提交到仓库**，测试一律用虚构数据
 
 ---
 

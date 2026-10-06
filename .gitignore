@@ -46,3 +46,6 @@ backend/data/branch_history/
 backend/data/run_log.jsonl
 backend/data/checkpoints.sqlite*
 backend/data/uploads/
+
+# Claude Code 运行时文件
+.claude/scheduled_tasks.lock
