@@ -99,14 +99,18 @@ export async function fetchAnalyzeProgress(): Promise<LlmProgress | null> {
   }
 }
 
-/** 启动 agent 分析（清点→抽取→代码校验）；命中断点时返回带 pending 的 CaseState */
+/**
+ * 启动 agent 分析（清点→抽取→代码校验）；命中断点时返回带 pending 的 CaseState。
+ * requestKey：同一批材料的请求编号。重试时传同一个，后端不会重复分析（只返回已有结果）。
+ */
 export async function analyzeCase(
   files: ParsedFile[],
   internetAllowed: boolean,
+  requestKey: string,
 ): Promise<CaseState> {
   const res = await safeFetch(`${BASE}/analyze`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'Idempotency-Key': requestKey },
     body: JSON.stringify({
       files: files.map((f) => ({
         filename: f.filename,

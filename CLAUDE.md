@@ -151,6 +151,9 @@ POST /api/upload
   }
 
 POST /api/analyze            # 启动 agent，替代 v1 的 /api/extract
+  请求头：Idempotency-Key（可选，前端每次上传生成一个）——同一编号只分析一次：
+        正在跑 → 接上同一个任务；已跑完 → 直接返回该会话当前状态；失败 → 不记，重试重新分析；
+        编号相同但材料不同 → 409。编号→会话存 SQLite（analyze_keys），随会话过期清除
   输入：{ files: [...], internet_allowed: boolean }
   处理：启动 LangGraph 图；清点 → 抽取(工具循环) → 代码校验 → 计算 confidence
   输出（stream/SSE）：分步进展事件；结束时产出：

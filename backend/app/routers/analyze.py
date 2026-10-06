@@ -1,9 +1,14 @@
 # POST /api/analyze：启动 agent（清点→抽取→代码校验），返回 CaseState（可能带断点）
 # GET  /api/analyze/progress：agent 三阶段的实时进度，供前端轮询渲染（与 extract 共用 llm_progress）
-from fastapi import APIRouter, HTTPException
+#
+# 幂等：请求头 Idempotency-Key（前端每次上传生成一个）相同的重复请求只分析一次，
+# 详见 agent/runner.py 的 run_analyze_once。不带该请求头时行为与以前一致（每次新分析）。
+import re
+
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
-from app.agent.runner import run_analyze
+from app.agent.runner import IdempotencyConflict, run_analyze, run_analyze_once
 from app.agent.state import CaseState
 from app.services import llm_progress
 
@@ -41,15 +46,35 @@ class LlmProgress(BaseModel):
     stage_elapsed_s: int
 
 
+# 请求编号只允许字母、数字、- 和 _（UUID 即可），长度 8–128，避免把任意内容写进库里
+_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
+
+
 @router.post("/analyze", response_model=CaseState)
-async def analyze(req: AnalyzeRequest) -> CaseState:
+async def analyze(
+    req: AnalyzeRequest,
+    idempotency_key: str | None = Header(default=None),
+) -> CaseState:
     """启动 LangGraph agent；命中 interrupt 时返回带 pending 的 CaseState 供律师决策。"""
+    files = [f.model_dump() for f in req.files]
+    if idempotency_key is not None:
+        if not _KEY_RE.fullmatch(idempotency_key):
+            raise HTTPException(status_code=400, detail="请求编号格式不正确")
+        try:
+            # 进度记录在 run_analyze_once 的任务里做：重复请求不会把进度条重置
+            return await run_analyze_once(idempotency_key, files, req.internet_allowed)
+        except IdempotencyConflict as e:
+            raise HTTPException(
+                status_code=409,
+                detail="这个请求编号已用于另一组材料，请重新上传后再分析",
+            ) from e
+        except RuntimeError as e:
+            raise HTTPException(status_code=500, detail=f"分析失败：{e}") from e
+
     # 三阶段（清点/抽取/校验高亮）与 extract 一致；包一层进度记录，异常时也能复位
     llm_progress.begin(total_stages=3)
     try:
-        return await run_analyze(
-            [f.model_dump() for f in req.files], req.internet_allowed
-        )
+        return await run_analyze(files, req.internet_allowed)
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=f"分析失败：{e}") from e
     finally:

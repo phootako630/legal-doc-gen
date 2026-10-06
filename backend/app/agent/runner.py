@@ -1,9 +1,12 @@
 # Agent 运行封装：启动/恢复图，把图状态或 interrupt 收敛成对外的 CaseState。
 #
 # run_id 即 LangGraph 的 thread_id；SQLite checkpointer 按此隔离每次会话。
+# run_analyze_once 在其上加幂等：同一请求编号（前端每次上传生成一个）只真正分析一次。
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import time
 import uuid
 
@@ -12,7 +15,7 @@ from langgraph.types import Command
 from app.agent import checkpoint
 from app.agent.graph import get_graph
 from app.agent.state import CaseState, PendingDecision
-from app.services import file_store, run_log
+from app.services import file_store, llm_progress, run_log
 
 
 def _config(run_id: str) -> dict:
@@ -136,3 +139,111 @@ async def run_resume(run_id: str, decisions: dict) -> CaseState:
     await graph.ainvoke(Command(resume=decisions), config)
     run_log.log_event("run_pass", duration_ms=round((time.monotonic() - t0) * 1000))
     return await _collect(run_id, config)
+
+
+# ── 幂等：同一请求编号只分析一次 ──────────────────────────────────────────────
+#
+# 一次分析要 2–3 分钟（OCR + 多次 LLM）。请求中途断开（网络抖动、反向代理超时）时，
+# 后端其实还在跑；律师点「重试」若再起一次完整分析，就是双倍耗时和费用，前一次结果也白费。
+# 前端每次上传生成一个请求编号（Idempotency-Key），同一编号的请求：
+#   1. 正在分析 → 不另起，等同一个任务的结果（_inflight，进程内）；
+#   2. 已经分析完 → 直接返回该会话的当前状态（analyze_keys 表，落盘，重启后仍有效）；
+#   3. 分析失败 → 不记编号，重试会重新分析；
+#   4. 编号相同但材料不同 → 拒绝（IdempotencyConflict），避免把 A 案的结果当成 B 案返回。
+
+
+class IdempotencyConflict(Exception):
+    """同一请求编号被用于另一组材料。"""
+
+
+# 请求编号 → (请求摘要, 正在运行的分析任务)。单进程部署，进程内字典即可
+_inflight: dict[str, tuple[str, asyncio.Task[CaseState]]] = {}
+
+
+def request_fingerprint(files: list[dict], internet_allowed: bool) -> str:
+    """请求内容的摘要：材料（含全文）与联网开关任一不同，摘要就不同。"""
+    raw = json.dumps(
+        {"files": files, "internet_allowed": internet_allowed},
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _running_task(key: str, fingerprint: str) -> asyncio.Task[CaseState] | None:
+    """同编号正在运行（或刚成功结束、还没从字典移除）的任务；编号对应别的材料则报冲突。"""
+    entry = _inflight.get(key)
+    if entry is None:
+        return None
+    entry_fp, task = entry
+    if entry_fp != fingerprint:
+        raise IdempotencyConflict(key)
+    if task.done() and (task.cancelled() or task.exception() is not None):
+        return None  # 失败的任务不复用，让这次请求重新分析
+    return task
+
+
+async def _existing_case(run_id: str) -> CaseState | None:
+    """已有会话的当前状态（含律师之后在断点处的决定）；会话已过期或不存在则 None。"""
+    if await checkpoint.is_expired(run_id):
+        return None
+    graph = await get_graph()
+    config = _config(run_id)
+    snapshot = await graph.aget_state(config)
+    if not snapshot.tasks and not snapshot.values:
+        return None
+    return await _collect(run_id, config)
+
+
+async def _analyze_and_remember(
+    key: str, fingerprint: str, files: list[dict], internet_allowed: bool
+) -> CaseState:
+    """真正跑一次分析；成功后记下编号。进度条跟着任务走，重复请求不会把它重置。"""
+    llm_progress.begin(total_stages=3)
+    try:
+        case = await run_analyze(files, internet_allowed)
+    finally:
+        llm_progress.finish()
+    await checkpoint.save_analyze_key(key, fingerprint, case.run_id)
+    return case
+
+
+async def run_analyze_once(
+    key: str, files: list[dict], internet_allowed: bool
+) -> CaseState:
+    """带请求编号的分析：重复请求复用正在运行的任务或已完成的会话，不重复消耗 OCR / LLM。"""
+    fingerprint = request_fingerprint(files, internet_allowed)
+
+    task = _running_task(key, fingerprint)
+    if task is None:
+        saved = await checkpoint.find_analyze_key(key)
+        if saved is not None:
+            saved_fp, run_id = saved
+            if saved_fp != fingerprint:
+                raise IdempotencyConflict(key)
+            case = await _existing_case(run_id)
+            if case is not None:
+                run_log.log_event("analyze_replay", run_id=run_id)
+                return case
+            await checkpoint.forget_analyze_key(key)  # 会话已清除：按新请求处理
+        # 上面有 await，期间同编号的另一个请求可能已经起了任务：再查一次。
+        # 从这里到登记进 _inflight 之间没有 await，不会再被插队（asyncio 单线程）
+        task = _running_task(key, fingerprint)
+
+    if task is None:
+        task = asyncio.create_task(
+            _analyze_and_remember(key, fingerprint, files, internet_allowed)
+        )
+        _inflight[key] = (fingerprint, task)
+
+        def _forget(done: asyncio.Task[CaseState], key: str = key) -> None:
+            if _inflight.get(key, (None, None))[1] is done:
+                _inflight.pop(key, None)
+
+        task.add_done_callback(_forget)
+    else:
+        run_log.log_event("analyze_join")  # 重复请求：接上正在运行的分析
+
+    # shield：本次 HTTP 请求被取消（客户端断开）时只放弃等待，不取消分析本身，
+    # 后续同编号的重试还能接上这次的结果
+    return await asyncio.shield(task)
