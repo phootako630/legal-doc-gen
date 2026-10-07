@@ -8,6 +8,7 @@ import type { UploadResponse, CaseState } from '@/lib/types';
 interface ProcessingStepProps {
   uploadResult: UploadResponse;
   internetAllowed: boolean;
+  analyzeKey: string; // 请求编号：点「重试」时沿用，后端接上正在跑或已跑完的分析，不重复计费
   onDone: (result: CaseState) => void;
 }
 
@@ -76,7 +77,12 @@ function buildSteps(
   ];
 }
 
-export function ProcessingStep({ uploadResult, internetAllowed, onDone }: ProcessingStepProps) {
+export function ProcessingStep({
+  uploadResult,
+  internetAllowed,
+  analyzeKey,
+  onDone,
+}: ProcessingStepProps) {
   const [phase, setPhase] = useState<Phase>('running');
   const [activeStage, setActiveStage] = useState<StageKey>('checklist');
   const [elapsed, setElapsed] = useState(0);
@@ -92,7 +98,7 @@ export function ProcessingStep({ uploadResult, internetAllowed, onDone }: Proces
 
     let result: CaseState;
     try {
-      result = await analyzeCase(uploadResult.files, internetAllowed);
+      result = await analyzeCase(uploadResult.files, internetAllowed, analyzeKey);
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : '处理失败，请重试');
       setPhase('error');
@@ -102,7 +108,7 @@ export function ProcessingStep({ uploadResult, internetAllowed, onDone }: Proces
     setPhase('done');
     // 稍停片刻让律师看到全部完成的绿勾，再推进到审核页（命中断点则由审核页处理 pending）
     setTimeout(() => onDoneRef.current(result), 600);
-  }, [uploadResult, internetAllowed]);
+  }, [uploadResult, internetAllowed, analyzeKey]);
 
   // 启动。React StrictMode 开发模式下 effect 会双重执行，若不拦截会同时发出
   // 两个 /api/analyze 请求（各含多次 LLM 调用）：双倍耗时费用，且两次结果

@@ -7,6 +7,9 @@
 # 保密：checkpoint 里含案件字段与全文，属客户机密。库文件 0600（SQLite 的 -wal/-shm
 # 会沿用主库权限），且不依赖 umask；run_meta 记录每个会话的创建时间，供 purge_expired 按
 # CASE_RETENTION_DAYS 连同 checkpoint 一并清除，is_expired 供 resume 时拒绝过期会话。
+#
+# 幂等：analyze_keys 记录「请求编号（Idempotency-Key）→ 会话」，同一编号的重复分析请求
+# 直接返回已有会话，不再重跑 OCR / LLM（见 runner.run_analyze_once）。随会话一起过期清除。
 from __future__ import annotations
 
 import asyncio
@@ -57,6 +60,12 @@ async def get_saver() -> AsyncSqliteSaver:
             await conn.execute(
                 "CREATE TABLE IF NOT EXISTS run_meta "
                 "(thread_id TEXT PRIMARY KEY, created_at REAL NOT NULL)"
+            )
+            # fingerprint：请求内容的摘要，防止同一编号被误用于另一组材料
+            await conn.execute(
+                "CREATE TABLE IF NOT EXISTS analyze_keys "
+                "(key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, "
+                "run_id TEXT NOT NULL, created_at REAL NOT NULL)"
             )
             await conn.commit()
             saver = AsyncSqliteSaver(conn)
@@ -113,5 +122,39 @@ async def purge_expired(retention_days: float | None = None) -> int:
     for thread_id in expired:
         await saver.adelete_thread(thread_id)
         await _conn.execute("DELETE FROM run_meta WHERE thread_id = ?", (thread_id,))
+        await _conn.execute("DELETE FROM analyze_keys WHERE run_id = ?", (thread_id,))
+    # 兜底：会话登记已不在的过期编号也一并清掉
+    await _conn.execute("DELETE FROM analyze_keys WHERE created_at < ?", (cutoff,))
     await _conn.commit()
     return len(expired)
+
+
+async def find_analyze_key(key: str) -> tuple[str, str] | None:
+    """查请求编号对应的 (fingerprint, run_id)；没有则 None。"""
+    await get_saver()
+    assert _conn is not None
+    async with _conn.execute(
+        "SELECT fingerprint, run_id FROM analyze_keys WHERE key = ?", (key,)
+    ) as cur:
+        row = await cur.fetchone()
+    return (row[0], row[1]) if row else None
+
+
+async def save_analyze_key(key: str, fingerprint: str, run_id: str) -> None:
+    """分析成功后记下「请求编号 → 会话」。"""
+    await get_saver()
+    assert _conn is not None
+    await _conn.execute(
+        "INSERT OR REPLACE INTO analyze_keys (key, fingerprint, run_id, created_at) "
+        "VALUES (?, ?, ?, ?)",
+        (key, fingerprint, run_id, time.time()),
+    )
+    await _conn.commit()
+
+
+async def forget_analyze_key(key: str) -> None:
+    """会话已不存在（过期 / 被清除）时删掉编号，让下一次请求重新分析。"""
+    await get_saver()
+    assert _conn is not None
+    await _conn.execute("DELETE FROM analyze_keys WHERE key = ?", (key,))
+    await _conn.commit()
