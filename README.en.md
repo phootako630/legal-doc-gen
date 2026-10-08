@@ -203,6 +203,10 @@ pnpm dev                   # http://localhost:5173, /api/* proxied to :8000
 
 Backend tests: `cd backend && python -m pytest`
 
+## Deployment (UAT / production)
+
+`docker compose up -d --build` starts everything (nginx basic auth + HTTPS + a case-data volume). Full guide (Chinese): [deploy/README.md](./deploy/README.md).
+
 ---
 
 ## Migration progress (v1 pipeline → v2 agentic)
@@ -221,4 +225,4 @@ Backend tests: `cd backend && python -m pytest`
 
 ## Not included in v2 (reserved for later)
 
-Database persistence, user auth, batch case processing, Dockerized deployment, vector retrieval, full LangChain, etc. — see [CLAUDE.md](./CLAUDE.md).
+A user account system (access is currently gated by nginx accounts), batch case processing, vector retrieval, full LangChain, etc. — see [CLAUDE.md](./CLAUDE.md).

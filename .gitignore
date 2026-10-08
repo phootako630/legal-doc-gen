@@ -49,3 +49,7 @@ backend/data/uploads/
 
 # Claude Code 运行时文件
 .claude/scheduled_tasks.lock
+
+# 部署：访问账号与 HTTPS 证书只留在服务器
+deploy/htpasswd
+deploy/certs/

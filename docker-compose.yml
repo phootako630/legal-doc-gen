@@ -1,0 +1,48 @@
+# UAT / 生产一键部署：backend（FastAPI，仅内网）+ web（nginx：静态页面 + /api 反代 + Basic 认证）。
+#
+# 用法见 deploy/README.md。可选参数（端口、http/https、国内镜像源）放根目录 .env，
+# 模板为 deploy/compose.env.example；API 密钥放 backend/.env（均不进仓库）。
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      args:
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.11-slim}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+    env_file: backend/.env
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      # 案件数据（checkpoint、上传的扫描件、原告信息表、运行日志）：命名卷，重建容器不丢
+      - case-data:/srv/backend/data
+    # 不暴露端口：只允许经 web（带认证）访问
+    expose:
+      - "8000"
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        NODE_IMAGE: ${NODE_IMAGE:-node:22-alpine}
+        NGINX_IMAGE: ${NGINX_IMAGE:-nginx:1.27-alpine}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      - ./deploy/nginx/${NGINX_MODE:-http}.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./deploy/nginx/app.conf:/etc/nginx/snippets/app.conf:ro
+      - ./deploy/htpasswd:/etc/nginx/htpasswd:ro
+      - ./deploy/certs:/etc/nginx/certs:ro
+    restart: unless-stopped
+
+volumes:
+  case-data:
