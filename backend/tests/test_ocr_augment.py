@@ -48,8 +48,17 @@ _CLAUSE_RESULT = {
 
 
 def _missing_clause_fields():
+    # 签约日期、合同乙方已从合同读到：这些用例只检验「找到条款正文即停」，不涉及签章页
     return {
         "defendant_name": {"value": "某电梯公司", "src": "《审批表.pdf》"},
+        "contract_sign_date": {
+            "value": "2024年2月26日",
+            "src": "《安装合同.pdf》盖章页",
+        },
+        "contract_party_b": {
+            "value": "某电梯公司分公司",
+            "src": "《安装合同.pdf》盖章页",
+        },
         "payment_clause_text": {"value": None, "src": ""},
         "breach_interest_rate_text": {"value": None, "src": ""},
         "dispute_clause_text": {"value": None, "src": ""},
@@ -152,6 +161,12 @@ def test_clauses_present_skips_ocr(monkeypatch):
         "payment_clause_text": {"value": "已有付款条款", "src": "x"},
         "breach_interest_rate_text": {"value": "已有违约", "src": "x"},
         "dispute_clause_text": {"value": "已有争议", "src": "x"},
+        # 签章页信息也已从合同读到：无需再 OCR
+        "contract_sign_date": {
+            "value": "2024年2月26日",
+            "src": "《安装合同.pdf》盖章页",
+        },
+        "contract_party_b": {"value": "某电梯公司", "src": "《安装合同.pdf》盖章页"},
     }
     state = {"extracted_fields": fields, "files": [_scanned_contract()]}
     assert asyncio.run(nodes_mod.ocr_augment_node(state)) == {}
@@ -224,3 +239,43 @@ def test_contract_fields_override_guesses(monkeypatch):
     assert f["contract_title"]["value"] == "某某二期电梯安装工程合同"
     assert "OCR" in f["contract_title"]["src"]
     assert f["elevator_qty_by_contract"]["value"] == 14
+
+
+# 签章页（第 9 页）：签约日期与合同乙方以此为准
+_SIGN_PAGE = "（以下无正文）甲方（盖章）：某置业公司 乙方（盖章）：某电梯公司 签订日期：2024年2月26日"
+
+
+def test_signature_page_is_an_ocr_target(monkeypatch):
+    # 签约日期还是审批表的：条款在第 2 页就找齐了，也要继续翻到签章页（第 9 页）才停
+    fields = _missing_clause_fields()
+    fields["contract_sign_date"] = {
+        "value": "2024年2月26日",
+        "src": "《审批表.pdf》签约时间",
+    }
+    del fields["contract_party_b"]
+    ocr = _ocr_by_page({2: _PAGE2, 9: _SIGN_PAGE})
+    _run_augment(monkeypatch, ocr, fields=fields, page_count=20)
+    assert ocr.await_count == 10  # 第 1–5 批只有条款 → 第 6–10 批找到签章页 → 停
+
+
+def test_signature_page_not_needed_when_already_read(monkeypatch):
+    # 签约日期、乙方都已来自合同：找到条款即停，不为签章页多花 OCR
+    ocr = _ocr_by_page({2: _PAGE2, 9: _SIGN_PAGE})
+    _run_augment(monkeypatch, ocr, page_count=20)
+    assert ocr.await_count == 5
+
+
+def test_signature_only_still_triggers_ocr(monkeypatch):
+    # 条款都已有、只缺签章页信息：仍对扫描合同做 OCR 找签章页
+    fields = {
+        **{
+            k: {"value": v["value"], "src": v["src"]} for k, v in _CLAUSE_RESULT.items()
+        },
+        "contract_sign_date": {
+            "value": "2024年2月26日",
+            "src": "《审批表.pdf》签约时间",
+        },
+    }
+    ocr = _ocr_by_page({3: _SIGN_PAGE})
+    _run_augment(monkeypatch, ocr, fields=fields, page_count=10)
+    assert ocr.await_count == 5  # 第一批（1–5 页）里就有签章页

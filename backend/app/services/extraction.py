@@ -7,7 +7,7 @@ import re
 from typing import Any
 
 from app.services.confidence import ConfidenceSignals, compute_confidence
-from app.services.provenance import resolve_provenance
+from app.services.provenance import _src_filename, resolve_provenance
 from app.services.validators import ValidationCheck
 
 
@@ -122,16 +122,41 @@ def apply_rule_guards(fields: dict) -> None:
             node["src"] = f"{src}（{_SUMMARY_MARK}）" if src else f"（{_SUMMARY_MARK}）"
 
 
-def enrich_provenance(data: Any, files: list[dict]) -> None:
+# 原文里找不到的抽取值：保留但标「待核实」（审核页与起诉状都按 src 里的「待核实」判定状态）
+UNANCHORED_NOTE = "（原文未找到，待核实）"
+# 不是从原文摘抄的字段（AI 归纳 / 系统状态），找不到原文是正常的，不标
+_NOT_ANCHORED_KEYS = {"payment_clause_summary", "internet_lookup_status"}
+
+
+def _with_verified_source(src: str, prov) -> str:
+    """
+    让 src 与实际命中的出处一致，并按是否命中加 / 去「原文未找到」标记。
+    每次重算：抽取后与 OCR 补读后各锚定一次，第二次可能才在 OCR 文本里找到原值。
+    """
+    src = src.replace(UNANCHORED_NOTE, "")
+    if prov.filename is None:
+        return f"{src}{UNANCHORED_NOTE}"
+    cited = _src_filename(src)
+    if cited is not None and cited != prov.filename:
+        # 模型写的是 A 文件，实际在 B 文件命中：来源改成 B，避免出现「审批表第 2 页」这种
+        # 文件名与页码对不上的出处。原位置描述属于 A 文件，一并去掉
+        src = f"《{prov.filename}》"
+        if prov.channel == "ocr":
+            src += "（OCR识别，请核实）"
+    return src
+
+
+def enrich_provenance(data: Any, files: list[dict], key: str | None = None) -> None:
     """
     递归遍历 extracted_fields，为每个 FieldValue 补充**已验证**的出处信息：
       page    —— 值回原文逐页锚定得到的真实页码（未命中为 None，不伪造）
       anchor  —— 命中片段（供前端高亮/反幻觉比对）
       channel —— 命中所在文件的来源通道（扫描件 ocr / 文本 text）
       confidence —— 由确定性软信号加权得出的 0-100 分（仅供 UI 排序/默认展开）
+      src     —— 改为实际命中的文件；原文找不到时追加「原文未找到，待核实」
 
-    值保守保留（不因未命中而硬删）：未命中时 confidence 偏低，
-    交由 confidence.map_status 归入「待核实」，避免误删有效值。
+    值保守保留（不因未命中而硬删，避免误删有效值），但未命中一定标「待核实」：
+    审核页与起诉状据此提醒律师，不会把模型编造的值当作「正常」写进文书。
     """
     if isinstance(data, dict):
         if "value" in data and "src" in data:
@@ -144,12 +169,18 @@ def enrich_provenance(data: Any, files: list[dict]) -> None:
                     channel=prov.channel, anchor_quality=prov.anchor_quality
                 )
             )
+            value = data.get("value")
+            has_value = value is not None and not (
+                isinstance(value, str) and value.strip() == ""
+            )
+            if has_value and key not in _NOT_ANCHORED_KEYS:
+                data["src"] = _with_verified_source(str(data.get("src") or ""), prov)
             return
-        for v in data.values():
-            enrich_provenance(v, files)
+        for k, v in data.items():
+            enrich_provenance(v, files, k)
     elif isinstance(data, list):
         for item in data:
-            enrich_provenance(item, files)
+            enrich_provenance(item, files, key)
 
 
 def format_checks_for_llm(checks: list[ValidationCheck]) -> str:

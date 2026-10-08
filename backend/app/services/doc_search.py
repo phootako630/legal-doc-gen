@@ -77,6 +77,11 @@ CLAUSE_BODY_PATTERNS: dict[str, re.Pattern[str]] = {
     "dispute": re.compile(
         r"法院[^。；\n]{0,6}?(?:提起诉讼|起诉|诉讼)|仲裁委员会|提交[^。；\n]{0,10}?仲裁"
     ),
+    # 签章页：签约日期与合同乙方以此页为准（律师确认单第 4 题、补充第 1 题）。
+    # 认「（以下无正文）」「签订日期：」「甲方（盖章）」这类只在签章页出现的写法
+    "signature": re.compile(
+        r"以下无正文|(?:签订|签约|签署)日期\s*[:：]|[甲乙]方\s*[（(]\s*(?:盖章|公章|签章)"
+    ),
 }
 _CHAPTER_HEADING_RE = re.compile(r"第[一二三四五六七八九十百零〇\d]+章")
 
@@ -88,7 +93,7 @@ def is_toc_page(text: str) -> bool:
 
 
 def locate_clause_bodies(pages: list[dict]) -> set[str]:
-    """返回在非目录页中已出现条款正文特征的条款名集合（payment / breach / dispute）。"""
+    """返回在非目录页中已出现正文特征的目标集合（payment / breach / dispute / signature）。"""
     found: set[str] = set()
     for pg in pages:
         text = pg.get("text") or ""
