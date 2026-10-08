@@ -211,23 +211,59 @@ def _registry_field(attr: str) -> Callable[[dict], dict | None]:
     return derive
 
 
+# 信息表「法定代表人 / 负责人」一栏的写法：
+#   只有姓名（不含空白、标点、括号）→ 可加默认职务；
+#   「姓名，职务」「姓名、职务」「姓名（职务）」「姓名 常见职务名」→ 已写职务；
+#   其余（如「網谷 憲晴」「张三 监事」「张三/董事长」）分不清是带空格的姓名还是职务，
+#   保守处理：保留原文、不追加，提醒律师核对（#31 复审）
+_NAME_ONLY_RE = re.compile(r"[\w·•]+")
+_TITLE_FORMS = (
+    re.compile(r"^(.+?)\s*[，,、]\s*(\S.*?)\s*$"),
+    re.compile(r"^(.+?)\s*[（(]\s*([^（）()]+?)\s*[)）]\s*$"),
+    re.compile(
+        r"^(.+?)\s+(\S*(?:董事长|董事|总经理|经理|总裁|负责人|厂长|主任|主席|行长))\s*$"
+    ),
+)
+
+
+def _existing_title(person: str) -> str | None:
+    """已写职务时返回职务原文；只有姓名返回 None；分不清返回空串。"""
+    if _NAME_ONLY_RE.fullmatch(person):
+        return None
+    for form in _TITLE_FORMS:
+        m = form.match(person)
+        if m:
+            return m.group(2)
+    return ""
+
+
 def plaintiff_rep_field(fields: dict) -> dict | None:
     """
-    原告法定代表人 / 负责人：取原告信息表；总公司在姓名后加职务（「张三，董事长」），
-    分公司和独立公司不写职务（第三轮确认单第 13 题）。表里已写了职务的不重复加。
+    原告法定代表人 / 负责人：取原告信息表；总公司只有姓名时加默认职务（「张三，董事长」），
+    分公司和独立公司不写职务（第三轮确认单第 13 题）。
+    信息表已写了职务的保留原写法、不再追加；与默认职务不同的提醒律师核对（#31）。
     """
     node = _registry_field("person_in_charge")(fields)
     if node is None:
         return None
     name = normalize_name(_str_value(fields, "plaintiff_name_final") or "")
-    person = str(node["value"])
-    if (
-        name == normalize_name(PLAINTIFF_HQ_NAME)
-        and PLAINTIFF_HQ_REP_TITLE
-        and PLAINTIFF_HQ_REP_TITLE not in person
-    ):
+    if name != normalize_name(PLAINTIFF_HQ_NAME) or not PLAINTIFF_HQ_REP_TITLE:
+        return node
+    person = str(node["value"]).strip()
+    title = _existing_title(person)
+    if title is None:
         node["value"] = f"{person}，{PLAINTIFF_HQ_REP_TITLE}"
         node["src"] += f"；按律师规则：总公司加职务「{PLAINTIFF_HQ_REP_TITLE}」"
+    elif title == "":
+        node["src"] += (
+            f"；无法判断信息表写法「{person}」是否已含职务，保留原文、未追加"
+            f"「{PLAINTIFF_HQ_REP_TITLE}」，待核实"
+        )
+    elif title != PLAINTIFF_HQ_REP_TITLE:  # 比较完整职务：「副董事长」≠「董事长」
+        node["src"] += (
+            f"；信息表已写职务「{title}」，与默认「{PLAINTIFF_HQ_REP_TITLE}」不同，"
+            "保留原写法，待核实"
+        )
     return node
 
 
@@ -351,9 +387,37 @@ def breach_clause_sentence_field(fields: dict) -> dict:
     }
 
 
+# 能按时间持续计算的标准：既有比率（万分之 / ‰ / % 等），又有计算周期
+# （「日万分之五」「年利率6%」「每日按……0.05%」「每逾期一日」「按日」）。
+# 只表示触发期限的「逾期超过30日」不算周期；写明「一次性」的一律不算（#30 复审）
+_RATE_RE = re.compile(r"万分之|千分之|百分之|‰|%|％|厘")
+_PERIOD_RE = re.compile(
+    r"每(?:逾期)?一?[日天月年]|按[日天月年]|[日月年](?:利率|息|万分之|千分之|百分之)"
+)
+
+
+def _is_periodic_rate(text: str | None) -> bool:
+    return bool(
+        text
+        and "一次性" not in text
+        and _RATE_RE.search(text)
+        and _PERIOD_RE.search(text)
+    )
+
+
 def interest_basis_field(fields: dict) -> dict:
-    """合同有甲方逾期付款的利率约定就用约定（待核实措辞），否则 LPR 常规话术。"""
+    """
+    合同有甲方逾期付款的利率约定就用约定（待核实措辞），否则 LPR 常规话术。
+    约定的是违约金、却没有按日 / 按月 / 按年的计算标准（固定金额、一次性比例或没识别到）时，
+    不套用 LPR 持续计付：计算标准留【待补充】交律师（#30，写法待律师确认）。
+    """
     breach = _str_value(fields, "breach_interest_rate_text")
+    if _breach_is_penalty(fields) and not _is_periodic_rate(breach):
+        return {
+            "value": None,
+            "src": "合同约定违约金，但未识别到按日 / 按年等可持续计算的标准"
+            "（可能是固定金额或一次性比例），计算方式请律师确认，不套用 LPR",
+        }
     if breach:
         return {
             "value": breach,
@@ -461,12 +525,13 @@ def _jurisdiction(fields: dict) -> tuple[str, str | None, str]:
 
 
 def _site_place(fields: dict, delivery: bool) -> tuple[str | None, str]:
-    """工程所在地 / 交货地点的取值与名称（买卖合同约定交货地点法院时取交货地点）。"""
+    """
+    工程所在地 / 交货地点的取值与名称。约定交货地点法院时只取合同约定的交货地点：
+    没抽到就是没有，不拿工程地点充当交货地点（#29）。
+    """
     if delivery:
-        place = _str_value(fields, "delivery_place")
-        if place:
-            return place, "交货地点"
-    return _str_value(fields, "project_site"), "交货地点" if delivery else "工程所在地"
+        return _str_value(fields, "delivery_place"), "交货地点"
+    return _str_value(fields, "project_site"), "工程所在地"
 
 
 def _site_jurisdiction(fields: dict, delivery: bool) -> tuple[str, str | None, str]:
@@ -485,10 +550,14 @@ def _site_jurisdiction(fields: dict, delivery: bool) -> tuple[str, str | None, s
         return (
             mode,
             district,
-            f"{label}「{place or '未识别'}」未写明区县，系统按验收报告安装地点「{install}」"
+            f"{_place_desc(label, place)}，系统按验收报告安装地点「{install}」"
             "推断，待核实管辖",
         )
-    return mode, None, f"{label}「{place or '未识别'}」未写明区县，请律师确定管辖法院"
+    return mode, None, f"{_place_desc(label, place)}，请律师确定管辖法院"
+
+
+def _place_desc(label: str, place: str | None) -> str:
+    return f"{label}「{place}」未写明区县" if place else f"合同{label}未识别"
 
 
 def court_district_field(fields: dict) -> dict:
@@ -516,6 +585,20 @@ def document_kind_field(fields: dict) -> dict:
     return {"value": "民事起诉状", "src": "争议条款约定诉讼"}
 
 
+def _inferred_court_note(fields: dict, place: str | None) -> str:
+    """
+    法院辖区是按验收报告安装地点推断的（约定地点没写区县）时，在管辖句里直接写明依据，
+    让律师在文书里就看到这是系统推断、不是合同约定（#29 复审）。律师改过法院则不加。
+    """
+    court = fields.get("court_district")
+    if _lawyer_edited(court) or derive_court_district(place):
+        return ""
+    install = _str_value(fields, "install_address")
+    if not (install and derive_court_district(install)):
+        return ""
+    return f"【系统按验收报告安装地点「{install}」推断，待核实】"
+
+
 def jurisdiction_text_field(fields: dict) -> dict:
     """争议条款之后的管辖句（第 13 题、补 6 的各种写法 + 工程所在地的模板原句）。"""
     mode, _, note = _jurisdiction(fields)
@@ -526,8 +609,8 @@ def jurisdiction_text_field(fields: dict) -> dict:
     elif mode in ("site", "delivery"):
         place, label = _site_place(fields, mode == "delivery")
         text = (
-            f"因{label}为{place or _MISSING}，属{court}法院辖区，"
-            f"故原告向{court}人民法院提起诉讼。"
+            f"因{label}为{place or _MISSING}，属{court}法院辖区"
+            f"{_inferred_court_note(fields, place)}，故原告向{court}人民法院提起诉讼。"
         )
     elif mode == "general":
         text = f"{_GENERAL_JURISDICTION_BASIS}，故原告向{court}人民法院提起诉讼。"
