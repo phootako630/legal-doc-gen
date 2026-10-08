@@ -8,6 +8,7 @@ import type {
   ExtractedFields,
   ParsedFile,
   CaseState,
+  FeedbackRequest,
 } from './types';
 
 const BASE = '/api';
@@ -158,4 +159,14 @@ export async function generateComplaint(
   });
   if (!res.ok) throw await extractError(res, '起诉状生成失败');
   return res.json() as Promise<GenerateResponse>;
+}
+
+/** 提交律师对某个字段（或整体）的问题反馈 */
+export async function submitFeedback(req: FeedbackRequest): Promise<void> {
+  const res = await safeFetch(`${BASE}/feedback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) throw await extractError(res, '反馈提交失败');
 }

@@ -10,6 +10,9 @@
 #
 # 幂等：analyze_keys 记录「请求编号（Idempotency-Key）→ 会话」，同一编号的重复分析请求
 # 直接返回已有会话，不再重跑 OCR / LLM（见 runner.run_analyze_once）。随会话一起过期清除。
+#
+# 律师反馈：feedback 表存律师在审核页提交的问题（分类 + 可选文字说明）。文字说明可能
+# 含案件内容，属案件数据：与 checkpoint 同库同权限，随会话一起过期清除，不进运行日志。
 from __future__ import annotations
 
 import asyncio
@@ -67,6 +70,12 @@ async def get_saver() -> AsyncSqliteSaver:
                 "(key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, "
                 "run_id TEXT NOT NULL, created_at REAL NOT NULL)"
             )
+            await conn.execute(
+                "CREATE TABLE IF NOT EXISTS feedback "
+                "(id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, "
+                "field_key TEXT, category TEXT NOT NULL, comment TEXT, "
+                "created_at REAL NOT NULL)"
+            )
             await conn.commit()
             saver = AsyncSqliteSaver(conn)
             await saver.setup()
@@ -123,8 +132,10 @@ async def purge_expired(retention_days: float | None = None) -> int:
         await saver.adelete_thread(thread_id)
         await _conn.execute("DELETE FROM run_meta WHERE thread_id = ?", (thread_id,))
         await _conn.execute("DELETE FROM analyze_keys WHERE run_id = ?", (thread_id,))
-    # 兜底：会话登记已不在的过期编号也一并清掉
+        await _conn.execute("DELETE FROM feedback WHERE run_id = ?", (thread_id,))
+    # 兜底：会话登记已不在的过期编号 / 反馈也一并清掉
     await _conn.execute("DELETE FROM analyze_keys WHERE created_at < ?", (cutoff,))
+    await _conn.execute("DELETE FROM feedback WHERE created_at < ?", (cutoff,))
     await _conn.commit()
     return len(expired)
 
@@ -158,3 +169,42 @@ async def forget_analyze_key(key: str) -> None:
     assert _conn is not None
     await _conn.execute("DELETE FROM analyze_keys WHERE key = ?", (key,))
     await _conn.commit()
+
+
+async def run_exists(run_id: str) -> bool:
+    """会话是否登记过（分析过且未被清除）。"""
+    await get_saver()
+    assert _conn is not None
+    async with _conn.execute(
+        "SELECT 1 FROM run_meta WHERE thread_id = ?", (run_id,)
+    ) as cur:
+        return await cur.fetchone() is not None
+
+
+async def save_feedback(
+    run_id: str, field_key: str | None, category: str, comment: str | None
+) -> None:
+    """保存一条律师反馈（随该会话一起过期清除）。"""
+    await get_saver()
+    assert _conn is not None
+    await _conn.execute(
+        "INSERT INTO feedback (run_id, field_key, category, comment, created_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (run_id, field_key, category, comment, time.time()),
+    )
+    await _conn.commit()
+
+
+async def list_feedback(run_id: str | None = None) -> list[dict]:
+    """按时间顺序列出反馈；给 run_id 时只列该会话的。"""
+    await get_saver()
+    assert _conn is not None
+    sql = "SELECT run_id, field_key, category, comment, created_at FROM feedback"
+    args: tuple = ()
+    if run_id is not None:
+        sql += " WHERE run_id = ?"
+        args = (run_id,)
+    async with _conn.execute(sql + " ORDER BY created_at, id", args) as cur:
+        rows = await cur.fetchall()
+    keys = ("run_id", "field_key", "category", "comment", "created_at")
+    return [dict(zip(keys, row)) for row in rows]

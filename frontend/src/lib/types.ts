@@ -245,3 +245,14 @@ export interface BranchHistoryItem {
   source_file: string | null;
   count: number;
 }
+
+/** 律师反馈的问题分类（固定枚举：后端只把分类与字段 key 写进运行日志，不写说明文字） */
+export type FeedbackCategory = 'wrong_value' | 'missing' | 'wrong_source' | 'other';
+
+/** POST /api/feedback 的请求体 */
+export interface FeedbackRequest {
+  run_id: string;
+  field_key: string | null; // 针对的字段；null 表示整体反馈
+  category: FeedbackCategory;
+  comment: string | null; // 可选文字说明（可能含案件内容，后端随案件数据保存、到期删除）
+}

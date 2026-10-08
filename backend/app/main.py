@@ -18,7 +18,15 @@ from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from app.agent.graph import get_graph, reset_graph  # noqa: E402
 from app.agent.runner import retention_loop  # noqa: E402
 from app.config import CORS_ORIGINS  # noqa: E402
-from app.routers import analyze, branches, extract, files, generate, resume  # noqa: E402
+from app.routers import (  # noqa: E402
+    analyze,
+    branches,
+    extract,
+    feedback,
+    files,
+    generate,
+    resume,
+)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -48,6 +56,7 @@ app.include_router(analyze.router, prefix="/api")
 app.include_router(resume.router, prefix="/api")
 app.include_router(generate.router, prefix="/api")
 app.include_router(branches.router, prefix="/api")
+app.include_router(feedback.router, prefix="/api")
 
 
 
