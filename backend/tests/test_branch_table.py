@@ -91,7 +91,7 @@ def test_check_entries_errors_and_warnings():
         bt.normalize_entry({"name": "", "credit_code": GOOD_B}),
     ]
     check = bt.check_entries(entries)
-    assert "「甲公司」重复出现" in check.errors
+    assert "「甲公司」重复出现且内容不同，请保留正确的一行" in check.errors
     assert any("缺少原告名称" in e for e in check.errors)
     assert any("乙公司" in w and "校验位不符" in w for w in check.warnings)
     assert any("乙公司" in w and "住所地" in w for w in check.warnings)

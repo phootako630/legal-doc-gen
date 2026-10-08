@@ -110,6 +110,14 @@ export interface ExtractedFields {
   document_kind?: FieldValue;
   arbitration_institution?: FieldValue;
   addressee?: FieldValue;
+  // 第三轮确认单规则引入的字段
+  breach_clause_text?: FieldValue; // 甲方逾期付款违约条款原文
+  interest_term?: FieldValue; // 派生：违约金 / 逾期付款利息
+  breach_clause_sentence?: FieldValue; // 派生：约定违约金时引用违约条款的一句
+  paid_note?: FieldValue; // 派生：已付款占合同款比例
+  unpaid_note?: FieldValue; // 派生：欠款占合同款比例，或（到期金额-已付）算式
+  delivery_place?: FieldValue; // 买卖合同交货地点
+  install_address?: FieldValue; // 验收报告安装地点（推断管辖用）
 }
 
 /** 交叉校验单项结果（②：由后端确定性代码判定，非 LLM） */

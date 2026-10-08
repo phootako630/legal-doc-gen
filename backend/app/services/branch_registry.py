@@ -41,23 +41,48 @@ def _current(path: str) -> BranchTable | None:
     return table
 
 
-def lookup_plaintiff(
-    plaintiff_name: str | None, path: str | None = None
-) -> PartyInfo | None:
-    """按原告全称查信息表：全称精确匹配优先，其次按「以简称结尾」匹配。"""
-    if not plaintiff_name:
+def _find(name: str | None, path: str | None) -> tuple[dict, BranchTable] | None:
+    """全称精确匹配优先，其次按「以简称结尾」匹配（早期表里分公司只写简称）。"""
+    if not name:
         return None
     table = _current(path or BRANCH_INFO_PATH)
     if not table:
         return None
-    name = normalize_name(plaintiff_name)
+    name = normalize_name(name)
     match = next((e for e in table.entries if e["name"] == name), None)
     if match is None:
         match = next(
             (e for e in table.entries if e["name"] and name.endswith(e["name"])), None
         )
-    if match is None:
+    return (match, table) if match else None
+
+
+def resolve_plaintiff_name(short_name: str | None, path: str | None = None) -> str | None:
+    """
+    审批表里写的公司名 → 信息表中的全称（审批表可能只写后半段，如「杭州工程有限公司」
+    → 表中「日立电梯（中国）有限公司杭州工程有限公司」）。
+    精确匹配，或表中有且只有一个全称以它结尾；否则返回 None（不猜）。
+    """
+    if not short_name:
         return None
+    table = _current(path or BRANCH_INFO_PATH)
+    if not table:
+        return None
+    name = normalize_name(short_name)
+    if any(e["name"] == name for e in table.entries):
+        return name
+    hits = [e["name"] for e in table.entries if e["name"].endswith(name)]
+    return hits[0] if len(hits) == 1 else None
+
+
+def lookup_plaintiff(
+    plaintiff_name: str | None, path: str | None = None
+) -> PartyInfo | None:
+    """按原告全称查信息表：全称精确匹配优先，其次按「以简称结尾」匹配。"""
+    found = _find(plaintiff_name, path)
+    if found is None:
+        return None
+    match, table = found
     return PartyInfo(
         match["credit_code"] or None,
         match["representative"] or None,

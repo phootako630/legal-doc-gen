@@ -99,6 +99,15 @@ def test_preview_then_save_then_restore(client):
 
 
 def test_save_rejects_duplicates(client):
-    dup = [{"name": "甲公司"}, {"name": "甲公司"}]
+    # 同名但内容不同：不知道该留哪一行，拒绝保存
+    dup = [{"name": "甲公司", "address": "甲地"}, {"name": "甲公司", "address": "乙地"}]
     res = client.post("/api/branches", json={"entries": dup}, headers=_admin())
     assert res.status_code == 400 and "重复" in res.json()["detail"]
+
+
+def test_save_merges_identical_duplicates(client):
+    # 同一行抄了两遍（律师表里南通分公司出现两次）：自动合并，不阻止保存
+    row = {"name": "甲公司", "address": "甲地"}
+    res = client.post("/api/branches", json={"entries": [row, row]}, headers=_admin())
+    assert res.status_code == 200
+    assert [e["name"] for e in res.json()["entries"]] == ["甲公司"]
