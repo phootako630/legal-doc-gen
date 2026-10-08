@@ -260,10 +260,11 @@ value=null                    → ❌ 缺失
   - 冲突字段 → `【高亮冲突：<值>】`
   - OCR/扫描来源 → `⚠️ 待核实：<值>`
   - 正常 → 直接写入
-- 格式对齐律师模板：金额只写阿拉伯数字（模板自带 `¥…元`），日期 `2024年2月26日`（不补零）；未付款算式写 `（总额-已付）`。
+- 格式对齐律师模板：金额只写阿拉伯数字（模板自带 `¥…元`），日期 `2024年2月26日`（不补零）；已付 / 欠款默认写占合同款比例，二者之和不等于总价时写算式（见下）。
+- 可选占位符（`complaint_renderer._OPTIONAL_KEYS`：违约条款引用、已付 / 欠款括注）：规则判定不需要时值为空串，渲染为空、不算【待补充】、不计入就绪度。
 - 导出 Word 保留黄色高亮：`/api/generate` 把每个填空值包在 `⟦…⟧` 里（`render_complaint(mark_fills=True)`），前端预览标浅黄、Word 导出转为黄色突出显示，供律师最后复核。
 - **律师确认的填写规则**（两份《起诉状规则确认单》，确定性代码实现于 `services/derived_fields.py`，律师改过的值不覆盖）：
-  - 原告：买卖合同 = 总公司全称（`PLAINTIFF_HQ_NAME`，第三行写「法定代表人」）；安装合同 = 总公司全称 + 审批表「合同分公司」路径中的第一个分公司（第三行写「负责人」）；再与合同盖章页乙方（`contract_party_b`）核对，不一致以合同乙方为准并标待核实；电话固定 `PLAINTIFF_PHONE`；信用代码 / 负责人 / 住址取原告信息表（见下「原告信息表」）
+  - 原告：买卖合同 = 总公司全称（`PLAINTIFF_HQ_NAME`）；安装合同 = 总公司全称 + 审批表「合同分公司」路径中的第一个分公司；路径里是独立的工程 / 营销公司（以「有限公司」结尾、非总公司）时原告就是该公司，按原告信息表补全称，查不到标待核实；「合同分公司」未填时取合同盖章页乙方 / 安装方 / 安装单位。再与合同盖章页乙方（`contract_party_b`）核对，不一致以合同乙方为准并标待核实；第三行：分公司写「负责人」，总公司和独立公司写「法定代表人」；只有总公司在姓名后加职务（`PLAINTIFF_HQ_REP_TITLE`，「张三，董事长」）；电话固定 `PLAINTIFF_PHONE`；信用代码 / 负责人 / 住址取原告信息表（见下「原告信息表」）
   - 合同类型（审批表「合同类型」）切换措辞：买卖合同「安装」→「供货」、「安装价格」→「产品价格」
   - 台数：「约定原告负责安装 N 台」取合同台数（`elevator_qty_contract`），「N 台均于……验收合格」取验收报告台数（`elevator_qty`，代码按设备代码计数）。合同与报告不一致时，`contract_scan` 节点补读合同设备清单、数 VGE 型号（家用电梯，无需验收报告，`services/equipment_list.py`）：报告 = 合同 − VGE → 继续并提醒家用电梯；否则 `qty_check` 节点暂停，提醒律师核对报告是否齐全 / 有无补充协议 / 是否口头取消部分电梯，由律师定台数
   - 签约日期：合同盖章页日期；扫描合同未识别时暂取审批表「签约时间」
@@ -273,10 +274,13 @@ value=null                    → ❌ 缺失
   - 付款条款：原文（`payment_clause_text`）+ AI 归纳（`payment_clause_summary`，标「AI 归纳，待核实」），起诉状默认写归纳句
   - 诉请金额 = 审批表「未付款金额」。质保金：合同有质保金时 `retention` 节点暂停，附质保金条款原文与审批表未付质保金，按分期比例给出选项（如 5% → 100% / 95%；满一年 2%、满二年 3% → 100% / 97% / 95%），律师选定「支付至 X% 合同款」
   - 「案涉电梯已全部移交物业」固定；合同付款条件含「结算」才加「并办理结算」（`handover_text`）
-  - 逾期利息：合同有甲方逾期付款利率 → 用约定（待核实）；否则「全国银行间同业拆借中心公布的一年期贷款市场报价利率」，自起诉之日起算，基数为欠款金额
-  - 争议条款提到工程所在地 / 签订地 / 履行地时，位置同时引用约定该地点的条款
-  - 管辖句 `jurisdiction_text` 按争议条款生成（一律待核实）：工程所在地 → 模板原句；原告 / 被告所在地 → 「故原告向 XX 人民法院提起诉讼」（XX 为该方住所地市辖区）；未约定地点 → 「依据《民诉法》第24条，故原告向（被告住所地）XX 人民法院提起诉讼」；点名具体法院 → 留待补充交律师；不考虑中级法院
-  - 约定仲裁 → 整篇改为仲裁申请书（`document_kind`）：模板固定文字替换 民事起诉状→仲裁申请书、原告→申请人、被告→被申请人、诉讼请求→仲裁请求、诉讼费用→仲裁费用、提起诉讼→提请仲裁、贵院→贵委、判令/判决→裁决；管辖句「故申请人向 XX 仲裁委员会提请仲裁」，致送合同约定的仲裁机构（`addressee`）
+  - 逾期利息：合同有甲方逾期付款利率 → 用约定（待核实）；否则「全国银行间同业拆借中心公布的一年期贷款市场报价利率」，一律自起诉之日起算，基数为欠款金额
+  - 违约金：合同甲方逾期付款条款写的是「违约金」（`breach_clause_text` / `breach_interest_rate_text` 含「违约金」）→ 诉请与事实理由写「违约金」（`interest_term`），并在违约段落前引用条款「依据合同第X条约定，<原文>。」（`breach_clause_sentence`，待核实）；否则写「逾期付款利息」、不引用。安装 / 买卖合同一样
+  - 已付 / 欠款：已付 + 欠款 = 合同总价 → 写「（占合同款的X%）」（`paid_note` / `unpaid_note`）；不等 → 欠款后写算式「（到期金额-已付款）」，到期金额 = 已付 + 欠款（待核实）
+  - 争议条款提到工程所在地 / 签订地 / 履行地 / 交货地点时，位置同时引用约定该地点的条款
+  - 工程所在地 / 交货地点管辖：地点写到区县的直接采纳；只写了项目名的，按验收报告安装地点（`install_address`）推断并标待核实；仍推不出留【待补充】。约定交货地点法院时取 `delivery_place`，管辖句写「因交货地点为……」
+  - 管辖句 `jurisdiction_text` 按争议条款生成（一律待核实）：工程所在地 → 模板原句；原告 / 被告所在地 → 「故原告向 XX 人民法院提起诉讼」（XX 为该方住所地市辖区）；未约定地点 → 「依据《中华人民共和国民事诉讼法》第二十四条，故原告向（被告住所地）XX 人民法院提起诉讼」；点名具体法院 → 留待补充交律师；不考虑中级法院
+  - 约定仲裁 → 整篇改为仲裁申请书（`document_kind`）：模板固定文字替换 民事起诉状→仲裁申请书、原告→申请人、被告→被申请人、诉讼请求→仲裁请求、诉讼费用→仲裁费用、提起诉讼→提请仲裁、自起诉之日起→自申请仲裁之日起、诉至贵院→提请贵委仲裁、祈判如所请→祈裁如所请、贵院→贵委、判令/判决→裁决；管辖句「故申请人向 XX 仲裁委员会提请仲裁」，致送合同约定的仲裁机构（`addressee`）
   - 不附付款进度表（由办案律师自行决定）
   - 派生值随依据刷新：依据变了（如律师更换原告）而规则推不出新值时，清除旧推定值留【待补充】，不残留旧原告的信用代码 / 负责人 / 住址；派生的合同台数沿用合同台数的出处（页码、OCR 待核实标记）
   - 按需 OCR 除付款 / 争议条款外，签约日期还来自审批表或合同乙方未读到时，也以合同签章页为目标（「以下无正文」「签订日期：」「甲方（盖章）」），找到才停
@@ -297,7 +301,7 @@ value=null                    → ❌ 缺失
 
 - 原告的统一社会信用代码、法定代表人 / 负责人、住所地不在案件材料里，取自律师维护的《原告信息表》（Excel：原告名称 | 统一社会信用代码 | 住所地 | 法定代表人\负责人 | 联系方式）。它是全所共用的底表，**不是**每个案件上传的材料。
 - 前端页头「原告信息表」入口：所有人可查看、下载当前 Excel；**只有管理员**（输入服务器 `ADMIN_TOKEN` 口令）能上传新版本或恢复历史版本。系统暂无账号体系，口令经请求头 `X-Admin-Token`（encodeURIComponent 编码）传给后端比对；未配置 `ADMIN_TOKEN` 时任何人都不能更新。
-- 更新分两步：`POST /api/branches/preview` 解析 + 校验 + 与当前版本比对（不保存）→ 管理员确认后 `POST /api/branches` 保存。重名 / 缺名称阻止保存；信用代码校验位不符、缺负责人或住址只提醒。
+- 更新分两步：`POST /api/branches/preview` 解析 + 校验 + 与当前版本比对（不保存）→ 管理员确认后 `POST /api/branches` 保存。完全相同的重复行自动合并并提醒；同名但内容不同 / 缺名称阻止保存；信用代码校验位不符、缺负责人或住址只提醒。
 - 存储：`BRANCH_INFO_PATH`（默认 `backend/data/branch_info.json`），每次更新前旧版本存入 `BRANCH_HISTORY_DIR`，可 `POST /api/branches/restore` 回退。数据留在部署服务器，不进 git。
 - 名称比对前去空白、半角括号转全角（律师表里部分行写「日立电梯(中国)」）。查询按文件修改时间缓存，上传后立即生效、无需重启。
 - 字段来源写「《原告信息表》YYYY-MM-DD 版」；超过 `BRANCH_TABLE_STALE_DAYS`（90 天）未更新或尚未上传时，上传页提醒负责人可能已变更。
@@ -564,6 +568,13 @@ export interface ExtractedFields {
   document_kind?: FieldValue;         // 派生：民事起诉状 / 仲裁申请书
   arbitration_institution?: FieldValue; // 仲裁机构
   addressee?: FieldValue;             // 派生：致送法院 / 仲裁委
+  breach_clause_text?: FieldValue;    // 甲方逾期付款违约条款原文
+  interest_term?: FieldValue;         // 派生：违约金 / 逾期付款利息
+  breach_clause_sentence?: FieldValue; // 派生：约定违约金时引用违约条款的一句
+  paid_note?: FieldValue;             // 派生：已付款占合同款比例
+  unpaid_note?: FieldValue;           // 派生：欠款比例，或（到期金额-已付）算式
+  delivery_place?: FieldValue;        // 买卖合同交货地点
+  install_address?: FieldValue;       // 验收报告安装地点（推断管辖用）
 }
 
 /** 交叉校验单项结果（②） */
@@ -680,6 +691,13 @@ export const fieldNameMap: Record<string, string> = {
   document_kind: '文书类型',
   arbitration_institution: '仲裁机构',
   addressee: '致送（法院 / 仲裁委）',
+  breach_clause_text: '违约条款原文',
+  interest_term: '违约金 / 逾期付款利息',
+  breach_clause_sentence: '违约条款引用（写入起诉状）',
+  paid_note: '已付款比例',
+  unpaid_note: '欠款比例 / 算式',
+  delivery_place: '交货地点',
+  install_address: '安装地点（验收报告）',
 };
 
 /** 审核表格中展示的字段 */
@@ -706,6 +724,8 @@ export const reviewFieldKeys: string[] = [
   'total_amount',
   'paid_amount',
   'unpaid_amount',
+  'paid_note',
+  'unpaid_note',
   'acceptance_latest_date',
   'retention_ratio',
   'retention_clause_text',
@@ -715,11 +735,16 @@ export const reviewFieldKeys: string[] = [
   'payment_clause_location',
   'payment_clause_summary',
   'payment_clause_text',
+  'breach_interest_clause_location',
+  'breach_clause_text',
+  'interest_term',
   'breach_interest_rate_text',
   'interest_rate_basis',
   'dispute_clause_location',
   'dispute_clause_text',
   'project_site',
+  'delivery_place',
+  'install_address',
   'court_district',
   'jurisdiction_text',
   'arbitration_institution',
@@ -771,6 +796,7 @@ BRANCH_INFO_PATH = os.getenv("BRANCH_INFO_PATH", "backend/data/branch_info.json"
 BRANCH_HISTORY_DIR = os.getenv("BRANCH_HISTORY_DIR", "backend/data/branch_history")
 BRANCH_TABLE_STALE_DAYS = 90
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN")   # 管理员口令；未设置则不能更新原告信息表
+PLAINTIFF_HQ_REP_TITLE = "董事长"         # 只有总公司在法定代表人姓名后写职务
 
 # CORS 允许的前端地址
 CORS_ORIGINS = ["http://localhost:5173"]

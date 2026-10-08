@@ -10,21 +10,26 @@
 #   - 管辖：按争议条款约定的地点写管辖句与致送法院；约定仲裁则整篇改为仲裁申请书（第 13 题、补 6）
 #   - 「已全部移交物业并办理结算」：合同付款条件有「结算」才写「并办理结算」（补 5）
 #   - 付款比例：合同有质保金时按律师选择写「支付至 X% 合同款」（第 9 题、补 4）
+#   - 第三轮确认单：违约条款写「违约金」则诉状写违约金并引用条款（第 4 题）；已付 / 欠款默认写
+#     占合同款比例，二者之和不等于总价时写算式（第 6 题）；交货地管辖（第 9 题）；独立工程公司
+#     做原告写自己的全称和「法定代表人」（第 12 题）；只有总公司写职务（第 13 题）；
+#     管辖依据写法律全称（第 16 题）
 # 律师改过的值（src 以「律师」开头）一律保留，不覆盖：AI 只提议，律师拍板。
 from __future__ import annotations
 
 import re
 from collections.abc import Callable
 
-from app.config import PLAINTIFF_HQ_NAME, PLAINTIFF_PHONE
-from app.services.branch_registry import lookup_plaintiff
-from app.services.validators import parse_qty
+from app.config import PLAINTIFF_HQ_NAME, PLAINTIFF_HQ_REP_TITLE, PLAINTIFF_PHONE
+from app.services.branch_registry import lookup_plaintiff, resolve_plaintiff_name
+from app.services.branch_table import normalize_name
+from app.services.validators import parse_amount, parse_qty
 
 # 逾期付款利息的常规话术（诉状中"按照……计至实际付清之日止"）
 # 补充确认单第 3 题：以「全国银行间同业拆借中心公布的一年期贷款市场报价利率」为准
 LPR_INTEREST_BASIS = "全国银行间同业拆借中心公布的一年期贷款市场报价利率"
-# 未约定管辖地点时的依据（补充确认单第 6 题：第24条，不引条文原文）
-_GENERAL_JURISDICTION_BASIS = "依据《民诉法》第24条"
+# 未约定管辖地点时的依据（补充确认单第 6 题：第24条，不引条文原文；第三轮第 16 题：写法律全称）
+_GENERAL_JURISDICTION_BASIS = "依据《中华人民共和国民事诉讼法》第二十四条"
 _MISSING = "【待补充】"
 
 _CJK = "\\u4e00-\\u9fa5"  # 常用汉字区间（正则转义形式）
@@ -41,7 +46,8 @@ _PLAINTIFF_SIDE = "原告|乙方|承包方|承包人|卖方|供方|出卖人"
 _DEFENDANT_SIDE = "被告|甲方|发包方|发包人|买方|需方"
 _PLAINTIFF_SEAT_RE = re.compile(f"(?:{_PLAINTIFF_SIDE})(?:所在地|住所地)")
 _DEFENDANT_SEAT_RE = re.compile(f"(?:{_DEFENDANT_SIDE})(?:所在地|住所地)")
-_SITE_RE = re.compile(r"工程所在地|项目所在地|合同履行地|履行地")
+_SITE_RE = re.compile(r"工程所在地|项目所在地|合同履行地|履行地|交货地")
+_DELIVERY_RE = re.compile(r"交货地")
 _SIGN_PLACE_RE = re.compile(r"合同签订地|签订地")
 _PERCENT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%")
 # 争议条款里的仲裁机构名（LLM 未抽出时的兜底）；去掉前面的动词
@@ -87,23 +93,37 @@ def contract_kind(fields: dict) -> str:
     return "安装"
 
 
+def _is_branch(name: str) -> bool:
+    return name.endswith("分公司")
+
+
 def derive_plaintiff_name(kind: str, branch_raw: str | None) -> tuple[str, bool] | None:
     """
     原告全称。返回 (名称, 是否需核实)；推不出返回 None。
     安装合同取「合同分公司」路径中第一个以「分公司」结尾的层级（如「集团/营销网络/江苏分公司」
-    → 江苏分公司）；路径里有多个分公司时仍取第一个，但标待核实（律师尚在确认多级写法）。
+    → 江苏分公司），前面拼总公司全称；路径里有多个分公司时仍取第一个，但标待核实。
+    路径里是独立的工程 / 营销公司（以「有限公司」结尾、不是总公司本身，如「无锡日立电梯工程
+    有限公司」）时，原告就是该公司，不拼总公司（第三轮确认单第 12 题）；写的是简称时按原告信息表
+    补成全称。
     """
     if kind == "买卖":
         return PLAINTIFF_HQ_NAME, False
     if not branch_raw:
         return None
-    segments = [re.sub(r"\s+", "", s) for s in re.split(r"[/／\\\\>]", branch_raw)]
-    branches = [s for s in segments if s.endswith("分公司")]
-    if not branches:
+    hq = normalize_name(PLAINTIFF_HQ_NAME)
+    segments = [normalize_name(s) for s in re.split(r"[/／\\\\>]", branch_raw)]
+    candidates = [
+        s for s in segments if _is_branch(s) or (s.endswith("有限公司") and s != hq)
+    ]
+    if not candidates:
         return None
-    name = branches[0]
-    full = name if name.startswith(PLAINTIFF_HQ_NAME) else PLAINTIFF_HQ_NAME + name
-    return full, len(branches) > 1
+    name = candidates[0]
+    if _is_branch(name):
+        full = name if name.startswith(hq) else hq + name
+        return full, sum(_is_branch(s) for s in segments) > 1
+    # 独立公司：信息表里有就用表中全称；查不到照抄并标待核实（可能是简称）
+    resolved = resolve_plaintiff_name(name)
+    return (resolved, False) if resolved else (name, True)
 
 
 def _compact(text: str | None) -> str | None:
@@ -122,14 +142,23 @@ def plaintiff_name_field(fields: dict) -> dict | None:
     if derived is None:
         if not party_b:
             return None
-        return {"value": party_b, "src": "取自合同盖章页乙方名称", "channel": "text"}
+        # 审批表「合同分公司」未填（独立工程公司签约时常见）：以合同盖章页乙方为准（第三轮第 12 题）
+        return {
+            "value": party_b,
+            "src": "按律师规则：审批表「合同分公司」未识别，取自合同盖章页乙方 / 安装方名称",
+            "channel": "text",
+        }
     name, uncertain = derived
     if kind == "买卖":
         src = "按律师规则：买卖合同原告为总公司"
-    else:
+    elif _is_branch(name):
         src = f"按律师规则：总公司全称 + 审批表「合同分公司」（{branch_raw}）中的分公司"
         if uncertain:
             src += "；路径中有多个分公司，待核实"
+    else:
+        src = f"按律师规则：审批表「合同分公司」（{branch_raw}）为独立公司，写该公司全称"
+        if uncertain:
+            src += "；原告信息表中未找到该公司，待核实"
     if party_b and party_b != name:
         return {
             "value": party_b,
@@ -142,9 +171,18 @@ def plaintiff_name_field(fields: dict) -> dict | None:
 
 
 def plaintiff_rep_label_field(fields: dict) -> dict:
-    """原告第三行标签：总公司（买卖合同）写「法定代表人」，分公司写「负责人」（补充确认单第 7 题）。"""
-    label = "法定代表人" if contract_kind(fields) == "买卖" else "负责人"
-    return {"value": label, "src": "合同类型"}
+    """
+    原告第三行标签：分公司写「负责人」，总公司和独立公司写「法定代表人」
+    （补充确认单第 7 题、第三轮第 12 题）。原告名称未定时按合同类型判断。
+    """
+    name = _str_value(fields, "plaintiff_name_final")
+    if name:
+        is_branch = _is_branch(normalize_name(name))
+        src = "原告名称为分公司" if is_branch else "原告名称为公司（非分公司）"
+    else:
+        is_branch = contract_kind(fields) != "买卖"
+        src = "合同类型"
+    return {"value": "负责人" if is_branch else "法定代表人", "src": src}
 
 
 def plaintiff_phone_field(_fields: dict) -> dict:
@@ -171,6 +209,26 @@ def _registry_field(attr: str) -> Callable[[dict], dict | None]:
         return {"value": value, "src": src, "channel": "text"}
 
     return derive
+
+
+def plaintiff_rep_field(fields: dict) -> dict | None:
+    """
+    原告法定代表人 / 负责人：取原告信息表；总公司在姓名后加职务（「张三，董事长」），
+    分公司和独立公司不写职务（第三轮确认单第 13 题）。表里已写了职务的不重复加。
+    """
+    node = _registry_field("person_in_charge")(fields)
+    if node is None:
+        return None
+    name = normalize_name(_str_value(fields, "plaintiff_name_final") or "")
+    person = str(node["value"])
+    if (
+        name == normalize_name(PLAINTIFF_HQ_NAME)
+        and PLAINTIFF_HQ_REP_TITLE
+        and PLAINTIFF_HQ_REP_TITLE not in person
+    ):
+        node["value"] = f"{person}，{PLAINTIFF_HQ_REP_TITLE}"
+        node["src"] += f"；按律师规则：总公司加职务「{PLAINTIFF_HQ_REP_TITLE}」"
+    return node
 
 
 def contract_action_field(fields: dict) -> dict:
@@ -258,7 +316,41 @@ def handover_text_field(fields: dict) -> dict:
     return {"value": "已全部移交物业", "src": "合同付款条件未约定结算"}
 
 
-# ── 逾期利息 ──────────────────────────────────────────────────────────────────
+# ── 逾期利息 / 违约金 ─────────────────────────────────────────────────────────
+def _breach_is_penalty(fields: dict) -> bool:
+    """合同的甲方逾期付款条款写的是「违约金」（而非利息）。"""
+    text = (_str_value(fields, "breach_clause_text") or "") + (
+        _str_value(fields, "breach_interest_rate_text") or ""
+    )
+    return "违约金" in text
+
+
+def interest_term_field(fields: dict) -> dict:
+    """
+    诉请第 2 项与事实理由的措辞：合同违约条款约定的是「违约金」就写违约金，
+    否则写「逾期付款利息」（第三轮确认单第 4 题，安装 / 买卖合同一样）。
+    """
+    if _breach_is_penalty(fields):
+        return {"value": "违约金", "src": "合同甲方逾期付款条款约定为违约金"}
+    return {"value": "逾期付款利息", "src": "合同未约定甲方逾期付款违约金"}
+
+
+def breach_clause_sentence_field(fields: dict) -> dict:
+    """
+    约定违约金时在违约段落前引用违约条款：「依据合同第11.4条约定，……。」（第三轮第 4 题）。
+    没有违约金约定时为空串：模板中这一句整句不出现，不算待补充。
+    """
+    if not _breach_is_penalty(fields):
+        return {"value": "", "src": "合同未约定违约金，不引用违约条款"}
+    location = _str_value(fields, "breach_interest_clause_location") or _MISSING
+    text = (_str_value(fields, "breach_clause_text") or _MISSING).rstrip("。；;，, ")
+    return {
+        "value": f"依据合同{location}约定，{text}。",
+        "src": "按律师规则：合同约定违约金，引用违约条款原文，待核实",
+        "channel": "text",
+    }
+
+
 def interest_basis_field(fields: dict) -> dict:
     """合同有甲方逾期付款的利率约定就用约定（待核实措辞），否则 LPR 常规话术。"""
     breach = _str_value(fields, "breach_interest_rate_text")
@@ -275,11 +367,64 @@ def interest_basis_field(fields: dict) -> dict:
     }
 
 
+# ── 已付 / 欠款的写法 ────────────────────────────────────────────────────────
+def _amount_parts(fields: dict) -> tuple[float | None, float | None, float | None]:
+    return (
+        parse_amount(_node(fields, "total_amount").get("value")),
+        parse_amount(_node(fields, "paid_amount").get("value")),
+        parse_amount(_node(fields, "unpaid_amount").get("value")),
+    )
+
+
+def _plain_number(num: float) -> str:
+    """金额 / 比例的数字写法：到分，去掉多余尾零（256266.80 → 256266.8）。"""
+    return f"{num:.2f}".rstrip("0").rstrip(".")
+
+
+def _ratio_mode(fields: dict) -> bool | None:
+    """
+    第三轮确认单第 6 题：已付 + 欠款 = 合同总价 → 写「占合同款的 X%」（True）；
+    不等（如尚有未到期的质保金）→ 写算式「（到期金额-已付）」（False）。已付或欠款缺失 → None。
+    """
+    total, paid, unpaid = _amount_parts(fields)
+    if paid is None or unpaid is None:
+        return None
+    return total is not None and total > 0 and abs(total - paid - unpaid) <= 0.01
+
+
+def paid_note_field(fields: dict) -> dict:
+    """「仅支付了¥X元（占合同款的80%）」括号部分；写算式时为空。"""
+    total, paid, _ = _amount_parts(fields)
+    if _ratio_mode(fields) and total and paid is not None:
+        return {
+            "value": f"（占合同款的{_plain_number(paid / total * 100)}%）",
+            "src": "按律师规则：已付 + 欠款 = 合同总价，写占合同款比例",
+        }
+    return {"value": "", "src": "不写比例"}
+
+
+def unpaid_note_field(fields: dict) -> dict:
+    """「尚欠剩余合同款¥Y元（占合同款的20%）」或「（到期金额-已付）」算式。"""
+    mode = _ratio_mode(fields)
+    total, paid, unpaid = _amount_parts(fields)
+    if mode is None or paid is None or unpaid is None:
+        return {"value": "", "src": "已付或欠款金额缺失，不写比例 / 算式"}
+    if mode and total:
+        return {
+            "value": f"（占合同款的{_plain_number(unpaid / total * 100)}%）",
+            "src": "按律师规则：已付 + 欠款 = 合同总价，写占合同款比例",
+        }
+    return {
+        "value": f"（{_plain_number(paid + unpaid)}-{_plain_number(paid)}）",
+        "src": "按律师规则：已付 + 欠款 ≠ 合同总价，写算式（到期金额-已付款），待核实",
+    }
+
+
 # ── 管辖 ──────────────────────────────────────────────────────────────────────
 def _jurisdiction(fields: dict) -> tuple[str, str | None, str]:
     """
     按争议条款判定管辖方式，返回 (方式, 法院辖区或法院名, 说明)。
-    方式：arbitration / named / plaintiff / defendant / sign_place / site / general。
+    方式：arbitration / named / plaintiff / defendant / sign_place / site / delivery / general。
     """
     dispute = re.sub(r"\s+", "", _str_value(fields, "dispute_clause_text") or "")
     if "仲裁" in dispute:
@@ -306,18 +451,44 @@ def _jurisdiction(fields: dict) -> tuple[str, str | None, str]:
     if _SIGN_PLACE_RE.search(dispute) and not _SITE_RE.search(dispute):
         return "sign_place", None, "约定合同签订地法院，请律师确定具体法院"
     if _SITE_RE.search(dispute) or not dispute:
-        site = _str_value(fields, "project_site")
-        return (
-            "site",
-            derive_court_district(site),
-            f"按工程所在地「{site or '未识别'}」推定，待核实管辖",
-        )
+        return _site_jurisdiction(fields, delivery=bool(_DELIVERY_RE.search(dispute)))
     addr = _str_value(fields, "defendant_address")
     return (
         "general",
         derive_court_district(addr),
         "未约定具体地点，按被告住所地推定，待核实",
     )
+
+
+def _site_place(fields: dict, delivery: bool) -> tuple[str | None, str]:
+    """工程所在地 / 交货地点的取值与名称（买卖合同约定交货地点法院时取交货地点）。"""
+    if delivery:
+        place = _str_value(fields, "delivery_place")
+        if place:
+            return place, "交货地点"
+    return _str_value(fields, "project_site"), "交货地点" if delivery else "工程所在地"
+
+
+def _site_jurisdiction(fields: dict, delivery: bool) -> tuple[str, str | None, str]:
+    """
+    按工程所在地 / 交货地点推定法院辖区。地点写到区县的直接采纳；只写了项目名的，
+    按验收报告的安装地点推断并提醒律师（第三轮确认单第 9 题）。
+    """
+    mode = "delivery" if delivery else "site"
+    place, label = _site_place(fields, delivery)
+    district = derive_court_district(place)
+    if district:
+        return mode, district, f"按{label}「{place}」推定，待核实管辖"
+    install = _str_value(fields, "install_address")
+    district = derive_court_district(install)
+    if district:
+        return (
+            mode,
+            district,
+            f"{label}「{place or '未识别'}」未写明区县，系统按验收报告安装地点「{install}」"
+            "推断，待核实管辖",
+        )
+    return mode, None, f"{label}「{place or '未识别'}」未写明区县，请律师确定管辖法院"
 
 
 def court_district_field(fields: dict) -> dict:
@@ -352,9 +523,12 @@ def jurisdiction_text_field(fields: dict) -> dict:
     if mode == "arbitration":
         body = arbitration_institution(fields) or _MISSING
         text = f"故申请人向{body}提请仲裁。"
-    elif mode == "site":
-        site = _str_value(fields, "project_site") or _MISSING
-        text = f"因工程所在地为{site}，属{court}法院辖区，故原告向{court}人民法院提起诉讼。"
+    elif mode in ("site", "delivery"):
+        place, label = _site_place(fields, mode == "delivery")
+        text = (
+            f"因{label}为{place or _MISSING}，属{court}法院辖区，"
+            f"故原告向{court}人民法院提起诉讼。"
+        )
     elif mode == "general":
         text = f"{_GENERAL_JURISDICTION_BASIS}，故原告向{court}人民法院提起诉讼。"
     else:
@@ -432,14 +606,18 @@ _DERIVERS: list[tuple[str, Callable[[dict], dict | None], bool]] = [
     ("plaintiff_rep_label", plaintiff_rep_label_field, True),
     ("plaintiff_phone", plaintiff_phone_field, True),
     ("plaintiff_credit_code", _registry_field("credit_code"), True),
-    ("plaintiff_person_in_charge", _registry_field("person_in_charge"), True),
+    ("plaintiff_person_in_charge", plaintiff_rep_field, True),
     ("plaintiff_address", _registry_field("address"), True),
     ("contract_action", contract_action_field, True),
     ("price_term", price_term_field, True),
     ("elevator_qty_contract", elevator_qty_contract_field, True),
     ("elevator_qty", elevator_qty_field, True),
     ("handover_text", handover_text_field, False),
+    ("interest_term", interest_term_field, True),
+    ("breach_clause_sentence", breach_clause_sentence_field, False),
     ("interest_rate_basis", interest_basis_field, False),
+    ("paid_note", paid_note_field, True),
+    ("unpaid_note", unpaid_note_field, True),
     ("document_kind", document_kind_field, False),
     ("court_district", court_district_field, False),
     ("jurisdiction_text", jurisdiction_text_field, False),

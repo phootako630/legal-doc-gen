@@ -165,6 +165,7 @@ async def preview_branches(file: UploadFile = File(...)) -> PreviewResponse:
         entries = bt.parse_table(filename, content)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    entries, merged = bt.dedupe_entries(entries)
     check = bt.check_entries(entries)
     current = bt.load_table(config.BRANCH_INFO_PATH)
     diff = bt.diff_entries(current.entries if current else [], entries)
@@ -172,7 +173,7 @@ async def preview_branches(file: UploadFile = File(...)) -> PreviewResponse:
         source_file=filename,
         entries=[BranchEntry(**e) for e in entries],
         errors=check.errors,
-        warnings=check.warnings,
+        warnings=merged + check.warnings,
         diff=[DiffItem(**d) for d in diff],  # type: ignore[arg-type]
     )
 
@@ -184,7 +185,9 @@ async def preview_branches(file: UploadFile = File(...)) -> PreviewResponse:
 )
 async def save_branches(req: SaveRequest) -> BranchTableResponse:
     """保存为当前表（服务端重新规范化与校验；有错误拒绝保存）。"""
-    entries = [bt.normalize_entry(e.model_dump()) for e in req.entries]
+    entries, _ = bt.dedupe_entries(
+        [bt.normalize_entry(e.model_dump()) for e in req.entries]
+    )
     check = bt.check_entries(entries)
     if check.errors:
         raise HTTPException(status_code=400, detail="；".join(check.errors))

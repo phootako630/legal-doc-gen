@@ -196,8 +196,12 @@ def _contacts_display(contacts: object) -> str:
     return f"⚠️ 待核实：{text}" if uncertain else text
 
 
-# 随合同类型切换的模板措辞（安装/供货、安装价格/产品价格）：不是填空，不标注、不高亮
-_WORDING_KEYS = {"contract_action", "price_term", "plaintiff_rep_label"}
+# 随合同类型切换的模板措辞（安装/供货、安装价格/产品价格、违约金/逾期付款利息）：
+# 不是填空，不标注、不高亮
+_WORDING_KEYS = {"contract_action", "price_term", "plaintiff_rep_label", "interest_term"}
+# 可有可无的句子 / 括注（违约条款引用、已付与欠款的比例或算式）：规则判定不需要时为空，
+# 渲染为空串，不算【待补充】，也不计入就绪度
+_OPTIONAL_KEYS = {"breach_clause_sentence", "paid_note", "unpaid_note"}
 
 # 约定仲裁时整篇改为仲裁申请书（律师补充确认单第 6 题）。只替换模板的固定文字，不动填入的值；
 # 按顺序替换，「原、被告」须先于单独的「原告」「被告」。
@@ -206,6 +210,10 @@ _ARBITRATION_TERMS: list[tuple[str, str]] = [
     ("诉讼请求", "仲裁请求"),
     ("诉讼费用", "仲裁费用"),
     ("提起诉讼", "提请仲裁"),
+    # 第三轮确认单第 15 题：须在「贵院」「判」等单字替换之前
+    ("自起诉之日起", "自申请仲裁之日起"),
+    ("诉至贵院", "提请贵委仲裁"),
+    ("祈判如所请", "祈裁如所请"),
     ("贵院", "贵委"),
     ("判决", "裁决"),
     ("判令", "裁决"),
@@ -250,6 +258,8 @@ def _annotate(key: str, fields: dict, conflict_keys: set[str]) -> str:
         value, src = node, ""
 
     if value is None or (isinstance(value, str) and value.strip() == ""):
+        if key in _OPTIONAL_KEYS:
+            return ""  # 规则判定此句不需要
         return _MISSING_MARK  # 缺失：字面提示，留给律师手填
 
     base = _base_display(key, value)
@@ -295,6 +305,7 @@ def fill_status(
         k
         for k in dict.fromkeys(_PLACEHOLDER_RE.findall(template))
         if k not in _WORDING_KEYS
+        and not (k in _OPTIONAL_KEYS and _annotate(k, fields, set()) == "")
     ]
     missing = {k for k in keys if _MISSING_MARK in _annotate(k, fields, set())}
     return keys, missing
@@ -314,7 +325,7 @@ def render_complaint(
     def _repl(m: re.Match[str]) -> str:
         key = m.group(1)
         text = _annotate(key, fields, conflict_keys)
-        if mark_fills and key not in _WORDING_KEYS:
+        if mark_fills and key not in _WORDING_KEYS and text:
             return f"{FILL_OPEN}{text}{FILL_CLOSE}"
         return text
 

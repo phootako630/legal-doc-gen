@@ -51,8 +51,10 @@ _ALL_CLAUSE_KEYS = [
     "payment_clause_text",
     "breach_interest_clause_location",
     "breach_interest_rate_text",
+    "breach_clause_text",  # 第三轮第 4 题：约定违约金时引用条款原文
     "dispute_clause_location",
     "dispute_clause_text",
+    "delivery_place",  # 第三轮第 9 题：约定交货地法院时取交货地点
     "payment_clause_summary",
     "retention_ratio",
     "retention_clause_text",

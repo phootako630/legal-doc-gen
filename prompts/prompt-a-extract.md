@@ -28,10 +28,13 @@
 - `retention_ratio`：合同约定的质保金比例合计（如「5%」）；合同明确没有质保金填「无」；找不到填 null
 - `retention_clause_text`：合同质保金条款原文（如「质保期满一年支付2%，满二年支付3%」），找不到填 null
 - `retention_unpaid_amount`：审批表「未付款项构成」中「质保金」一栏的金额（如「0.00元」），照抄
-- `contract_party_b`：合同盖章页（或协议书首部）乙方 / 卖方 / 安装方的全称，照抄
+- `contract_party_b`：合同盖章页（或协议书首部）乙方 / 卖方 / 安装方 / 安装单位的全称，照抄
 - `arbitration_institution`：争议条款约定仲裁时，仲裁机构全称（如「南京仲裁委员会」）；不涉及仲裁填 null
-- `dispute_clause_location` / `dispute_clause_text`：合同「争议解决」条款，location 写如「第二十章第1.1条」。若条款提到「工程所在地」「合同签订地」「合同履行地」，location 同时写出合同中约定该地点的条款，如「第二十章第1.1条及第一条第2款」
+- `dispute_clause_location` / `dispute_clause_text`：合同「争议解决」条款，location 写如「第二十章第1.1条」。若条款提到「工程所在地」「合同签订地」「合同履行地」「交货地点」，location 同时写出合同中约定该地点的条款，如「第二十章第1.1条及第一条第2款」
+- `breach_interest_clause_location` / `breach_interest_rate_text` / `breach_clause_text`：甲方（发包方 / 买方）逾期付款的违约条款，location 写条款编号，rate_text 写能放进「按照____计至实际付清之日止」的短语（如「日万分之零点五的利率」），clause_text 照抄条款原文；乙方工期、施工等方面的违约金不算
 - `project_site`：工程所在地（含省市区的完整地址，如「江苏省南京市雨花台区XX项目」）
+- `delivery_place`：买卖合同约定的交货地点，照抄；没有填 null
+- `install_address`：验收 / 监督检验报告的「安装地点」（或「设备使用地点」），照抄；多份报告取第一份
 
 ## 材料清点结果（第一步已确认）
 
@@ -81,9 +84,12 @@
   "arbitration_institution": {"value": null, "src": ""},
   "breach_interest_clause_location": {"value": null, "src": ""},
   "breach_interest_rate_text": {"value": null, "src": ""},
+  "breach_clause_text": {"value": null, "src": ""},
   "dispute_clause_location": {"value": null, "src": ""},
   "dispute_clause_text": {"value": null, "src": ""},
   "project_site": {"value": null, "src": ""},
+  "delivery_place": {"value": null, "src": ""},
+  "install_address": {"value": null, "src": ""},
   "internet_lookup_status": {"value": null, "src": ""}
 }
 ```

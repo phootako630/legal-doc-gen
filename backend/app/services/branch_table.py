@@ -138,8 +138,26 @@ def parse_table(filename: str, content: bytes) -> list[dict[str, str]]:
 # ── 校验与比对 ──────────────────────────────────────────────────────────────
 
 
+def dedupe_entries(
+    entries: list[dict[str, str]],
+) -> tuple[list[dict[str, str]], list[str]]:
+    """
+    合并完全相同的重复行（律师表里同一家公司抄了两遍），返回 (去重后的条目, 提醒)。
+    同名但内容不同的行不合并，留给 check_entries 报错，由管理员决定保留哪一行。
+    """
+    kept: list[dict[str, str]] = []
+    warnings: list[str] = []
+    for e in entries:
+        if any(e == k for k in kept):
+            if e.get("name"):
+                warnings.append(f"「{e['name']}」重复出现且内容完全相同，已自动合并为一行")
+            continue
+        kept.append(e)
+    return kept, warnings
+
+
 def check_entries(entries: list[dict[str, str]]) -> CheckResult:
-    """缺名称 / 重名 / 空表 → 错误；信用代码不合法、缺负责人或住址 → 提醒。"""
+    """缺名称 / 重名（内容不同）/ 空表 → 错误；信用代码不合法、缺负责人或住址 → 提醒。"""
     result = CheckResult()
     if not entries:
         result.errors.append("表格中没有任何数据行")
@@ -151,7 +169,7 @@ def check_entries(entries: list[dict[str, str]]) -> CheckResult:
             result.errors.append(f"第 {n} 行缺少原告名称")
             continue
         if name in seen:
-            result.errors.append(f"「{name}」重复出现")
+            result.errors.append(f"「{name}」重复出现且内容不同，请保留正确的一行")
         seen.add(name)
         check = validate_credit_code(e.get("credit_code"))
         if not check.passed:
