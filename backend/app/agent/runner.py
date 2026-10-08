@@ -198,12 +198,12 @@ async def _existing_case(run_id: str) -> CaseState | None:
 async def _analyze_and_remember(
     key: str, fingerprint: str, files: list[dict], internet_allowed: bool
 ) -> CaseState:
-    """真正跑一次分析；成功后记下编号。进度条跟着任务走，重复请求不会把它重置。"""
-    llm_progress.begin(total_stages=3)
-    try:
+    """
+    真正跑一次分析；成功后记下编号。进度以请求编号为 id、跟着任务走：
+    重复请求接上同一个任务时共用这条进度，不会把进度条重置，也不会串到别人的分析。
+    """
+    with llm_progress.track(key, total_stages=3):
         case = await run_analyze(files, internet_allowed)
-    finally:
-        llm_progress.finish()
     await checkpoint.save_analyze_key(key, fingerprint, case.run_id)
     return case
 

@@ -34,18 +34,20 @@ async function extractError(res: Response, fallback: string): Promise<Error> {
 }
 
 /** 上传文件，返回解析结果 */
-export async function uploadFiles(files: File[]): Promise<UploadResponse> {
+export async function uploadFiles(files: File[], progressId: string): Promise<UploadResponse> {
   const form = new FormData();
   files.forEach((f) => form.append('files', f));
+  // 进度 id：后端按它隔离进度，多人同时上传时进度条互不串
+  form.append('progress_id', progressId);
   const res = await safeFetch(`${BASE}/upload`, { method: 'POST', body: form });
   if (!res.ok) throw await extractError(res, '上传失败');
   return res.json() as Promise<UploadResponse>;
 }
 
-/** 查询上传处理进度（上传期间轮询用；失败静默返回 null，不打断上传流程） */
-export async function fetchUploadProgress(): Promise<UploadProgress | null> {
+/** 查询某次上传的处理进度（上传期间轮询用；失败静默返回 null，不打断上传流程） */
+export async function fetchUploadProgress(progressId: string): Promise<UploadProgress | null> {
   try {
-    const res = await fetch(`${BASE}/upload/progress`);
+    const res = await fetch(`${BASE}/upload/progress?progress_id=${encodeURIComponent(progressId)}`);
     if (!res.ok) return null;
     return (await res.json()) as UploadProgress;
   } catch {
@@ -88,10 +90,13 @@ export async function extractFields(
   return res.json() as Promise<ExtractResponse>;
 }
 
-/** 查询 agent 任务的处理阶段（analyze/resume 期间轮询用；失败静默返回 null，不打断流程） */
-export async function fetchAnalyzeProgress(): Promise<LlmProgress | null> {
+/**
+ * 查询某次分析的处理阶段（分析期间轮询用；失败静默返回 null，不打断流程）。
+ * requestKey 即该次分析的请求编号（Idempotency-Key），后端按它隔离进度。
+ */
+export async function fetchAnalyzeProgress(requestKey: string): Promise<LlmProgress | null> {
   try {
-    const res = await fetch(`${BASE}/analyze/progress`);
+    const res = await fetch(`${BASE}/analyze/progress?progress_id=${encodeURIComponent(requestKey)}`);
     if (!res.ok) return null;
     return (await res.json()) as LlmProgress;
   } catch {

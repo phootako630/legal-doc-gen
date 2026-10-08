@@ -9,6 +9,7 @@ import { FileDropzone } from './FileDropzone';
 import { FileList } from './FileList';
 import { BranchTableNotice } from '@/components/branches/BranchTableNotice';
 import { uploadFiles, fetchUploadProgress } from '@/lib/api';
+import { newRequestKey } from '@/lib/request-key';
 import type { UploadResponse, UploadProgress } from '@/lib/types';
 import { Globe, Loader2, TriangleAlert, ArrowRight, ScanText } from 'lucide-react';
 
@@ -25,12 +26,16 @@ export function UploadStep({ onDone, onOpenBranches }: UploadStepProps) {
   const [uploadResult, setUploadResult] = useState<UploadResponse | null>(null);
   const [progress, setProgress] = useState<UploadProgress | null>(null);
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  // 本次上传的进度 id：轮询只读自己这次上传的进度，多人同时上传互不干扰
+  const progressIdRef = useRef<string | null>(null);
 
   // 上传期间每秒轮询后端进度；上传结束（loading 变 false）自动停止并清空
   useEffect(() => {
     if (loading) {
       pollTimer.current = setInterval(async () => {
-        const p = await fetchUploadProgress();
+        const pid = progressIdRef.current;
+        if (!pid) return;
+        const p = await fetchUploadProgress(pid);
         // 轮询可能在上传请求返回后才响应，只在任务仍活跃时更新，避免残留旧进度
         if (p?.active) setProgress(p);
       }, 1000);
@@ -64,7 +69,9 @@ export function UploadStep({ onDone, onOpenBranches }: UploadStepProps) {
     setError(null);
     setUploadResult(null);
     try {
-      const result = await uploadFiles(files);
+      const progressId = newRequestKey();
+      progressIdRef.current = progressId;
+      const result = await uploadFiles(files, progressId);
       // 即便 can_proceed 为 true，只要有文件解析失败（如 OCR 出错），也要先让律师看到，
       // 否则失败会被无声吞掉——律师永远不知道某份文件其实没被处理
       if (result.can_proceed && result.warnings.length === 0) {

@@ -2,7 +2,7 @@
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.agent.runner import run_resume
 from app.agent.state import CaseState
@@ -15,20 +15,20 @@ class ResumeRequest(BaseModel):
     run_id: str
     # 冲突选值 / 补录：{字段key: 取值}
     decisions: dict[str, Any] = {}
+    # 可选进度 id：前端需要展示恢复进度时带上（与分析进度同一套接口查询）
+    progress_id: str | None = Field(default=None, max_length=128)
 
 
 @router.post("/resume", response_model=CaseState)
 async def resume(req: ResumeRequest) -> CaseState:
     """在 interrupt 断点处提交决定并恢复；可能再次返回 pending，直至 pending=null。"""
     # 恢复后仅重跑校验节点（校验高亮阶段），仍用同一进度模块驱动前端等待提示
-    llm_progress.begin(total_stages=3)
-    try:
-        return await run_resume(req.run_id, req.decisions)
-    except KeyError as e:
-        raise HTTPException(
-            status_code=404, detail="会话不存在或已过期，请重新分析"
-        ) from e
-    except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=f"恢复失败：{e}") from e
-    finally:
-        llm_progress.finish()
+    with llm_progress.track(req.progress_id, total_stages=3):
+        try:
+            return await run_resume(req.run_id, req.decisions)
+        except KeyError as e:
+            raise HTTPException(
+                status_code=404, detail="会话不存在或已过期，请重新分析"
+            ) from e
+        except RuntimeError as e:
+            raise HTTPException(status_code=500, detail=f"恢复失败：{e}") from e
