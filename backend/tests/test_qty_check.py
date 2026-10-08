@@ -56,7 +56,9 @@ def _qty(contract, acceptance):
     return {
         "elevator_qty_by_contract": {"value": contract, "src": "《合同》"},
         "elevator_qty_by_acceptance": {"value": acceptance, "src": "《验收报告》"},
-        # 条款齐全，不触发条款 OCR
+        # 条款与签章页信息齐全，不触发条款 / 签章页 OCR
+        "contract_sign_date": {"value": "2024年2月26日", "src": "《合同》盖章页"},
+        "contract_party_b": {"value": "某电梯公司", "src": "《合同》盖章页"},
         "payment_clause_text": {"value": "x", "src": "《合同》"},
         "breach_interest_rate_text": {"value": "x", "src": "《合同》"},
         "dispute_clause_text": {"value": "向工程所在地法院起诉", "src": "《合同》"},

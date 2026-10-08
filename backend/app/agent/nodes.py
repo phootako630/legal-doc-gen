@@ -282,6 +282,17 @@ async def _ocr_batch(pdf: bytes, page_nums: list[int]) -> list[dict]:
     return pages
 
 
+def _needs_signature_page(fields: dict) -> bool:
+    """签约日期还是审批表的（或缺失）、合同乙方还没读到 → 需要读到合同签章页。"""
+    sign = fields.get("contract_sign_date")
+    sign_from_approval = (
+        not isinstance(sign, dict)
+        or _is_missing(fields, "contract_sign_date")
+        or "审批表" in str(sign.get("src") or "")
+    )
+    return sign_from_approval or _is_missing(fields, "contract_party_b")
+
+
 async def ocr_augment_node(state: GraphState) -> dict:
     """
     按需 OCR：仅当付款/违约/争议条款字段仍缺失、且存在暂存了字节的扫描合同时，
@@ -291,7 +302,8 @@ async def ocr_augment_node(state: GraphState) -> dict:
     """
     fields = state.get("extracted_fields", {})
     missing = {c for c, key in _CLAUSE_INDICATOR.items() if _is_missing(fields, key)}
-    if not missing:
+    need_signature = _needs_signature_page(fields)
+    if not missing and not need_signature:
         return {}
 
     contracts = [
@@ -319,7 +331,7 @@ async def ocr_augment_node(state: GraphState) -> dict:
     did_ocr = False
 
     for f in contracts:
-        if budget <= 0 or not missing:
+        if budget <= 0 or not (missing or need_signature):
             break
         pdf = file_store.get(f.get("file_id"))
         if pdf is None:
@@ -328,6 +340,9 @@ async def ocr_augment_node(state: GraphState) -> dict:
         # 停止条件：付款、争议是起诉状必需的；违约条款常常没有（没有时律师用 LPR 常规话术），
         # 不因它继续翻页。只缺违约条款时才以它为目标。
         targets = (missing - {"breach"}) or missing
+        # 签约日期、合同乙方以签章页为准：还没从合同读到时，找到签章页才停
+        if need_signature:
+            targets = targets | {"signature"}
         total_pages = min(f.get("page_count") or pdf_page_count(pdf), budget)
         ocr_pages: list[dict] = []
         # 按批并发 OCR（每批 OCR_MAX_CONCURRENCY 页），每批后判断是否已找到目标条款正文

@@ -156,7 +156,11 @@ def plaintiff_phone_field(_fields: dict) -> dict:
 
 
 def _registry_field(attr: str) -> Callable[[dict], dict | None]:
-    """从原告信息表取原告的某一项；表里没有则不派生（保持缺失）。来源注明表的版本日期。"""
+    """
+    从原告信息表取原告的某一项，来源注明表的版本日期。表里没有则返回 None：
+    此前没有值就保持缺失；此前是从表里推出的旧原告的值（律师把原告从甲改成乙），
+    由 apply_derived_fields 清除，不会生成「乙名称 + 甲信息」。
+    """
 
     def derive(fields: dict) -> dict | None:
         info = lookup_plaintiff(_str_value(fields, "plaintiff_name_final"))
@@ -188,7 +192,20 @@ def elevator_qty_contract_field(fields: dict) -> dict | None:
     """「约定原告负责安装 N 台」：取合同约定台数；合同没识别到时退回审批表签约台数（补 2）。"""
     contract = parse_qty(_str_value(fields, "elevator_qty_by_contract"))
     if contract is not None:
-        return {"value": contract, "src": "合同约定台数", "channel": "text"}
+        # 沿用合同台数的出处（页码、命中原文、通道）：扫描合同 OCR 出来的台数必须保留
+        # 「OCR识别，请核实」，否则审核页显示正常、起诉状也不标待核实
+        base = fields.get("elevator_qty_by_contract")
+        node: dict = {"value": contract, "src": "合同约定台数", "channel": "text"}
+        if isinstance(base, dict):
+            base_src = str(base.get("src") or "")
+            if base_src:
+                node["src"] = f"合同约定台数（{base_src}）"
+            for k in ("page", "anchor", "channel", "confidence"):
+                if base.get(k) is not None:
+                    node[k] = base[k]
+            if node["channel"] == "ocr" and "OCR" not in node["src"]:
+                node["src"] += "（OCR识别，请核实）"
+        return node
     approval = parse_qty(_str_value(fields, "elevator_qty_by_approval"))
     if approval is not None:
         return {"value": approval, "src": "合同台数未识别，暂取审批表签约台数，待核实"}
@@ -453,4 +470,11 @@ def apply_derived_fields(fields: dict) -> dict:
         result = derive(fields)
         if result is not None:
             fields[key] = {**result, "derived": True}
+        elif was_derived:
+            # 之前由规则推出、现在依据没了（如律师改了上游字段）：清掉旧推定值，不留过期结论
+            fields[key] = {
+                "value": None,
+                "src": "依据已变更（如原告已更换），原自动填写的值已清除，待补充",
+                "derived": True,
+            }
     return fields
