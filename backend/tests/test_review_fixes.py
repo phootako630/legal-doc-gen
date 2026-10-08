@@ -33,10 +33,14 @@ def test_missing_delivery_place_infers_from_install_address_not_project_site():
     text = fields["jurisdiction_text"]["value"]
     assert "南京" not in text
     assert text == (
-        "因交货地点为【待补充】，属苏州市乙区法院辖区，故原告向苏州市乙区人民法院提起诉讼。"
+        "因交货地点为【待补充】，属苏州市乙区法院辖区"
+        "【系统按验收报告安装地点「苏州市乙区某路」推断，待核实】，"
+        "故原告向苏州市乙区人民法院提起诉讼。"
     )
+    # 律师在最终文书里就能看到法院是系统推断及其依据
     rendered = render_complaint(fields, template="{{jurisdiction_text}}")
     assert rendered.startswith("⚠️ 待核实：") and "南京" not in rendered
+    assert "系统按验收报告安装地点「苏州市乙区某路」推断" in rendered
 
 
 def test_missing_delivery_place_without_install_address_is_left_blank():
@@ -57,13 +61,30 @@ def test_delivery_place_with_district_wins_over_other_places():
         )
     )
     assert fields["court_district"]["value"] == "无锡市丙区"
-    assert "因交货地点为无锡市丙区某工地" in fields["jurisdiction_text"]["value"]
+    text = fields["jurisdiction_text"]["value"]
+    assert "因交货地点为无锡市丙区某工地" in text and "推断" not in text
+
+
+def test_project_site_without_district_also_notes_inference():
+    fields = apply_derived_fields(
+        _f(
+            dispute_clause_text="向工程所在地人民法院起诉",
+            project_site="某某花园项目",
+            install_address="苏州市乙区某路",
+        )
+    )
+    assert (
+        "【系统按验收报告安装地点「苏州市乙区某路」推断，待核实】"
+        in (fields["jurisdiction_text"]["value"])
+    )
 
 
 def test_lawyer_set_court_is_kept():
     fields = _f(dispute_clause_text=_DELIVERY, install_address="苏州市乙区某路")
     fields["court_district"] = {"value": "常州市丁区", "src": "律师人工确认修改"}
-    assert apply_derived_fields(fields)["court_district"]["value"] == "常州市丁区"
+    fields = apply_derived_fields(fields)
+    assert fields["court_district"]["value"] == "常州市丁区"
+    assert "推断" not in fields["jurisdiction_text"]["value"]
 
 
 def test_project_site_jurisdiction_unchanged():
@@ -113,20 +134,36 @@ def test_lump_sum_penalty_does_not_use_lpr(clause):
     assert "违约金人民币5000元" in text or "合同总价的10%" in text
 
 
-def test_lump_sum_rate_text_is_not_treated_as_periodic():
-    fields = apply_derived_fields(
-        _penalty("甲方逾期付款的，应向乙方支付违约金人民币5000元", rate="人民币5000元")
-    )
+@pytest.mark.parametrize(
+    "rate",
+    [
+        "人民币5000元",
+        "逾期超过30日一次性支付5000元违约金",  # 「30日」是触发期限，不是计算周期
+        "逾期超过30日按合同总价的10%一次性支付违约金",
+        "合同总价的10%",
+    ],
+)
+def test_lump_sum_rate_text_is_not_treated_as_periodic(rate):
+    fields = apply_derived_fields(_penalty("甲方逾期付款的，应支付违约金", rate=rate))
     node = fields["interest_rate_basis"]
     assert node["value"] is None and "律师确认" in node["src"]
-
-
-def test_periodic_penalty_keeps_agreed_rate():
-    fields = _penalty(
-        "甲方逾期付款的，每日按未付款的万分之五支付违约金", rate="日万分之五的利率"
-    )
     text = render_complaint(fields)
-    assert "按照⚠️ 待核实：日万分之五的利率计至实际付清之日止" in text
+    assert rate not in text.split("计至实际付清之日止")[0].split("按照")[-1]
+
+
+@pytest.mark.parametrize(
+    "rate",
+    [
+        "日万分之五的利率",
+        "年利率6%的标准",
+        "每逾期一日按未付款的0.05%",
+        "按日0.5‰的标准",
+    ],
+)
+def test_periodic_penalty_keeps_agreed_rate(rate):
+    fields = _penalty("甲方逾期付款的，按约定支付违约金", rate=rate)
+    text = render_complaint(fields)
+    assert f"按照⚠️ 待核实：{rate}计至实际付清之日止" in text
     assert "自起诉之日起" in text
 
 
@@ -161,28 +198,56 @@ def _hq_rep() -> dict:
 
 
 @pytest.mark.parametrize(
-    "rep", ["张三，总经理", "张三,总经理", "张三、总经理", "张三 总经理"]
+    "rep",
+    [
+        "张三，总经理",
+        "张三,总经理",
+        "张三、总经理",
+        "张三 总经理",
+        "张三（总经理）",
+        "张三(总经理)",
+        "张三，副董事长",  # 比较完整职务，不按子串
+        "张三，董事长兼总经理",
+    ],
 )
 def test_existing_title_is_kept_and_flagged(table, rep):
     table(rep)
     node = _hq_rep()
-    assert node["value"] == rep
-    assert "董事长" not in node["value"]
+    assert node["value"] == rep and not node["value"].endswith("，董事长")
     assert "待核实" in node["src"] and "《原告信息表》" in node["src"]
+    text = render_complaint(
+        apply_derived_fields(_f(contract_type="买卖合同")),
+        template="{{plaintiff_person_in_charge}}",
+    )
+    assert text == f"⚠️ 待核实：{rep}"
 
 
-def test_existing_default_title_not_duplicated(table):
-    table("张三，董事长")
+@pytest.mark.parametrize("rep", ["张三，董事长", "张三（董事长）", "张三 董事长"])
+def test_existing_default_title_not_duplicated(table, rep):
+    table(rep)
     node = _hq_rep()
-    assert node["value"] == "张三，董事长" and "待核实" not in node["src"]
+    assert node["value"] == rep and "待核实" not in node["src"]
 
 
-def test_name_only_gets_default_title_idempotently(table):
-    table("張谷 憲晴")  # 带空格的姓名不是职务
+@pytest.mark.parametrize("rep", ["網谷 憲晴", "张三 监事", "张三/董事长"])
+def test_ambiguous_format_is_kept_and_flagged(table, rep):
+    # 分不清是带空格的姓名还是「姓名 职务」：保留原文、不追加，提醒律师
+    table(rep)
     fields = apply_derived_fields(_f(contract_type="买卖合同"))
-    assert fields["plaintiff_person_in_charge"]["value"] == "張谷 憲晴，董事长"
+    node = fields["plaintiff_person_in_charge"]
+    assert node["value"] == rep
+    assert "无法判断" in node["src"] and "待核实" in node["src"]
     again = apply_derived_fields(fields)
-    assert again["plaintiff_person_in_charge"]["value"] == "張谷 憲晴，董事长"
+    assert again["plaintiff_person_in_charge"]["value"] == rep
+
+
+@pytest.mark.parametrize("rep", ["张三", "網谷憲晴"])
+def test_name_only_gets_default_title_idempotently(table, rep):
+    table(rep)
+    fields = apply_derived_fields(_f(contract_type="买卖合同"))
+    assert fields["plaintiff_person_in_charge"]["value"] == f"{rep}，董事长"
+    again = apply_derived_fields(fields)
+    assert again["plaintiff_person_in_charge"]["value"] == f"{rep}，董事长"
 
 
 def test_branch_gets_no_default_title(table):
