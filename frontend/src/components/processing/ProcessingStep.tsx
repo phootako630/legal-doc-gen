@@ -124,14 +124,14 @@ export function ProcessingStep({
   useEffect(() => {
     if (phase !== 'running') return;
     const timer = setInterval(async () => {
-      const p = await fetchAnalyzeProgress();
+      const p = await fetchAnalyzeProgress(analyzeKey);
       if (p?.active && p.stage in STAGE_BY_NAME) {
         setActiveStage(STAGE_BY_NAME[p.stage]);
         setElapsed(p.stage_elapsed_s);
       }
     }, 1000);
     return () => clearInterval(timer);
-  }, [phase]);
+  }, [phase, analyzeKey]);
 
   const steps = buildSteps(phase, activeStage, elapsed, errorMsg);
 

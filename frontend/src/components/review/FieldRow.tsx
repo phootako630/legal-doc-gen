@@ -1,10 +1,10 @@
-// 审核表格的单行：字段名 | 值（可点击编辑）| 来源 | 状态 Badge
+// 审核表格的单行：字段名 | 值（可点击编辑）| 来源 | 状态 Badge + 反馈按钮
 import { useState, useRef, useEffect } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import type { ReviewField, FieldStatus } from '@/lib/types';
-import { Pencil } from 'lucide-react';
+import { MessageSquareWarning, Pencil } from 'lucide-react';
 
 const STATUS_CONFIG: Record<FieldStatus, { label: string; className: string }> = {
   normal:        { label: '正常',    className: 'border-emerald-200 bg-emerald-50  text-emerald-700 hover:bg-emerald-50' },
@@ -25,9 +25,11 @@ interface FieldRowProps {
   field: ReviewField;
   onSave: (key: string, value: string) => void;
   isEven: boolean;
+  /** 律师觉得该字段有问题时点「反馈」；不传则不显示按钮 */
+  onFeedback?: (field: ReviewField) => void;
 }
 
-export function FieldRow({ field, onSave, isEven }: FieldRowProps) {
+export function FieldRow({ field, onSave, isEven, onFeedback }: FieldRowProps) {
   const displayValue = field.editedValue !== undefined ? field.editedValue : field.value;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
@@ -136,6 +138,19 @@ export function FieldRow({ field, onSave, isEven }: FieldRowProps) {
         <Badge variant="outline" className={cn('text-[10px] font-semibold px-1.5 py-0.5', cfg.className)}>
           {cfg.label}
         </Badge>
+        {/* 常驻但低调：律师不熟悉“悬停才出现”的按钮，所以始终可见，悬停时加深 */}
+        {onFeedback && (
+          <button
+            type="button"
+            onClick={() => onFeedback(field)}
+            title={`反馈「${field.label}」的问题`}
+            aria-label={`反馈「${field.label}」的问题`}
+            className="mt-1.5 flex items-center gap-0.5 text-[10px] text-muted-foreground/50 transition-colors hover:text-primary group-hover:text-muted-foreground focus-visible:text-primary"
+          >
+            <MessageSquareWarning className="h-3 w-3" />
+            反馈
+          </button>
+        )}
       </td>
     </tr>
   );

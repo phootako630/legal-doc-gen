@@ -203,6 +203,10 @@ pnpm dev                   # http://localhost:5173，/api/* 代理转发到 :800
 
 后端测试：`cd backend && python -m pytest`
 
+## 部署（UAT / 生产）
+
+`docker compose up -d --build` 一键启动（nginx 账号密码 + HTTPS + 案件数据卷），完整步骤见 [deploy/README.md](./deploy/README.md)。
+
 ---
 
 ## 迁移进度（v1 流水线 → v2 agentic）
@@ -221,4 +225,4 @@ pnpm dev                   # http://localhost:5173，/api/* 代理转发到 :800
 
 ## v2 不包含（后续迭代预留）
 
-数据库持久化、用户认证、批量案件处理、Docker 化部署、向量检索、LangChain 本体等——详见 [CLAUDE.md](./CLAUDE.md)。
+用户账号体系（当前为 nginx 访问账号）、批量案件处理、向量检索、LangChain 本体等——详见 [CLAUDE.md](./CLAUDE.md)。

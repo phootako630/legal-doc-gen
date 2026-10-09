@@ -22,7 +22,7 @@
 
 **核心用户**：中国大陆律师团队，不懂技术，不看 JSON，不看英文。所有面向用户的内容必须是中文。
 
-**目标**：验证 AI 抽取准确率和律师使用体验。支持可解析 PDF、扫描件 PDF（OCR）和 Word 文件。无用户认证；案件状态（agent checkpoint、上传的扫描件）落盘到 `backend/data/`（SQLite + 文件），服务重启后仍可 resume，超过 `CASE_RETENTION_DAYS`（默认 7 天）自动清除（服务启动即清、之后每小时清，resume / 读取时也拒绝过期数据）；落盘文件仅属主可读写（目录 0700、文件 0600）；不引入业务数据库。
+**目标**：验证 AI 抽取准确率和律师使用体验。支持可解析 PDF、扫描件 PDF（OCR）和 Word 文件。应用内无用户认证（部署时由 nginx Basic 认证挡在最前，见 `deploy/README.md`）；案件状态（agent checkpoint、上传的扫描件）落盘到 `backend/data/`（SQLite + 文件），服务重启后仍可 resume，超过 `CASE_RETENTION_DAYS`（默认 7 天）自动清除（服务启动即清、之后每小时清，resume / 读取时也拒绝过期数据）；落盘文件仅属主可读写（目录 0700、文件 0600）；不引入业务数据库。
 
 ---
 
@@ -378,7 +378,8 @@ legal-doc-app/
 │   ├── requirements.txt
 │   └── .env.example                 # DEEPSEEK_API_KEY, DASHSCOPE_API_KEY
 │
-└── docker-compose.yml               # （可选）一键启动
+├── deploy/                          # nginx 配置（http/https）、访问账号脚本、中文部署指南
+└── docker-compose.yml               # 一键部署：backend（不对外）+ web（nginx 认证 + 反代）
 ```
 
 ---
@@ -875,7 +876,7 @@ pnpm dev                   # 默认 http://localhost:5173
 ## 不包含（后续迭代预留）
 
 - 数据库（PostgreSQL）— 案件持久化（agent checkpoint 届时落 DB）
-- 用户认证 / 权限管理
+- 应用内用户账号 / 权限管理（当前仅 nginx 访问账号）
 - 多模态 LLM 直传扫描件（替代 OCR，进一步砍误差链）
 - 批量案件处理
 - Node.js 后端（Fastify）
@@ -883,7 +884,6 @@ pnpm dev                   # 默认 http://localhost:5173
 - S3 / 云存储
 - 起诉状版本对比
 - 操作审计日志
-- Docker 化部署
 - **LangChain 本体**（仅采用 LangGraph 的图/检查点，不引入其余生态）
 - 向量检索（v2 条款定位先用关键词；量大再上向量）
 ```

@@ -1,11 +1,11 @@
 # POST /api/analyze：启动 agent（清点→抽取→代码校验），返回 CaseState（可能带断点）
-# GET  /api/analyze/progress：agent 三阶段的实时进度，供前端轮询渲染（与 extract 共用 llm_progress）
+# GET  /api/analyze/progress?progress_id=<请求编号>：该次分析三阶段的实时进度，供前端轮询
 #
 # 幂等：请求头 Idempotency-Key（前端每次上传生成一个）相同的重复请求只分析一次，
 # 详见 agent/runner.py 的 run_analyze_once。不带该请求头时行为与以前一致（每次新分析）。
 import re
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel
 
 from app.agent.runner import IdempotencyConflict, run_analyze, run_analyze_once
@@ -71,17 +71,17 @@ async def analyze(
         except RuntimeError as e:
             raise HTTPException(status_code=500, detail=f"分析失败：{e}") from e
 
-    # 三阶段（清点/抽取/校验高亮）与 extract 一致；包一层进度记录，异常时也能复位
-    llm_progress.begin(total_stages=3)
+    # 不带请求编号的旧客户端：照常分析，但没有 id 可挂进度，故不记录进度
     try:
         return await run_analyze(files, req.internet_allowed)
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=f"分析失败：{e}") from e
-    finally:
-        llm_progress.finish()
 
 
 @router.get("/analyze/progress", response_model=LlmProgress)
-async def get_analyze_progress() -> LlmProgress:
-    """返回当前 agent 任务的处理阶段（v1 单用户全局态，与 extract 共享同一进度模块）。"""
-    return LlmProgress(**llm_progress.snapshot())
+async def get_analyze_progress(
+    # 即分析请求的 Idempotency-Key：多人同时分析时各看各的进度
+    progress_id: str | None = Query(default=None, max_length=128),
+) -> LlmProgress:
+    """返回指定分析任务的处理阶段；未知或已结束的任务返回非活跃状态。"""
+    return LlmProgress(**llm_progress.snapshot(progress_id))

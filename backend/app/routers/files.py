@@ -1,6 +1,6 @@
 # POST /api/upload：接收上传文件，调度解析（PDF/Word/OCR），返回每份文件的文本和元信息
-# GET /api/upload/progress：上传处理期间的实时进度，供前端轮询渲染进度条
-from fastapi import APIRouter, UploadFile, File, HTTPException
+# GET /api/upload/progress?progress_id=<id>：该次上传的实时进度，供前端轮询渲染进度条
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
 from app.services import upload_progress
@@ -44,7 +44,11 @@ class UploadProgress(BaseModel):
 
 
 @router.post("/upload", response_model=UploadResponse)
-async def upload(files: list[UploadFile] = File(...)) -> UploadResponse:
+async def upload(
+    files: list[UploadFile] = File(...),
+    # 前端生成的进度 id：多人同时上传时各自的进度互不干扰；不带则不记录进度
+    progress_id: str | None = Form(default=None, max_length=128),
+) -> UploadResponse:
     """接收多个文件，解析后返回文本内容和类型识别结果。"""
     if not files:
         raise HTTPException(status_code=400, detail="请至少上传一个文件")
@@ -52,8 +56,7 @@ async def upload(files: list[UploadFile] = File(...)) -> UploadResponse:
     parsed: list[ParsedFile] = []
     warnings: list[str] = []
 
-    upload_progress.begin(total_files=len(files))
-    try:
+    with upload_progress.track(progress_id, total_files=len(files)):
         for idx, upload_file in enumerate(files, start=1):
             upload_progress.start_file(upload_file.filename or "未知文件", idx)
             try:
@@ -66,8 +69,6 @@ async def upload(files: list[UploadFile] = File(...)) -> UploadResponse:
                     f"[UPLOAD] 文件解析失败：{upload_file.filename} — {e}", flush=True
                 )
                 warnings.append(f"{upload_file.filename}：解析失败 — {e}")
-    finally:
-        upload_progress.finish()
 
     identified_types = {f.identified_type for f in parsed}
 
@@ -90,6 +91,8 @@ async def upload(files: list[UploadFile] = File(...)) -> UploadResponse:
 
 
 @router.get("/upload/progress", response_model=UploadProgress)
-async def get_upload_progress() -> UploadProgress:
-    """返回当前上传任务的处理进度（v1 单用户全局态，无任务 ID）。"""
-    return UploadProgress(**upload_progress.snapshot())
+async def get_upload_progress(
+    progress_id: str | None = Query(default=None, max_length=128),
+) -> UploadProgress:
+    """返回指定上传任务的处理进度；未知或已结束的任务返回非活跃状态。"""
+    return UploadProgress(**upload_progress.snapshot(progress_id))

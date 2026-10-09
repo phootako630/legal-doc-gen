@@ -1,0 +1,17 @@
+# 构建上下文排除：依赖、构建产物、本地案件数据与密钥一律不进镜像
+.git
+**/node_modules
+**/dist
+**/__pycache__
+**/*.py[cod]
+**/.venv
+**/venv
+**/.pytest_cache
+**/.ruff_cache
+**/.env
+**/*.env
+backend/data
+backend/tests
+deploy
+docs-examples
+.claude

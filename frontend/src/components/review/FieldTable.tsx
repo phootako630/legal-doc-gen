@@ -11,10 +11,12 @@ export interface FieldTableHandle {
 interface FieldTableProps {
   extractedFields: ExtractedFields;
   validations?: ValidationCheck[];
+  /** 行内「反馈」按钮回调；不传则不显示 */
+  onFeedback?: (field: ReviewField) => void;
 }
 
 export const FieldTable = forwardRef<FieldTableHandle, FieldTableProps>(
-  function FieldTable({ extractedFields, validations = [] }, ref) {
+  function FieldTable({ extractedFields, validations = [], onFeedback }, ref) {
     const [rows, setRows] = useState<ReviewField[]>(() =>
       buildReviewFields(extractedFields, validations),
     );
@@ -86,7 +88,13 @@ export const FieldTable = forwardRef<FieldTableHandle, FieldTableProps>(
             </thead>
             <tbody>
               {rows.map((row, idx) => (
-                <FieldRow key={row.key} field={row} onSave={handleSave} isEven={idx % 2 === 0} />
+                <FieldRow
+                  key={row.key}
+                  field={row}
+                  onSave={handleSave}
+                  isEven={idx % 2 === 0}
+                  onFeedback={onFeedback}
+                />
               ))}
             </tbody>
           </table>

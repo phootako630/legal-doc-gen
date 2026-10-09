@@ -6,11 +6,13 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Loader2, TriangleAlert, ArrowLeft, ArrowRight } from 'lucide-react';
+import { TriangleAlert, ArrowLeft } from 'lucide-react';
 import { FieldTable, type FieldTableHandle } from './FieldTable';
 import { ValidationReport } from './ValidationReport';
 import { HighlightList } from './HighlightList';
 import { PendingResolver } from './PendingResolver';
+import { FeedbackDialog, type FeedbackTarget } from './FeedbackDialog';
+import { ReviewActionBar } from './ReviewActionBar';
 import { generateComplaint, resumeCase } from '@/lib/api';
 import { isAllFieldsMissing } from '@/lib/buildReviewFields';
 import type { CaseState } from '@/lib/types';
@@ -47,6 +49,13 @@ export function ReviewStep({ caseState, onBack, onDone }: ReviewStepProps) {
   const [genError, setGenError] = useState<string | null>(null);
   const [resumeLoading, setResumeLoading] = useState(false);
   const [resumeError, setResumeError] = useState<string | null>(null);
+  // 反馈弹窗：target 为 null 表示整体反馈
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [feedbackTarget, setFeedbackTarget] = useState<FeedbackTarget | null>(null);
+  const openFeedback = (target: FeedbackTarget | null) => {
+    setFeedbackTarget(target);
+    setFeedbackOpen(true);
+  };
 
   const pending = current.pending;
 
@@ -146,6 +155,13 @@ export function ReviewStep({ caseState, onBack, onDone }: ReviewStepProps) {
               ref={tableRef}
               extractedFields={current.extracted_fields}
               validations={current.validations}
+              onFeedback={(f) =>
+                openFeedback({
+                  key: f.key,
+                  label: f.label,
+                  value: f.editedValue !== undefined ? f.editedValue : f.value,
+                })
+              }
             />
           </CardContent>
         </Card>
@@ -174,38 +190,20 @@ export function ReviewStep({ caseState, onBack, onDone }: ReviewStepProps) {
         </div>
       </div>
 
-      {/* 底部操作栏 */}
-      <div className="flex items-center justify-between rounded-xl border border-border bg-white px-6 py-4 shadow-sm">
-        <Button variant="outline" onClick={onBack} disabled={genLoading} className="gap-2">
-          <ArrowLeft className="h-4 w-4" />
-          返回上传
-        </Button>
+      <ReviewActionBar
+        generating={genLoading}
+        error={genError}
+        onBack={onBack}
+        onFeedback={() => openFeedback(null)}
+        onGenerate={handleGenerate}
+      />
 
-        <div className="flex flex-col items-end gap-1.5">
-          {genError && (
-            <p className="flex items-center gap-1.5 text-xs text-destructive">
-              <TriangleAlert className="h-3.5 w-3.5" />
-              {genError}
-            </p>
-          )}
-          {genLoading && (
-            <p className="text-xs text-muted-foreground">正在按模板生成起诉状…</p>
-          )}
-          <Button onClick={handleGenerate} disabled={genLoading} size="lg" className="min-w-44 gap-2 shadow-sm">
-            {genLoading ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                生成中…
-              </>
-            ) : (
-              <>
-                确认并生成起诉状
-                <ArrowRight className="h-4 w-4" />
-              </>
-            )}
-          </Button>
-        </div>
-      </div>
+      <FeedbackDialog
+        open={feedbackOpen}
+        onOpenChange={setFeedbackOpen}
+        runId={current.run_id}
+        target={feedbackTarget}
+      />
     </div>
   );
 }

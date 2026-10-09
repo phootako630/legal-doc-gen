@@ -2,8 +2,8 @@
 # GET /api/extract/progress：三步 LLM 处理的实时阶段，供前端轮询渲染进度
 import json
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from app.services import llm_progress
 from app.services.extraction import (
@@ -38,6 +38,7 @@ class FileInput(BaseModel):
 class ExtractRequest(BaseModel):
     files: list[FileInput]
     internet_allowed: bool = True
+    progress_id: str | None = Field(default=None, max_length=128)
 
 
 class ExtractResponse(BaseModel):
@@ -60,17 +61,16 @@ class LlmProgress(BaseModel):
 @router.post("/extract", response_model=ExtractResponse)
 async def extract(req: ExtractRequest) -> ExtractResponse:
     """三步 LLM 调用入口：包一层进度记录，保证异常时进度态也能复位。"""
-    llm_progress.begin(total_stages=3)
-    try:
+    with llm_progress.track(req.progress_id, total_stages=3):
         return await _extract_impl(req)
-    finally:
-        llm_progress.finish()
 
 
 @router.get("/extract/progress", response_model=LlmProgress)
-async def get_extract_progress() -> LlmProgress:
-    """返回当前抽取任务的处理阶段（v1 单用户全局态，无任务 ID）。"""
-    return LlmProgress(**llm_progress.snapshot())
+async def get_extract_progress(
+    progress_id: str | None = Query(default=None, max_length=128),
+) -> LlmProgress:
+    """返回指定抽取任务的处理阶段；未知或已结束的任务返回非活跃状态。"""
+    return LlmProgress(**llm_progress.snapshot(progress_id))
 
 
 async def _extract_impl(req: ExtractRequest) -> ExtractResponse:
