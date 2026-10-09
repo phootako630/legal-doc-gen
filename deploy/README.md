@@ -95,7 +95,9 @@ deploy/add-user.sh dev01
 mkdir -p deploy/certs
 cp xxx.pem deploy/certs/fullchain.pem
 cp xxx.key deploy/certs/privkey.pem
-chmod 644 deploy/certs/*.pem
+chmod 700 deploy/certs
+chmod 644 deploy/certs/fullchain.pem
+chmod 600 deploy/certs/privkey.pem   # 私钥只有属主可读；nginx 主进程以 root 启动时读取，不受影响
 ```
 
 免费证书有效期较短，到期前替换这两个文件后 `docker compose restart web`。

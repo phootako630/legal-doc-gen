@@ -21,9 +21,9 @@ stty -echo; read -r pass2; stty echo; echo
 
 hash="$(printf '%s' "$pass" | openssl passwd -6 -stdin)"
 touch "$file"
-# 先删掉同名旧记录再追加
+# 先删掉同名旧记录再追加：按冒号前的用户名精确比较（用户名可含「.」，不能当正则用）
 tmp="$(mktemp)"
-grep -v "^${user}:" "$file" > "$tmp" || true
+awk -F: -v user="$user" '$1 != user' "$file" > "$tmp"
 printf '%s:%s\n' "$user" "$hash" >> "$tmp"
 mv "$tmp" "$file"
 # nginx 容器内的 worker 用户需要可读

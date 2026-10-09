@@ -2,7 +2,7 @@
 //
 // 分类是固定选项：后端只把「字段 + 分类」写进运行日志用于统计；说明文字可能含案件内容，
 // 随案件数据保存在服务器、到期自动删除。
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -46,11 +46,25 @@ export function FeedbackDialog({ open, onOpenChange, runId, target }: FeedbackDi
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // 每次关闭即结束一个「弹窗会话」：旧请求晚到的结果、旧的自动关闭定时器都不能动下一次打开的草稿
+  const sessionRef = useRef(0);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearCloseTimer = () => {
+    if (closeTimerRef.current !== null) {
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  };
+  useEffect(() => clearCloseTimer, []);
+
   // 关闭时清空，下次打开是新的一条反馈
   const handleOpenChange = (next: boolean) => {
     if (!next) {
+      sessionRef.current += 1;
+      clearCloseTimer();
       setCategory(null);
       setComment('');
+      setSending(false);
       setDone(false);
       setError(null);
     }
@@ -59,6 +73,7 @@ export function FeedbackDialog({ open, onOpenChange, runId, target }: FeedbackDi
 
   const handleSubmit = async () => {
     if (!category) return;
+    const session = sessionRef.current;
     setSending(true);
     setError(null);
     try {
@@ -68,12 +83,17 @@ export function FeedbackDialog({ open, onOpenChange, runId, target }: FeedbackDi
         category,
         comment: comment.trim() || null,
       });
+      if (session !== sessionRef.current) return;
       setDone(true);
-      setTimeout(() => handleOpenChange(false), 1200);
+      clearCloseTimer();
+      closeTimerRef.current = setTimeout(() => {
+        if (session === sessionRef.current) handleOpenChange(false);
+      }, 1200);
     } catch (e) {
+      if (session !== sessionRef.current) return;
       setError(e instanceof Error ? e.message : '反馈提交失败，请重试');
     } finally {
-      setSending(false);
+      if (session === sessionRef.current) setSending(false);
     }
   };
 
