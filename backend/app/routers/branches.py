@@ -4,7 +4,11 @@
 #   1. POST /branches/preview 上传 Excel → 返回解析结果、校验问题、与当前版本的变更；
 #   2. 管理员确认后 POST /branches 提交条目 → 服务端重新规范化与校验后保存（旧版存档）。
 # 管理员身份凭请求头 X-Admin-Token 与服务器 ADMIN_TOKEN 比对（系统暂无账号体系）。
+# 上传人：部署时 nginx 用 Basic 认证登录，把登录账号写进 X-Remote-User 转给后端
+# （deploy/nginx/app.conf，会覆盖浏览器自带的同名头；后端不对外，只能经 nginx 访问）。
+# 保存 / 回退时记入该版本，历史列表里能看到每一版是谁传的。本地开发没有 nginx，记为空。
 import hmac
+import re
 from urllib.parse import quote, unquote
 
 from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
@@ -37,6 +41,16 @@ def require_admin(x_admin_token: str | None = Header(default=None)) -> None:
         raise HTTPException(status_code=401, detail="管理员口令不正确")
 
 
+# 与 deploy/add-user.sh 允许的账号格式一致；不合格式的一律当作没有
+_USER_RE = re.compile(r"[A-Za-z0-9_.-]{1,32}")
+
+
+def current_user(x_remote_user: str | None = Header(default=None)) -> str | None:
+    """nginx 认证后的登录账号；没有或格式不对返回 None。"""
+    user = (x_remote_user or "").strip()
+    return user if _USER_RE.fullmatch(user) else None
+
+
 class BranchEntry(BaseModel):
     name: str
     credit_code: str = ""
@@ -49,6 +63,7 @@ class BranchTableResponse(BaseModel):
     entries: list[BranchEntry]
     updated_at: str | None
     source_file: str | None
+    uploaded_by: str | None = None
     age_days: int | None
     stale: bool
     stale_days: int
@@ -89,6 +104,7 @@ class HistoryItem(BaseModel):
     id: str
     updated_at: str | None
     source_file: str | None
+    uploaded_by: str | None = None
     count: int
 
 
@@ -108,6 +124,7 @@ def _table_response(table: bt.BranchTable | None) -> BranchTableResponse:
         entries=[BranchEntry(**e) for e in table.entries],
         updated_at=table.updated_at,
         source_file=table.source_file,
+        uploaded_by=table.uploaded_by,
         age_days=age,
         stale=age is None or age > config.BRANCH_TABLE_STALE_DAYS,
         stale_days=config.BRANCH_TABLE_STALE_DAYS,
@@ -183,7 +200,9 @@ async def preview_branches(file: UploadFile = File(...)) -> PreviewResponse:
     response_model=BranchTableResponse,
     dependencies=[Depends(require_admin)],
 )
-async def save_branches(req: SaveRequest) -> BranchTableResponse:
+async def save_branches(
+    req: SaveRequest, user: str | None = Depends(current_user)
+) -> BranchTableResponse:
     """保存为当前表（服务端重新规范化与校验；有错误拒绝保存）。"""
     entries, _ = bt.dedupe_entries(
         [bt.normalize_entry(e.model_dump()) for e in req.entries]
@@ -192,7 +211,11 @@ async def save_branches(req: SaveRequest) -> BranchTableResponse:
     if check.errors:
         raise HTTPException(status_code=400, detail="；".join(check.errors))
     table = bt.save_table(
-        entries, req.source_file, config.BRANCH_INFO_PATH, config.BRANCH_HISTORY_DIR
+        entries,
+        req.source_file,
+        config.BRANCH_INFO_PATH,
+        config.BRANCH_HISTORY_DIR,
+        uploaded_by=user,
     )
     return _table_response(table)
 
@@ -202,11 +225,16 @@ async def save_branches(req: SaveRequest) -> BranchTableResponse:
     response_model=BranchTableResponse,
     dependencies=[Depends(require_admin)],
 )
-async def restore_branches(req: RestoreRequest) -> BranchTableResponse:
+async def restore_branches(
+    req: RestoreRequest, user: str | None = Depends(current_user)
+) -> BranchTableResponse:
     """把某个历史版本恢复为当前表。"""
     try:
         table = bt.restore_table(
-            req.version_id, config.BRANCH_INFO_PATH, config.BRANCH_HISTORY_DIR
+            req.version_id,
+            config.BRANCH_INFO_PATH,
+            config.BRANCH_HISTORY_DIR,
+            uploaded_by=user,
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
