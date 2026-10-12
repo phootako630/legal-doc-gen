@@ -100,7 +100,7 @@ def test_project_site_jurisdiction_unchanged():
     )
 
 
-# ── #30：固定 / 一次性违约金不套用 LPR 持续计付 ─────────────────────────────
+# ── #30：固定 / 一次性违约金直接请求约定金额（确认单四第 1 题）───────────────
 
 
 def _penalty(clause: str, rate: str | None = None) -> dict:
@@ -116,39 +116,140 @@ def _penalty(clause: str, rate: str | None = None) -> dict:
     return fields
 
 
+# 律师确认单（四）第 1 题：诉请直接写违约金金额，不写「以……为基数……计至实际付清之日止」
+@pytest.mark.parametrize(
+    ("clause", "rate", "amount"),
+    [
+        ("甲方逾期付款的，应向乙方支付违约金人民币5000元", None, "5000"),
+        ("甲方逾期付款的，应向乙方支付违约金", "人民币5,000.00元", "5000"),
+        ("甲方逾期付款的，应向乙方支付违约金1.5万元", None, "15000"),
+        # 「30日」是触发期限，不是计算周期
+        ("甲方逾期付款的，应支付违约金", "逾期超过30日一次性支付5000元违约金", "5000"),
+        ("甲方逾期付款的，应按合同总价的10%向乙方支付违约金", None, "20000"),
+        (
+            "甲方逾期付款的，应支付违约金",
+            "逾期超过30日按合同总价的10%一次性支付违约金",
+            "20000",
+        ),
+        ("甲方逾期付款的，应按欠款的5%支付违约金", None, "5000"),
+    ],
+)
+def test_lump_sum_penalty_claims_the_amount(clause, rate, amount):
+    fields = _penalty(clause, rate=rate)
+    text = render_complaint(fields)
+    claim = next(line for line in text.splitlines() if line.startswith("2、"))
+    assert claim == f"2、判令被告向原告支付违约金⚠️ 待核实：¥{amount}元；"
+    assert "被告应向原告支付违约金⚠️ 待核实：¥" in text
+    assert "计至实际付清之日止" not in text and "贷款市场报价利率" not in text
+    node = apply_derived_fields(fields)["penalty_amount"]
+    assert "待核实" in node["src"]  # 提醒办案律师核对金额
+
+
 @pytest.mark.parametrize(
     "clause",
     [
-        "甲方逾期付款的，应向乙方支付违约金人民币5000元",
-        "甲方逾期付款的，应按合同总价的10%向乙方支付违约金",
+        "甲方逾期付款的，应支付违约金",  # 没写金额
+        "逾期30日内支付违约金1000元，超过30日支付违约金3000元",  # 分档，分不清
+        "按合同总价的10%支付违约金",  # 比例，但缺合同总价
     ],
 )
-def test_lump_sum_penalty_does_not_use_lpr(clause):
-    text = render_complaint(_penalty(clause))
-    assert "贷款市场报价利率" not in text
+def test_lump_sum_penalty_amount_unknown_is_left_blank(clause):
+    fields = _penalty(clause)
+    if "合同总价" in clause:
+        fields.pop("total_amount")
+    text = render_complaint(fields)
     claim = next(line for line in text.splitlines() if line.startswith("2、"))
-    assert claim == (
-        "2、判令被告向原告支付违约金（以¥100000元为基数，自起诉之日起，"
-        "按照【待补充】计至实际付清之日止）；"
-    )
-    assert "违约金人民币5000元" in text or "合同总价的10%" in text
+    assert claim == "2、判令被告向原告支付违约金【待补充】；"
 
 
 @pytest.mark.parametrize(
-    "rate",
+    "clause",
     [
-        "人民币5000元",
-        "逾期超过30日一次性支付5000元违约金",  # 「30日」是触发期限，不是计算周期
-        "逾期超过30日按合同总价的10%一次性支付违约金",
-        "合同总价的10%",
+        # 分档：两个比例
+        "逾期30日内按合同总价的5%支付违约金，超过30日按合同总价的10%支付违约金",
+        # 比例 + 上限
+        "按合同总价的10%支付违约金，但最高不超过5000元",
+        # 比例基数识别不了 + 上限金额：不能把上限当固定金额
+        "按未支付的安装价款的5%支付违约金，但最高不超过5000元",
+        # 比例基数识别不了
+        "按结算价的5%支付违约金",
+        # 固定金额 + 上限
+        "支付违约金5000元，累计不超过合同总价的3%",
+        # 比例数值相同、基数不同的两档
+        "逾期30日内按欠款的5%支付违约金，超过30日按合同总价的5%支付违约金",
     ],
 )
-def test_lump_sum_rate_text_is_not_treated_as_periodic(rate):
-    fields = apply_derived_fields(_penalty("甲方逾期付款的，应支付违约金", rate=rate))
-    node = fields["interest_rate_basis"]
-    assert node["value"] is None and "律师确认" in node["src"]
+def test_ambiguous_lump_sum_penalty_is_left_blank(clause):
+    fields = _penalty(clause)
     text = render_complaint(fields)
-    assert rate not in text.split("计至实际付清之日止")[0].split("按照")[-1]
+    claim = next(line for line in text.splitlines() if line.startswith("2、"))
+    assert claim == "2、判令被告向原告支付违约金【待补充】；"
+    node = apply_derived_fields(fields)["penalty_amount"]
+    assert node["value"] is None and "不自动计算" in node["src"]
+
+
+def test_same_standard_quoted_twice_is_not_tiered():
+    # 利率摘录与条款原文写的是同一个标准（基数写法略不同）：不算分档，照常计算
+    fields = _penalty(
+        "甲方逾期付款的，应按合同总价款的10%向乙方支付违约金", rate="合同总价的10%"
+    )
+    node = apply_derived_fields(fields)["penalty_amount"]
+    assert node["value"] == 20000
+
+
+@pytest.mark.parametrize(
+    ("clause", "rate"),
+    [
+        ("甲方每逾期一日支付违约金100元", None),
+        ("甲方逾期付款的，应支付违约金", "每日100元的违约金标准"),
+        ("甲方逾期付款的，按每日500元向乙方支付违约金", None),
+        ("甲方逾期付款的，违约金按100元/日计算", None),
+        ("甲方逾期付款的，违约金按100元每天计算", None),
+        ("甲方每逾期1天，应支付违约金100元", None),
+        # 「一次性结清」是付款方式，不是只计一次
+        ("甲方逾期付款的，违约金按每日100元计算，付款时一次性结清", None),
+    ],
+)
+def test_per_period_fixed_amount_is_not_lump_sum(clause, rate):
+    # 「每日100元」是按期计付，不能当成一次性总额 100 元；写法待律师确认，先留【待补充】
+    fields = _penalty(clause, rate=rate)
+    derived = apply_derived_fields(fields)
+    assert derived.get("penalty_amount", {}).get("value") is None
+    assert derived["interest_rate_basis"]["value"] is None
+    assert "按期计付的固定金额" in derived["interest_rate_basis"]["src"]
+    text = render_complaint(fields)
+    assert "支付违约金⚠️ 待核实：¥100元" not in text
+    assert "按照【待补充】计至实际付清之日止" in text
+    assert "贷款市场报价利率" not in text
+
+
+def test_lump_sum_penalty_in_arbitration():
+    fields = _penalty("甲方逾期付款的，应向乙方支付违约金人民币5000元")
+    fields["dispute_clause_text"] = {
+        "value": "提交南京仲裁委员会仲裁",
+        "src": "《合同》",
+    }
+    text = render_complaint(fields)
+    assert "裁决被申请人向申请人支付违约金⚠️ 待核实：¥5000元；" in text
+    assert "自申请仲裁之日起" not in text  # 计算期间整段换掉了
+
+
+def test_periodic_clause_without_extracted_rate_is_left_blank():
+    # 条款按日计违约金，但费率没抽出来：既不当固定金额，也不套用 LPR
+    fields = _penalty("甲方逾期付款的，每日按未付款的万分之五支付违约金")
+    text = render_complaint(fields)
+    assert "按照【待补充】计至实际付清之日止" in text
+    assert "贷款市场报价利率" not in text
+
+
+def test_lawyer_set_basis_keeps_periodic_wording():
+    fields = _penalty("甲方逾期付款的，应向乙方支付违约金人民币5000元")
+    fields["interest_rate_basis"] = {
+        "value": "日万分之三的标准",
+        "src": "律师人工确认修改",
+    }
+    text = render_complaint(fields)
+    assert "按照日万分之三的标准计至实际付清之日止" in text
 
 
 @pytest.mark.parametrize(

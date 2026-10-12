@@ -394,33 +394,72 @@ def breach_clause_sentence_field(fields: dict) -> dict:
 # （「日万分之五」「年利率6%」「每日按……0.05%」「每逾期一日」「按日」）。
 # 只表示触发期限的「逾期超过30日」不算周期；写明「一次性」的一律不算（#30 复审）
 _RATE_RE = re.compile(r"万分之|千分之|百分之|‰|%|％|厘")
+# 计算周期：「每日」「每逾期一日」「每逾期1天」「每个月」「按日」「日万分之五」「年利率」，
+# 以及后缀写法「100元/日」「0.05%/天」「100元每日」
 _PERIOD_RE = re.compile(
-    r"每(?:逾期)?一?[日天月年]|按[日天月年]|[日月年](?:利率|息|万分之|千分之|百分之)"
+    r"每(?:逾期)?(?:一|1)?个?[日天月年]|按[日天月年]|[日月年](?:利率|息|万分之|千分之|百分之)"
+    r"|[元%％‰]\s*[/／]\s*[日天月年]|元\s*每\s*[日天月年]"
 )
 
 
+_YUAN_RE = re.compile(r"\d[\d,，]*(?:\.\d+)?\s*万?\s*元")
+
+
+# 有计算周期就按「按期计付」处理，即使另有「一次性」字样：「按每日100元计算，付款时一次性
+# 结清」里的「一次性」说的是付款方式，不是只计一次（#36 复审）。只有没有任何计算周期、
+# 写「一次性支付 / 逾期超过30日支付5000元」的，才算一次性金额
 def _is_periodic_rate(text: str | None) -> bool:
-    return bool(
-        text
-        and "一次性" not in text
-        and _RATE_RE.search(text)
-        and _PERIOD_RE.search(text)
+    return bool(text and _RATE_RE.search(text) and _PERIOD_RE.search(text))
+
+
+def _is_periodic_amount(text: str | None) -> bool:
+    """按期计付的固定金额（「每逾期一日支付违约金100元」「100元/日」），不是一次性总额。"""
+    return bool(text and _YUAN_RE.search(text) and _PERIOD_RE.search(text))
+
+
+def _is_periodic(text: str | None) -> bool:
+    return _is_periodic_rate(text) or _is_periodic_amount(text)
+
+
+def is_lump_sum_penalty(fields: dict) -> bool:
+    """
+    合同约定的违约金没有按日 / 月 / 年计算的标准（固定金额、一次性比例或未识别到），
+    诉请改写为「支付违约金¥X元」、不写「以……为基数……计至实际付清之日止」
+    （律师确认单（四）第 1 题）。律师改过计算标准时以律师为准，不切换。
+    """
+    if _lawyer_edited(fields.get("interest_rate_basis")):
+        return False
+    breach = _str_value(fields, "breach_interest_rate_text")
+    clause = _str_value(fields, "breach_clause_text")
+    # 按日 / 年持续计付的（比率或每期固定金额），以及条款原文按期计算、只是费率没抽出来的，
+    # 都不算一次性金额（见 interest_basis_field）
+    return (
+        _breach_is_penalty(fields)
+        and not _is_periodic(breach)
+        and not _is_periodic(clause)
     )
 
 
 def interest_basis_field(fields: dict) -> dict:
     """
     合同有甲方逾期付款的利率约定就用约定（待核实措辞），否则 LPR 常规话术。
-    约定的是违约金、却没有按日 / 按月 / 按年的计算标准（固定金额、一次性比例或没识别到）时，
-    不套用 LPR 持续计付：计算标准留【待补充】交律师（#30，写法待律师确认）。
+    违约金为固定金额 / 一次性比例时不按利率计算（诉请直接写金额，见 penalty_amount_field）。
     """
     breach = _str_value(fields, "breach_interest_rate_text")
-    if _breach_is_penalty(fields) and not _is_periodic_rate(breach):
+    if is_lump_sum_penalty(fields):
         return {
-            "value": None,
-            "src": "合同约定违约金，但未识别到按日 / 按年等可持续计算的标准"
-            "（可能是固定金额或一次性比例），计算方式请律师确认，不套用 LPR",
+            "value": "不适用（违约金为固定金额或一次性比例，诉请直接写金额）",
+            "src": "按律师规则：合同约定固定金额 / 一次性比例违约金，不按利率计算",
         }
+    if _breach_is_penalty(fields) and not _is_periodic_rate(breach):
+        # 条款按期计付但没有可直接套用的费率（费率没抽出来，或是「每日100元」这类每期固定金额，
+        # 写法尚未经律师确认）：不套用 LPR，也不当一次性金额，留给律师填
+        clause = _str_value(fields, "breach_clause_text")
+        if _is_periodic_amount(breach) or _is_periodic_amount(clause):
+            src = "合同约定按期计付的固定金额违约金（如每日若干元），写法待律师确认，不套用 LPR"
+        else:
+            src = "合同按日 / 年计违约金，但未识别出约定费率，请律师填写，不套用 LPR"
+        return {"value": None, "src": src}
     if breach:
         return {
             "value": breach,
@@ -431,6 +470,119 @@ def interest_basis_field(fields: dict) -> dict:
         "value": LPR_INTEREST_BASIS,
         "src": "常规话术（合同未约定甲方逾期付款利率）",
         "channel": "text",
+    }
+
+
+# 违约金金额：「人民币5000元」「5,000.00元」「1.5万元」；比例：「合同总价的10%」「欠款的5%」
+_PENALTY_YUAN_RE = re.compile(r"([0-9][0-9,，]*(?:\.\d+)?)\s*(万)?\s*元")
+_PENALTY_RATIO_RE = re.compile(
+    r"(合同总价款?|合同总额|合同价款|合同金额|总价款?|欠款|未付款项?|逾期付款金额|逾期款项?|"
+    r"应付未付(?:款项|金额)?)(?:金额)?的?\s*(\d+(?:\.\d+)?)\s*[%％]"
+)
+_UNPAID_BASES = ("欠款", "未付款", "逾期", "应付未付")
+_ANY_PERCENT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*[%％]")
+# 上下限 / 封顶等附加条件：只按单一标准算会出错，交律师（#36 复审）。
+# 分档（「30日内5%，超过30日10%」）会出现多个比例 / 金额，由下面的计数拦下；
+# 「逾期超过30日」单独出现只是触发期限，不算分档
+_PENALTY_LIMIT_RE = re.compile(
+    r"最高|最低|不超过|不高于|不低于|不少于|上限|下限|封顶|为限|累计|分别"
+)
+
+
+def _ratio_base_key(base_word: str) -> str:
+    """比例的计算基数归为两类：未付金额 / 合同总价（「合同总价」「合同总价款」是同一基数）。"""
+    return "unpaid_amount" if base_word.startswith(_UNPAID_BASES) else "total_amount"
+
+
+def _penalty_ambiguity(text: str) -> str | None:
+    """违约金条款不是单一可确定标准时返回原因；单一固定金额或单一比例返回 None。"""
+    if _PENALTY_LIMIT_RE.search(text):
+        return "条款含上限 / 下限或分档等附加条件"
+    # 按「基数 + 比例」比较完整标准：「欠款的5%」与「合同总价的5%」是两档，不能只按 5 去重；
+    # 利率摘录与条款原文重复写同一标准时，归一后是同一项，不算分档
+    standards = {
+        (_ratio_base_key(m.group(1)), float(m.group(2)))
+        for m in _PENALTY_RATIO_RE.finditer(text)
+    }
+    if len(standards) > 1:
+        return "条款出现多个计算标准（可能分档）"
+    pcts = {float(p) for p in _ANY_PERCENT_RE.findall(text)}
+    yuans = {
+        float(num.replace(",", "").replace("，", "")) * (10000 if wan else 1)
+        for num, wan in _PENALTY_YUAN_RE.findall(text)
+    }
+    if len(pcts) > 1 or len(yuans) > 1:
+        return "条款出现多个比例或金额（可能分档）"
+    if pcts and yuans:
+        return "条款同时出现比例与金额"
+    if pcts and not _PENALTY_RATIO_RE.search(text):
+        return "条款写了比例，但计算基数无法识别"
+    return None
+
+
+def _penalty_from_ratio(fields: dict, text: str) -> tuple[float, str] | None:
+    m = _PENALTY_RATIO_RE.search(text)
+    if not m:
+        return None
+    base_word, pct = m.group(1), float(m.group(2))
+    base_key = _ratio_base_key(base_word)
+    base = parse_amount(_node(fields, base_key).get("value"))
+    if base is None:
+        return None
+    label = "未付金额" if base_key == "unpaid_amount" else "合同总价"
+    note = f"按条款「{base_word}的{pct:g}%」计算：{label} {_plain_number(base)} × {pct:g}%"
+    return round(base * pct / 100, 2), note
+
+
+def _penalty_fixed(text: str) -> float | None:
+    """条款里只出现一个金额时取它；出现多个（如分档违约金）分不清，不猜。"""
+    hits = {
+        float(num.replace(",", "").replace("，", "")) * (10000 if wan else 1)
+        for num, wan in _PENALTY_YUAN_RE.findall(text)
+    }
+    return hits.pop() if len(hits) == 1 else None
+
+
+def penalty_amount_field(fields: dict) -> dict | None:
+    """
+    固定金额 / 一次性比例违约金的金额（律师确认单（四）第 1 题）：条款写明金额的照抄，
+    写比例的按合同总价或未付金额算出；一律标待核实，提醒办案律师核对。算不出时留【待补充】。
+    不是这类违约金时不派生。
+    """
+    if not is_lump_sum_penalty(fields):
+        return None
+    text = "；".join(
+        t
+        for t in (
+            _str_value(fields, "breach_interest_rate_text"),
+            _str_value(fields, "breach_clause_text"),
+        )
+        if t
+    )
+    reason = _penalty_ambiguity(text)
+    if reason:
+        return {
+            "value": None,
+            "src": f"合同约定一次性违约金，但{reason}，系统不自动计算，请律师填写",
+        }
+    ratio = _penalty_from_ratio(fields, text)
+    if ratio:
+        amount, note = ratio
+        return {
+            "value": amount,
+            "src": f"按律师规则：一次性比例违约金，{note}，待核实",
+            "channel": "text",
+        }
+    fixed = _penalty_fixed(text)
+    if fixed is not None:
+        return {
+            "value": fixed,
+            "src": "按律师规则：合同约定固定金额违约金，照抄约定金额，待核实",
+            "channel": "text",
+        }
+    return {
+        "value": None,
+        "src": "合同约定固定金额 / 一次性比例违约金，但未能确定金额，请律师填写",
     }
 
 
@@ -702,6 +854,7 @@ _DERIVERS: list[tuple[str, Callable[[dict], dict | None], bool]] = [
     ("interest_term", interest_term_field, True),
     ("breach_clause_sentence", breach_clause_sentence_field, False),
     ("interest_rate_basis", interest_basis_field, False),
+    ("penalty_amount", penalty_amount_field, True),
     ("paid_note", paid_note_field, True),
     ("unpaid_note", unpaid_note_field, True),
     ("document_kind", document_kind_field, False),

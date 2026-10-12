@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import re
 
-from app.services.derived_fields import apply_derived_fields
+from app.services.derived_fields import apply_derived_fields, is_lump_sum_penalty
 from app.services.prompt_loader import load_prompt
 from app.services.validators import parse_amount, parse_date, run_all_checks
 
@@ -107,6 +107,8 @@ def amount_to_chinese_rmb(amount: object) -> str | None:
 
 # ── 单字段基础显示串（未贴状态标注前）───────────────────────────────────────
 _AMOUNT_KEYS = {"total_amount", "paid_amount", "unpaid_amount"}
+# 违约金金额自带「¥…元」：待核实标注放在整个金额前（「⚠️ 待核实：¥5000元」）
+_YUAN_KEYS = {"penalty_amount"}
 _DATE_KEYS = {"contract_sign_date", "acceptance_latest_date"}
 
 
@@ -142,10 +144,11 @@ def _tidy_clause(text: str) -> str:
 
 def _base_display(key: str, value: object) -> str:
     """按字段类型生成基础显示串：金额取数字（模板自带 ¥/元）、日期规整、条款去尾标点。"""
-    if key in _AMOUNT_KEYS:
+    if key in _AMOUNT_KEYS | _YUAN_KEYS:
         num = parse_amount(value)
         if num is not None:
-            return _format_arabic(num)
+            text = _format_arabic(num)
+            return f"¥{text}元" if key in _YUAN_KEYS else text
     elif key in _DATE_KEYS:
         d = parse_date(value)
         if d is not None:
@@ -279,13 +282,24 @@ def _is_blank(node: object) -> bool:
 _PLACEHOLDER_RE = re.compile(r"\{\{(\w+)\}\}")
 
 
+# 按利率持续计付的写法；违约金为固定金额 / 一次性比例时整段换成违约金金额「¥X元」
+# （律师确认单（四）第 1 题）。须在换仲裁措辞之前替换（仲裁会改掉「自起诉之日起」）
+_PERIODIC_CALC = (
+    "（以¥{{unpaid_amount}}元为基数，自起诉之日起，按照{{interest_rate_basis}}"
+    "计至实际付清之日止）"
+)
+_LUMP_SUM_CALC = "{{penalty_amount}}"
+
+
 def _prepare(fields: dict, template: str | None) -> tuple[dict, str]:
-    """渲染前准备：补推派生字段（在副本上做，不改调用方数据）；约定仲裁时换成仲裁申请书措辞。"""
+    """渲染前准备：补推派生字段（在副本上做，不改调用方数据）；按违约金类型和是否仲裁换措辞。"""
     if template is None:
         # load_prompt 不传变量时原样返回模板（占位符保留）
         template = load_prompt("complaint-template.md")
     # 派生字段（原告、台数、利息、管辖、付款比例等）按律师规则补推
     fields = apply_derived_fields(dict(fields))
+    if is_lump_sum_penalty(fields):
+        template = template.replace(_PERIODIC_CALC, _LUMP_SUM_CALC)
     kind = fields.get("document_kind")
     if isinstance(kind, dict) and kind.get("value") == "仲裁申请书":
         template = to_arbitration_template(template)

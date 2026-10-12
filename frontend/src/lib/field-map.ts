@@ -55,6 +55,7 @@ export const fieldNameMap: Record<string, string> = {
   unpaid_note: '欠款比例 / 算式',
   delivery_place: '交货地点',
   install_address: '安装地点（验收报告）',
+  penalty_amount: '违约金金额（固定 / 一次性）',
 };
 
 /** 审核表格中展示的字段（有序） */
@@ -97,6 +98,7 @@ export const reviewFieldKeys: string[] = [
   'interest_term',
   'breach_interest_rate_text',
   'interest_rate_basis',
+  'penalty_amount',
   'dispute_clause_location',
   'dispute_clause_text',
   'project_site',
