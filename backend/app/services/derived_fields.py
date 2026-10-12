@@ -689,19 +689,16 @@ def _penalty_start(fields: dict) -> tuple[date | None, str]:
     unpaid = parse_amount(_node(fields, "unpaid_amount").get("value"))
     retention = parse_amount(_node(fields, "retention_unpaid_amount").get("value"))
     if unpaid and retention and abs(unpaid - retention) <= 0.01:
-        period_text = _str_value(fields, "warranty_period") or ""
-        m = _PERIOD_TEXT_RE.search(period_text)
-        n = _cn_int(m.group(1)) if m else None
-        if not n:
-            return None, "欠款为质保金，但未识别出质保期，无法推定起算日"
-        months = n * 12 if m.group(2) == "年" else n
-        due = _add_months(accepted, months)
-        return due + timedelta(days=1), (
-            f"欠款为质保金：最晚验收合格日 {accepted.isoformat()} + 质保期「{period_text}」"
-            "（按自验收合格之日起算）的次日"
-        )
+        return _retention_due(fields, accepted)
     clause = _str_value(fields, "payment_clause_text") or ""
-    terms = {(_cn_int(n), unit) for n, unit in _DUE_AFTER_ACCEPTANCE_RE.findall(clause)}
+    # 只处理「整个付款条款只有一个付款节点，且就是验收合格后 N 日 / 月内」的情况：
+    # 多个付款节点时不知道本次欠款属于哪一期，带移交 / 结算等前置条件的也不推算（#37 复审）
+    segments = [s for s in _CLAUSE_SPLIT_RE.split(clause) if _PAY_VERB_RE.search(s)]
+    if len(segments) != 1:
+        return None, "付款条款有多个付款节点或未找到付款节点，无法确定本次欠款的期限，请律师填写起算日"
+    if _PREREQUISITE_RE.search(segments[0]):
+        return None, "付款条件还含移交 / 结算等前置条件，系统不推算，请律师填写起算日"
+    terms = {(_cn_int(n), unit) for n, unit in _DUE_AFTER_ACCEPTANCE_RE.findall(segments[0])}
     if any(unit == "工作日" for _, unit in terms):
         return None, "付款期限按工作日计，系统不推算，请律师填写起算日"
     if len(terms) != 1:
@@ -713,6 +710,55 @@ def _penalty_start(fields: dict) -> tuple[date | None, str]:
     label = f"{n}个月" if unit == "月" else f"{n}日"
     return due + timedelta(days=1), (
         f"最晚验收合格日 {accepted.isoformat()} + 付款期限「验收合格后{label}内」的次日"
+    )
+
+
+_CLAUSE_SPLIT_RE = re.compile(r"[；;。\n]")
+_PAY_VERB_RE = re.compile(r"支付|付清|付款|付至|付\s*\d|付剩余|付余款|返还|结清")
+_PREREQUISITE_RE = re.compile(r"移交|结算|审计|发票|竣工|准运|备案")
+# 质保期的起算点不是验收合格时（「自交付使用之日起」等），按验收日算会错
+_NON_ACCEPTANCE_START_RE = re.compile(r"交付|使用|移交|竣工|安装完成|签收|开具|备案")
+# 质保金返还期限：「质保期满后30日内返还」「质保期届满之日起两个月内」
+_RETENTION_GRACE_RE = re.compile(
+    r"质保期(?:满|届满|结束)(?:之日)?(?:后|起)\s*([0-9]+|[零一二两三四五六七八九十百]+)\s*个?\s*(工作日|日|天|月)内"
+)
+_RETENTION_DUE_RE = re.compile(r"质保期(?:满|届满|结束)")
+
+
+def _retention_due(fields: dict, accepted: date) -> tuple[date | None, str]:
+    """
+    欠款为质保金：到期日 = 质保期满日 + 质保金返还期限（条款写「质保期满后无息返还」时为 0）。
+    质保期须自验收合格之日起算；返还条件读不清（没写质保期满、分期返还、有结算等前置条件、
+    按工作日计）时不推算（#37 复审：律师的例子不能推广到所有返还条件）。
+    """
+    period_text = _str_value(fields, "warranty_period") or ""
+    m = _PERIOD_TEXT_RE.search(period_text)
+    n = _cn_int(m.group(1)) if m else None
+    if not n:
+        return None, "欠款为质保金，但未识别出质保期，无法推定起算日"
+    period_src = str(_node(fields, "warranty_period").get("src") or "")
+    if _NON_ACCEPTANCE_START_RE.search(period_src + period_text):
+        return None, "质保期不是自验收合格之日起算，系统不推算，请律师填写起算日"
+    clause = _str_value(fields, "retention_clause_text") or ""
+    if not _RETENTION_DUE_RE.search(clause):
+        return None, "未识别出「质保期满后返还」的质保金返还条件，请律师填写起算日"
+    if len(retention_stages(fields)) > 1 or _PREREQUISITE_RE.search(clause):
+        return None, "质保金分期返还或带结算等前置条件，系统不推算，请律师填写起算日"
+    grace = {(_cn_int(g), unit) for g, unit in _RETENTION_GRACE_RE.findall(clause)}
+    if any(unit == "工作日" for _, unit in grace) or len(grace) > 1:
+        return None, "质保金返还期限按工作日计或有多个期限，系统不推算，请律师填写起算日"
+    months = n * 12 if m.group(2) == "年" else n
+    due = _add_months(accepted, months)
+    grace_note = ""
+    if grace:
+        (g, unit), = grace
+        if not g:
+            return None, "质保金返还期限无法识别，请律师填写起算日"
+        due = _add_months(due, g) if unit == "月" else due + timedelta(days=g)
+        grace_note = f" + 返还期限「{g}{'个月' if unit == '月' else '日'}」"
+    return due + timedelta(days=1), (
+        f"欠款为质保金：最晚验收合格日 {accepted.isoformat()} + 质保期「{period_text}」"
+        f"{grace_note}的次日"
     )
 
 
@@ -750,20 +796,41 @@ def penalty_until_date_field(fields: dict) -> dict | None:
     return {"value": _today().isoformat(), "src": "按律师规则：暂计至起诉状生成当日"}
 
 
+def _final_date(fields: dict, key: str) -> date | None:
+    parsed = parse_date(_str_value(fields, key))
+    return date(*parsed) if parsed else None
+
+
 def _daily_penalty_amount(fields: dict) -> dict:
-    """违约金暂计金额 = 每日金额 × 起算日至生成日的天数（头尾都算）。"""
-    rate = _daily_rate(fields)
-    start, note = _penalty_start(fields)
-    if rate is None:
-        return {"value": None, "src": "未能确定每日违约金金额，请律师填写"}
+    """
+    违约金暂计金额 = 每日金额 × 起算日至暂计日的天数（头尾都算）。
+    三项都取最终生效的审核字段（penalty_daily_text / penalty_start_date / penalty_until_date）：
+    律师改了其中任何一项，金额按律师的值重算，不沿用规则推出的旧条件（#37 复审）。
+    """
+    rate_text = _str_value(fields, "penalty_daily_text")
+    rates = {
+        float(num.replace(",", "").replace("，", "")) * (10000 if wan else 1)
+        for num, wan in _PENALTY_YUAN_RE.findall(rate_text or "")
+    }
+    if rate_text and not rates:
+        bare = parse_amount(rate_text)  # 律师只填了数字「200」
+        rates = {bare} if bare is not None else set()
+    start = _final_date(fields, "penalty_start_date")
+    until = _final_date(fields, "penalty_until_date")
+    if len(rates) != 1:
+        return {"value": None, "src": "未能确定每日违约金金额，请律师填写或核对「按日违约金标准」"}
     if start is None:
+        note = str(_node(fields, "penalty_start_date").get("src") or "起算日未确定")
         return {"value": None, "src": note}
-    until = _today()
+    if until is None:
+        return {"value": None, "src": "「暂计至」日期无法识别，请律师核对"}
+    rate = rates.pop()
     days = (until - start).days + 1
     if days <= 0:
         return {
             "value": None,
-            "src": f"违约金起算日 {start.isoformat()} 晚于今天，尚未产生违约金，请律师核对",
+            "src": f"违约金起算日 {start.isoformat()} 晚于暂计日 {until.isoformat()}，"
+            "尚未产生违约金，请律师核对",
         }
     return {
         "value": round(rate * days, 2),
