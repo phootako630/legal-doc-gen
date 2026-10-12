@@ -408,18 +408,40 @@ def _is_periodic_rate(text: str | None) -> bool:
     )
 
 
+def is_lump_sum_penalty(fields: dict) -> bool:
+    """
+    合同约定的违约金没有按日 / 月 / 年计算的标准（固定金额、一次性比例或未识别到），
+    诉请改写为「支付违约金¥X元」、不写「以……为基数……计至实际付清之日止」
+    （律师确认单（四）第 1 题）。律师改过计算标准时以律师为准，不切换。
+    """
+    if _lawyer_edited(fields.get("interest_rate_basis")):
+        return False
+    breach = _str_value(fields, "breach_interest_rate_text")
+    clause = _str_value(fields, "breach_clause_text")
+    # 条款原文按日 / 年计算、只是费率没抽出来的，不算固定金额（见 interest_basis_field）
+    return (
+        _breach_is_penalty(fields)
+        and not _is_periodic_rate(breach)
+        and not _is_periodic_rate(clause)
+    )
+
+
 def interest_basis_field(fields: dict) -> dict:
     """
     合同有甲方逾期付款的利率约定就用约定（待核实措辞），否则 LPR 常规话术。
-    约定的是违约金、却没有按日 / 按月 / 按年的计算标准（固定金额、一次性比例或没识别到）时，
-    不套用 LPR 持续计付：计算标准留【待补充】交律师（#30，写法待律师确认）。
+    违约金为固定金额 / 一次性比例时不按利率计算（诉请直接写金额，见 penalty_amount_field）。
     """
     breach = _str_value(fields, "breach_interest_rate_text")
+    if is_lump_sum_penalty(fields):
+        return {
+            "value": "不适用（违约金为固定金额或一次性比例，诉请直接写金额）",
+            "src": "按律师规则：合同约定固定金额 / 一次性比例违约金，不按利率计算",
+        }
     if _breach_is_penalty(fields) and not _is_periodic_rate(breach):
+        # 条款按日 / 年计违约金，但没识别出费率：不套用 LPR，留给律师填
         return {
             "value": None,
-            "src": "合同约定违约金，但未识别到按日 / 按年等可持续计算的标准"
-            "（可能是固定金额或一次性比例），计算方式请律师确认，不套用 LPR",
+            "src": "合同按日 / 年计违约金，但未识别出约定费率，请律师填写，不套用 LPR",
         }
     if breach:
         return {
@@ -431,6 +453,75 @@ def interest_basis_field(fields: dict) -> dict:
         "value": LPR_INTEREST_BASIS,
         "src": "常规话术（合同未约定甲方逾期付款利率）",
         "channel": "text",
+    }
+
+
+# 违约金金额：「人民币5000元」「5,000.00元」「1.5万元」；比例：「合同总价的10%」「欠款的5%」
+_PENALTY_YUAN_RE = re.compile(r"([0-9][0-9,，]*(?:\.\d+)?)\s*(万)?\s*元")
+_PENALTY_RATIO_RE = re.compile(
+    r"(合同总价款?|合同总额|合同价款|合同金额|总价款?|欠款|未付款项?|逾期付款金额|逾期款项?|"
+    r"应付未付(?:款项|金额)?)(?:金额)?的?\s*(\d+(?:\.\d+)?)\s*[%％]"
+)
+_UNPAID_BASES = ("欠款", "未付款", "逾期", "应付未付")
+
+
+def _penalty_from_ratio(fields: dict, text: str) -> tuple[float, str] | None:
+    m = _PENALTY_RATIO_RE.search(text)
+    if not m:
+        return None
+    base_word, pct = m.group(1), float(m.group(2))
+    base_key = "unpaid_amount" if base_word.startswith(_UNPAID_BASES) else "total_amount"
+    base = parse_amount(_node(fields, base_key).get("value"))
+    if base is None:
+        return None
+    label = "未付金额" if base_key == "unpaid_amount" else "合同总价"
+    note = f"按条款「{base_word}的{pct:g}%」计算：{label} {_plain_number(base)} × {pct:g}%"
+    return round(base * pct / 100, 2), note
+
+
+def _penalty_fixed(text: str) -> float | None:
+    """条款里只出现一个金额时取它；出现多个（如分档违约金）分不清，不猜。"""
+    hits = {
+        float(num.replace(",", "").replace("，", "")) * (10000 if wan else 1)
+        for num, wan in _PENALTY_YUAN_RE.findall(text)
+    }
+    return hits.pop() if len(hits) == 1 else None
+
+
+def penalty_amount_field(fields: dict) -> dict | None:
+    """
+    固定金额 / 一次性比例违约金的金额（律师确认单（四）第 1 题）：条款写明金额的照抄，
+    写比例的按合同总价或未付金额算出；一律标待核实，提醒办案律师核对。算不出时留【待补充】。
+    不是这类违约金时不派生。
+    """
+    if not is_lump_sum_penalty(fields):
+        return None
+    text = "；".join(
+        t
+        for t in (
+            _str_value(fields, "breach_interest_rate_text"),
+            _str_value(fields, "breach_clause_text"),
+        )
+        if t
+    )
+    ratio = _penalty_from_ratio(fields, text)
+    if ratio:
+        amount, note = ratio
+        return {
+            "value": amount,
+            "src": f"按律师规则：一次性比例违约金，{note}，待核实",
+            "channel": "text",
+        }
+    fixed = _penalty_fixed(text)
+    if fixed is not None:
+        return {
+            "value": fixed,
+            "src": "按律师规则：合同约定固定金额违约金，照抄约定金额，待核实",
+            "channel": "text",
+        }
+    return {
+        "value": None,
+        "src": "合同约定固定金额 / 一次性比例违约金，但未能确定金额，请律师填写",
     }
 
 
@@ -702,6 +793,7 @@ _DERIVERS: list[tuple[str, Callable[[dict], dict | None], bool]] = [
     ("interest_term", interest_term_field, True),
     ("breach_clause_sentence", breach_clause_sentence_field, False),
     ("interest_rate_basis", interest_basis_field, False),
+    ("penalty_amount", penalty_amount_field, True),
     ("paid_note", paid_note_field, True),
     ("unpaid_note", unpaid_note_field, True),
     ("document_kind", document_kind_field, False),

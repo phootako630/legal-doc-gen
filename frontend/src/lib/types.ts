@@ -118,6 +118,7 @@ export interface ExtractedFields {
   unpaid_note?: FieldValue; // 派生：欠款占合同款比例，或（到期金额-已付）算式
   delivery_place?: FieldValue; // 买卖合同交货地点
   install_address?: FieldValue; // 验收报告安装地点（推断管辖用）
+  penalty_amount?: FieldValue; // 派生：固定金额 / 一次性比例违约金的金额
 }
 
 /** 交叉校验单项结果（②：由后端确定性代码判定，非 LLM） */
