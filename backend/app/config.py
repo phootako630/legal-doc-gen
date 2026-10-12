@@ -6,10 +6,12 @@ load_dotenv(override=True)
 
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-DEEPSEEK_MODEL = "deepseek-v4-flash"
+# 2026-09-10 起官方模型名为 deepseek-flash（V4.1 Flash）；旧名 deepseek-v4-flash 只是临时别名，
+# 官方未公布下线日期，故改用正式名。需要临时切换时在 .env 里设 DEEPSEEK_MODEL 覆盖。
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-flash")
 
 LLM_TEMPERATURE = 0.1
-# deepseek-v4-flash 是推理模型：思维链（reasoning_content）也计入 max_tokens。
+# DeepSeek Flash 是推理模型：思维链（reasoning_content）也计入 max_tokens。
 # 8192 时曾出现思维链耗尽全部配额、正文为空（finish_reason=length）——
 # 必须留出足够余量，实测 16384 可被 API 接受
 LLM_MAX_TOKENS = 16384

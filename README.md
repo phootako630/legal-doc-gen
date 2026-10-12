@@ -28,7 +28,7 @@
 | 后端 | FastAPI（Python 3.10+）+ PyMuPDF（PDF）+ python-docx（Word） |
 | Agent 编排 | LangGraph（状态图 + `interrupt` 断点 + in-memory checkpoint；仅用图与检查点，不引入 LangChain 本体） |
 | OCR | Qwen-VL-OCR（阿里云 DashScope 云端 API），扫描件识别 |
-| LLM | DeepSeek API（`deepseek-v4-flash`，通过 OpenAI SDK 调用，启用结构化输出） |
+| LLM | DeepSeek API（`deepseek-flash`，通过 OpenAI SDK 调用，启用结构化输出） |
 
 ---
 

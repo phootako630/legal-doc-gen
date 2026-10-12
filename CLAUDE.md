@@ -795,10 +795,10 @@ load_dotenv()
 
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-DEEPSEEK_MODEL = "deepseek-v4-flash"
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-flash")  # 旧名 deepseek-v4-flash 为临时别名
 
 LLM_TEMPERATURE = 0.1
-# deepseek-v4-flash 是推理模型：思维链（reasoning_content）也计入 max_tokens。
+# DeepSeek Flash 是推理模型：思维链（reasoning_content）也计入 max_tokens。
 # 8192 时曾出现思维链耗尽全部配额、正文为空（finish_reason=length），故上调到 16384。
 LLM_MAX_TOKENS = 16384
 LLM_TIMEOUT = 120  # 秒

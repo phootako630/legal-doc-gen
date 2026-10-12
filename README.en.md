@@ -28,7 +28,7 @@ A web app for legal teams: lawyers upload case materials (approval forms, instal
 | Backend | FastAPI (Python 3.10+) + PyMuPDF (PDF) + python-docx (Word) |
 | Agent orchestration | LangGraph (state graph + `interrupt` breakpoints + in-memory checkpoint; graph & checkpoints only, no full LangChain) |
 | OCR | Qwen-VL-OCR (Alibaba Cloud DashScope API) for scanned documents |
-| LLM | DeepSeek API (`deepseek-v4-flash`, via the OpenAI SDK with structured output) |
+| LLM | DeepSeek API (`deepseek-flash`, via the OpenAI SDK with structured output) |
 
 ---
 
