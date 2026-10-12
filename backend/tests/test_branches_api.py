@@ -113,50 +113,60 @@ def test_save_merges_identical_duplicates(client):
     assert [e["name"] for e in res.json()["entries"]] == ["甲公司"]
 
 
-def test_save_and_restore_record_uploader(client):
-    # nginx 认证后把登录账号放在 X-Remote-User；保存与恢复都记入该版本
+def _login(username: str) -> TestClient:
+    # 每个账号一个独立的客户端（各自的会话 Cookie）
+    from app.services import auth_store
+
+    auth_store.create_user(username, "password-12345")
+    c = TestClient(app)
+    assert c.post(
+        "/api/auth/login", json={"username": username, "password": "password-12345"}
+    ).status_code == 200
+    return c
+
+
+def test_save_and_restore_record_uploader(client, monkeypatch):
+    # 上传人取登录账号；保存与恢复都记入该版本
+    monkeypatch.setattr(config, "AUTH_ENABLED", True)
+    a, b = _login("lawyer-a"), _login("lawyer-b")
     files = {"file": ("t.xlsx", _xlsx("张"))}
-    entries = client.post(
+    entries = a.post(
         "/api/branches/preview", files=files, headers=_admin()
     ).json()["entries"]
-    saved = client.post(
+    saved = a.post(
         "/api/branches",
         json={"entries": entries, "source_file": "t.xlsx"},
-        headers={**_admin(), "X-Remote-User": "lawyer-a"},
+        headers=_admin(),
     ).json()
     assert saved["uploaded_by"] == "lawyer-a"
-    assert client.get("/api/branches").json()["uploaded_by"] == "lawyer-a"
+    assert a.get("/api/branches").json()["uploaded_by"] == "lawyer-a"
 
-    entries2 = client.post(
+    entries2 = b.post(
         "/api/branches/preview",
         files={"file": ("t2.xlsx", _xlsx("李"))},
         headers=_admin(),
     ).json()["entries"]
-    client.post(
+    b.post(
         "/api/branches",
         json={"entries": entries2, "source_file": "t2.xlsx"},
-        headers={**_admin(), "X-Remote-User": "lawyer-b"},
+        headers=_admin(),
     )
-    history = client.get("/api/branches/history").json()
+    history = b.get("/api/branches/history").json()
     assert history[0]["uploaded_by"] == "lawyer-a"  # 被替换下来的旧版本保留原上传人
 
-    restored = client.post(
+    restored = b.post(
         "/api/branches/restore",
         json={"version_id": history[0]["id"]},
-        headers={**_admin(), "X-Remote-User": "lawyer-b"},
+        headers=_admin(),
     ).json()
     assert restored["uploaded_by"] == "lawyer-b"  # 恢复操作记执行人
 
 
-@pytest.mark.parametrize("header", [None, "", "has space", "x" * 33, "a;b"])
-def test_missing_or_malformed_uploader_is_blank(client, header):
-    # 本地开发没有 nginx，或请求头格式不对：不记上传人，也不影响保存
-    headers = _admin()
-    if header is not None:
-        headers["X-Remote-User"] = header
+def test_uploader_header_is_ignored(client):
+    # 未开启登录（本地开发）不记上传人；伪造旧的 X-Remote-User 请求头也不会被采信
     res = client.post(
         "/api/branches",
         json={"entries": [{"name": "甲公司", "credit_code": GOOD}]},
-        headers=headers,
+        headers={**_admin(), "X-Remote-User": "someone"},
     )
     assert res.status_code == 200 and res.json()["uploaded_by"] is None

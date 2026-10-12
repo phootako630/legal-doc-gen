@@ -13,6 +13,8 @@ services:
     env_file: backend/.env
     environment:
       TZ: Asia/Shanghai
+      # 部署环境强制开启登录（写在这里优先于 backend/.env，不会被误关）
+      AUTH_ENABLED: "1"
     volumes:
       # 案件数据（checkpoint、上传的扫描件、原告信息表、运行日志）：命名卷，重建容器不丢
       - case-data:/srv/backend/data
@@ -40,7 +42,6 @@ services:
     volumes:
       - ./deploy/nginx/${NGINX_MODE:-http}.conf:/etc/nginx/conf.d/default.conf:ro
       - ./deploy/nginx/app.conf:/etc/nginx/snippets/app.conf:ro
-      - ./deploy/htpasswd:/etc/nginx/htpasswd:ro
       - ./deploy/certs:/etc/nginx/certs:ro
     restart: unless-stopped
 

@@ -95,5 +95,17 @@ ADMIN_TOKEN = os.getenv("ADMIN_TOKEN")
 RUN_LOG_ENABLED = os.getenv("RUN_LOG_ENABLED", "1") != "0"
 RUN_LOG_PATH = os.getenv("RUN_LOG_PATH", os.path.join(_DATA_DIR, "run_log.jsonl"))
 
+# ── 登录（账号 + 会话）─────────────────────────────────────────────────────────
+# 部署时（docker-compose.yml）开启：除登录接口外所有 /api 都要求先登录。
+# 本地开发与单测默认关闭，免得每次都要先建账号；关闭时启动日志会提醒。
+AUTH_ENABLED = os.getenv("AUTH_ENABLED", "0") == "1"
+# 账号与会话库：与案件库分开，不随案件过期清除
+AUTH_DB_PATH = os.getenv("AUTH_DB_PATH", os.path.join(_DATA_DIR, "auth.sqlite"))
+SESSION_DAYS = 7  # 登录后免登录天数（到期须重新登录，不随使用顺延）
+PASSWORD_MIN_LENGTH = 10
+LOGIN_MAX_FAILURES = 5  # 同一 IP 对同一账号连续输错次数上限
+LOGIN_MAX_FAILURES_PER_IP = 20  # 同一 IP 对所有账号累计输错上限（防换账号猜）
+LOGIN_LOCK_MINUTES = 15
+
 # CORS 允许的前端地址
 CORS_ORIGINS = ["http://localhost:5173"]

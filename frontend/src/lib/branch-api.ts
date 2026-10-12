@@ -1,5 +1,6 @@
 // 原告信息表 API 客户端：查看 / 下载（所有人）与预览、保存、回退（须管理员口令）
 import type { BranchEntry, BranchHistoryItem, BranchPreview, BranchTable } from './types';
+import { noteLoginRequired } from './auth-api';
 
 const BASE = '/api/branches';
 
@@ -13,6 +14,7 @@ async function request<T>(url: string, opts: RequestInit, fallback: string): Pro
   } catch {
     throw new Error('网络连接失败，请检查网络设置后重试');
   }
+  noteLoginRequired(res);
   if (!res.ok) {
     let detail: unknown;
     try {

@@ -4,14 +4,12 @@
 #   1. POST /branches/preview 上传 Excel → 返回解析结果、校验问题、与当前版本的变更；
 #   2. 管理员确认后 POST /branches 提交条目 → 服务端重新规范化与校验后保存（旧版存档）。
 # 管理员身份凭请求头 X-Admin-Token 与服务器 ADMIN_TOKEN 比对（系统暂无账号体系）。
-# 上传人：部署时 nginx 用 Basic 认证登录，把登录账号写进 X-Remote-User 转给后端
-# （deploy/nginx/app.conf，会覆盖浏览器自带的同名头；后端不对外，只能经 nginx 访问）。
-# 保存 / 回退时记入该版本，历史列表里能看到每一版是谁传的。本地开发没有 nginx，记为空。
+# 上传人：取当前登录账号（routers/auth.py 的中间件校验会话后放进 request.state.user），
+# 保存 / 回退时记入该版本，历史列表里能看到每一版是谁传的。未开启登录时（本地开发）记为空。
 import hmac
-import re
 from urllib.parse import quote, unquote
 
-from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
 
@@ -41,14 +39,9 @@ def require_admin(x_admin_token: str | None = Header(default=None)) -> None:
         raise HTTPException(status_code=401, detail="管理员口令不正确")
 
 
-# 与 deploy/add-user.sh 允许的账号格式一致；不合格式的一律当作没有
-_USER_RE = re.compile(r"[A-Za-z0-9_.-]{1,32}")
-
-
-def current_user(x_remote_user: str | None = Header(default=None)) -> str | None:
-    """nginx 认证后的登录账号；没有或格式不对返回 None。"""
-    user = (x_remote_user or "").strip()
-    return user if _USER_RE.fullmatch(user) else None
+def current_user(request: Request) -> str | None:
+    """当前登录账号；未开启登录时为 None。"""
+    return getattr(request.state, "user", None)
 
 
 class BranchEntry(BaseModel):
