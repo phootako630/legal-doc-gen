@@ -43,6 +43,9 @@ services:
       - ./deploy/nginx/${NGINX_MODE:-http}.conf:/etc/nginx/conf.d/default.conf:ro
       - ./deploy/nginx/app.conf:/etc/nginx/snippets/app.conf:ro
       - ./deploy/certs:/etc/nginx/certs:ro
+      # Let's Encrypt 域名验证文件（deploy/cert.sh 写入）
+      - ./deploy/nginx/acme.conf:/etc/nginx/snippets/acme.conf:ro
+      - ./deploy/certbot/www:/var/www/certbot:ro
     restart: unless-stopped
 
 volumes:

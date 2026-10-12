@@ -76,22 +76,24 @@ cp deploy/compose.env.example .env
 
 ## 4. HTTPS 证书（`NGINX_MODE=https` 时）
 
-备案完成、域名解析到服务器后：
-
-1. 在阿里云「数字证书管理服务」（或腾讯云 SSL 证书）申请免费 DV 证书；
-2. 下载 **Nginx** 格式，得到 `.pem` 与 `.key`；
-3. 放到服务器：
+域名解析到服务器后（大陆服务器还须先完成备案），用 `deploy/cert.sh` 申请 **Let's Encrypt 免费证书**（90 天有效，自动续期）。
+证书申请要在系统**已经以 http 模式跑起来之后**做（验证文件经 80 端口提供），所以首次上线的顺序是：
 
 ```bash
-mkdir -p deploy/certs
-cp xxx.pem deploy/certs/fullchain.pem
-cp xxx.key deploy/certs/privkey.pem
-chmod 700 deploy/certs
-chmod 644 deploy/certs/fullchain.pem
-chmod 600 deploy/certs/privkey.pem   # 私钥只有属主可读；nginx 主进程以 root 启动时读取，不受影响
+# ① 先按第 5 步以 NGINX_MODE=http 启动，确认 http://域名 能打开
+# ② 申请证书（域名换成你的；带 www 的也一起写上，前提是 www 也解析到了本服务器）
+deploy/cert.sh issue example.com www.example.com
+# ③ 切到 https 模式并重建 web 容器
+sed -i 's/^NGINX_MODE=.*/NGINX_MODE=https/' .env
+docker compose up -d
+# ④ 每周一凌晨自动检查续期（离到期不足 30 天才真正续，续完自动让 nginx 重新加载）
+(crontab -l 2>/dev/null; echo "17 3 * * 1 cd $PWD && deploy/cert.sh renew >> $HOME/cert-renew.log 2>&1") | crontab -
 ```
 
-免费证书有效期较短，到期前替换这两个文件后 `docker compose restart web`。
+- 证书在 `deploy/certs/`（私钥 600），Let's Encrypt 账号与原始证书在 `deploy/letsencrypt/`，都不进 git；**换服务器时把这两个目录一起拷走**，或在新服务器重新 `issue`。
+- 申请失败最常见的原因：域名还没解析到本机（`ping 域名` 看 IP）、防火墙没放行 80 端口。
+- 想先演练不占正式额度：命令前加 `CERTBOT_STAGING=1`（测试证书浏览器不信任，演练完去掉再正式申请一次）。
+- 也可以改用云厂商（阿里云 / 腾讯云）免费证书：下载 **Nginx** 格式，把证书和私钥分别放成 `deploy/certs/fullchain.pem`、`deploy/certs/privkey.pem`（私钥 `chmod 600`），然后 `docker compose restart web`；这类证书要自己记得到期前更换。
 
 ---
 
