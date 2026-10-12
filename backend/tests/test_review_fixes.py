@@ -175,6 +175,8 @@ def test_lump_sum_penalty_amount_unknown_is_left_blank(clause):
         "按结算价的5%支付违约金",
         # 固定金额 + 上限
         "支付违约金5000元，累计不超过合同总价的3%",
+        # 比例数值相同、基数不同的两档
+        "逾期30日内按欠款的5%支付违约金，超过30日按合同总价的5%支付违约金",
     ],
 )
 def test_ambiguous_lump_sum_penalty_is_left_blank(clause):
@@ -184,6 +186,15 @@ def test_ambiguous_lump_sum_penalty_is_left_blank(clause):
     assert claim == "2、判令被告向原告支付违约金【待补充】；"
     node = apply_derived_fields(fields)["penalty_amount"]
     assert node["value"] is None and "不自动计算" in node["src"]
+
+
+def test_same_standard_quoted_twice_is_not_tiered():
+    # 利率摘录与条款原文写的是同一个标准（基数写法略不同）：不算分档，照常计算
+    fields = _penalty(
+        "甲方逾期付款的，应按合同总价款的10%向乙方支付违约金", rate="合同总价的10%"
+    )
+    node = apply_derived_fields(fields)["penalty_amount"]
+    assert node["value"] == 20000
 
 
 @pytest.mark.parametrize(

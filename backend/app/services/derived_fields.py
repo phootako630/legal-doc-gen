@@ -493,10 +493,23 @@ _PENALTY_LIMIT_RE = re.compile(
 )
 
 
+def _ratio_base_key(base_word: str) -> str:
+    """比例的计算基数归为两类：未付金额 / 合同总价（「合同总价」「合同总价款」是同一基数）。"""
+    return "unpaid_amount" if base_word.startswith(_UNPAID_BASES) else "total_amount"
+
+
 def _penalty_ambiguity(text: str) -> str | None:
     """违约金条款不是单一可确定标准时返回原因；单一固定金额或单一比例返回 None。"""
     if _PENALTY_LIMIT_RE.search(text):
         return "条款含上限 / 下限或分档等附加条件"
+    # 按「基数 + 比例」比较完整标准：「欠款的5%」与「合同总价的5%」是两档，不能只按 5 去重；
+    # 利率摘录与条款原文重复写同一标准时，归一后是同一项，不算分档
+    standards = {
+        (_ratio_base_key(m.group(1)), float(m.group(2)))
+        for m in _PENALTY_RATIO_RE.finditer(text)
+    }
+    if len(standards) > 1:
+        return "条款出现多个计算标准（可能分档）"
     pcts = {float(p) for p in _ANY_PERCENT_RE.findall(text)}
     yuans = {
         float(num.replace(",", "").replace("，", "")) * (10000 if wan else 1)
@@ -516,7 +529,7 @@ def _penalty_from_ratio(fields: dict, text: str) -> tuple[float, str] | None:
     if not m:
         return None
     base_word, pct = m.group(1), float(m.group(2))
-    base_key = "unpaid_amount" if base_word.startswith(_UNPAID_BASES) else "total_amount"
+    base_key = _ratio_base_key(base_word)
     base = parse_amount(_node(fields, base_key).get("value"))
     if base is None:
         return None
