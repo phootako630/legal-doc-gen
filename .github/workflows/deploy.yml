@@ -39,8 +39,18 @@ jobs:
         run: |
           set -euo pipefail
           install -m 700 -d ~/.ssh
-          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          # 私钥可填原样多行（-----BEGIN…-----END…）或 base64 单行（网页终端里复制多行常混入空格 / 换行出错）。
+          # 统一去掉 \r 和行尾空白；不是 PEM 格式就按 base64 解码
+          key="$(printf '%s' "$SSH_KEY" | tr -d '\r' | sed 's/[[:space:]]*$//')"
+          if ! printf '%s' "$key" | grep -q -- '-----BEGIN'; then
+            key="$(printf '%s' "$key" | tr -d ' \n' | base64 -d 2>/dev/null || true)"
+          fi
+          printf '%s\n' "$key" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
+          if ! ssh-keygen -y -f ~/.ssh/deploy_key >/dev/null 2>&1; then
+            echo "::error::DEPLOY_SSH_KEY 无法识别为私钥：请按 deploy/README.md 第 8 节用 base64 单行重新填写"
+            exit 1
+          fi
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
           # 服务器端用 authorized_keys 的 command= 强制执行 deploy.sh，这里传的只是提交号
           ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=yes \
