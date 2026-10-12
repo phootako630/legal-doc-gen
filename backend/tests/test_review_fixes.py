@@ -1,10 +1,11 @@
 # Codex 复审发现的三处问题的回归测试（#29 交货地、#30 违约金、#31 职务）。数据均为虚构。
 import json
+from datetime import date
 
 import pytest
 
 from app.config import PLAINTIFF_HQ_NAME as HQ
-from app.services import branch_registry
+from app.services import branch_registry, derived_fields
 from app.services.complaint_renderer import render_complaint
 from app.services.derived_fields import apply_derived_fields
 
@@ -211,15 +212,15 @@ def test_same_standard_quoted_twice_is_not_tiered():
     ],
 )
 def test_per_period_fixed_amount_is_not_lump_sum(clause, rate):
-    # 「每日100元」是按期计付，不能当成一次性总额 100 元；写法待律师确认，先留【待补充】
+    # 「每日100元」是按日累计，不能当成一次性总额；按补充答复 Q6 写起算日与暂计日
     fields = _penalty(clause, rate=rate)
     derived = apply_derived_fields(fields)
-    assert derived.get("penalty_amount", {}).get("value") is None
-    assert derived["interest_rate_basis"]["value"] is None
-    assert "按期计付的固定金额" in derived["interest_rate_basis"]["src"]
+    assert "不适用" in derived["interest_rate_basis"]["value"]
     text = render_complaint(fields)
-    assert "支付违约金⚠️ 待核实：¥100元" not in text
-    assert "按照【待补充】计至实际付清之日止" in text
+    claim = next(line for line in text.splitlines() if line.startswith("2、"))
+    assert "按照⚠️ 待核实：每日" in claim and "计至实际付清之日止，暂计至" in claim
+    # 测试数据没有验收日期：起算日推不出，金额留【待补充】，不派生一次性 100 元
+    assert claim.startswith("2、判令被告向原告支付违约金【待补充】（自【待补充】起")
     assert "贷款市场报价利率" not in text
 
 
@@ -271,6 +272,255 @@ def test_periodic_penalty_keeps_agreed_rate(rate):
 def test_plain_interest_still_defaults_to_lpr():
     text = render_complaint(_f(unpaid_amount=100000))
     assert "支付逾期付款利息" in text and "贷款市场报价利率" in text
+
+
+# ── 补充答复 Q6：按日计付的固定金额违约金 ───────────────────────────────────
+
+_TODAY = date(2026, 10, 12)
+_RETENTION_EXAMPLE = "预留合同金额5%的质保金，质保期满后无息返还"
+
+
+@pytest.fixture
+def today(monkeypatch):
+    monkeypatch.setattr(derived_fields, "_today", lambda: _TODAY)
+
+
+def _daily(**extra) -> dict:
+    fields = _penalty("甲方逾期付款的，每逾期一日应向乙方支付违约金100元")
+    fields["acceptance_latest_date"] = {
+        "value": "2023年11月19日",
+        "src": "《检验报告》",
+    }
+    for k, v in extra.items():
+        fields[k] = {"value": v, "src": "《合同》"}
+    return fields
+
+
+def test_daily_penalty_for_retention_follows_lawyer_example(today):
+    # 律师例：欠款为质保金，保修二年，最晚验收 2023-11-19 → 2025-11-20 起算
+    fields = _daily(
+        retention_unpaid_amount="100000.00元",
+        warranty_period="二年",
+        retention_clause_text=_RETENTION_EXAMPLE,
+    )
+    derived = apply_derived_fields(fields)
+    assert derived["penalty_start_date"]["value"] == "2025-11-20"
+    days = (_TODAY - date(2025, 11, 20)).days + 1  # 头尾都算
+    assert derived["penalty_amount"]["value"] == 100 * days
+    assert f"{days}天" in derived["penalty_amount"]["src"]
+    text = render_complaint(fields)
+    claim = next(line for line in text.splitlines() if line.startswith("2、"))
+    assert claim == (
+        f"2、判令被告向原告支付违约金⚠️ 待核实：¥{100 * days}元（自⚠️ 待核实：2025年11月20日起，"
+        "按照⚠️ 待核实：每日100元计至实际付清之日止，暂计至2026年10月12日）；"
+    )
+
+
+@pytest.mark.parametrize(
+    ("clause", "start"),
+    [
+        ("电梯验收合格后30日内，甲方支付至合同总价的100%", "2023-12-20"),
+        ("验收合格之日起两个月内付清余款", "2024-01-20"),
+    ],
+)
+def test_daily_penalty_start_from_payment_term(today, clause, start):
+    fields = _daily(payment_clause_text=clause)
+    assert apply_derived_fields(fields)["penalty_start_date"]["value"] == start
+
+
+@pytest.mark.parametrize(
+    ("extra", "reason"),
+    [
+        ({"payment_clause_text": "验收合格后30个工作日内付款"}, "工作日"),
+        (
+            {"payment_clause_text": "验收合格后30日内付60%，验收合格后90日内付清"},
+            "多个付款节点",
+        ),
+        # 逗号连接的不同节点（#37 复审）
+        (
+            {"payment_clause_text": "合同签订后30日内支付20%，验收合格后30日内支付80%"},
+            "多个付款节点",
+        ),
+        # 前置条件单独成句
+        (
+            {"payment_clause_text": "验收合格后30日内付款。付款前乙方须开具发票"},
+            "前置条件",
+        ),
+        ({"payment_clause_text": "完成移交并办理结算后支付"}, "前置条件"),
+        # 多个不同节点：不知道欠款属于哪一期（#37 复审）
+        (
+            {"payment_clause_text": "验收合格后30日内付20%；验收合格满一年后30日内付剩余款"},
+            "多个付款节点",
+        ),
+        # 多节点且含移交 / 结算：前置条件检查先命中
+        (
+            {
+                "payment_clause_text": "验收合格后30日内付20%；完整移交并结算后60日内付剩余款"
+            },
+            "前置条件",
+        ),
+        ({"payment_clause_text": "验收合格后30日内并收到发票后付款"}, "前置条件"),
+        ({"retention_unpaid_amount": "100000"}, "质保期"),
+    ],
+)
+def test_daily_penalty_start_unknown_is_left_blank(today, extra, reason):
+    fields = _daily(**extra)
+    derived = apply_derived_fields(fields)
+    assert derived["penalty_start_date"]["value"] is None
+    assert reason in derived["penalty_start_date"]["src"]
+    assert derived["penalty_amount"]["value"] is None
+
+
+def test_daily_penalty_not_yet_started(today):
+    fields = _daily(
+        retention_unpaid_amount="100000",
+        warranty_period="五年",
+        retention_clause_text=_RETENTION_EXAMPLE,
+    )
+    derived = apply_derived_fields(fields)
+    assert derived["penalty_start_date"]["value"] == "2028-11-20"
+    assert derived["penalty_amount"]["value"] is None
+    assert "尚未产生" in derived["penalty_amount"]["src"]
+
+
+@pytest.mark.parametrize(
+    "clause",
+    [
+        "预留5%质保金，质保期满后30日内返还",
+        "质保期满后30日返还质保金",
+        "质保期满后的30日内返还质保金",
+        "质保期满后30个日历日内返还",
+    ],
+)
+def test_retention_grace_written_variously(today, clause):
+    fields = _daily(
+        retention_unpaid_amount="100000",
+        warranty_period="二年",
+        retention_clause_text=clause,
+    )
+    assert apply_derived_fields(fields)["penalty_start_date"]["value"] == "2025-12-20"
+
+
+def test_retention_grace_in_months(today):
+    fields = _daily(
+        retention_unpaid_amount="100000",
+        warranty_period="二年",
+        retention_clause_text="质保期满后三个月返还",
+    )
+    assert apply_derived_fields(fields)["penalty_start_date"]["value"] == "2026-02-20"
+
+
+def test_retention_grace_period_is_added(today):
+    # 「质保期满后30日内返还」：到期日 = 质保期满 + 30 日，起算日再加一天（#37 复审）
+    fields = _daily(
+        retention_unpaid_amount="100000",
+        warranty_period="二年",
+        retention_clause_text="预留5%质保金，质保期满后30日内返还",
+    )
+    assert apply_derived_fields(fields)["penalty_start_date"]["value"] == "2025-12-20"
+
+
+@pytest.mark.parametrize(
+    ("extra", "reason"),
+    [
+        # 质保期自交付使用起算，不能按验收日算
+        (
+            {
+                "retention_clause_text": _RETENTION_EXAMPLE,
+                "_period_src": "《合同》第8条，自交付使用之日起",
+            },
+            "不是自验收",
+        ),
+        # 没写返还条件
+        ({}, "返还条件"),
+        # 分期返还
+        ({"retention_clause_text": "质保期满一年返还2%，质保期满后返还剩余3%"}, "分期"),
+        # 带结算前置条件
+        ({"retention_clause_text": "质保期满并办理结算后返还"}, "前置条件"),
+        # 按工作日
+        ({"retention_clause_text": "质保期满后30个工作日内返还"}, "工作日"),
+        # 写了期限但系统解析不出：不能当作期满即返还（#37 复审）
+        ({"retention_clause_text": "质保期满三十天后，甲方返还质保金"}, "无法确定"),
+        # 「经甲方确认」是返还前置条件
+        ({"retention_clause_text": "质保期满，经甲方确认后十五日内返还"}, "前置条件"),
+        ({"retention_clause_text": "质保期满，甲方于十五日内返还"}, "无法确定"),
+        # 按年 / 按周的返还期限：两个正则都没认出也不能当零天（#37 复审）
+        ({"retention_clause_text": "质保期满后一年内返还质保金"}, "无法确定"),
+        ({"retention_clause_text": "质保期满一年后无息返还"}, "无法确定"),
+        ({"retention_clause_text": "质保期满后两周内返还"}, "无法确定"),
+        ({"retention_clause_text": "质保期满后一个季度内返还"}, "无法确定"),
+        # 写在「质保期满」前面的前置条件、写在返还之后的期限都要看（#37 复审）
+        ({"retention_clause_text": "须经结算确认后，质保期满无息返还质保金"}, "前置条件"),
+        ({"retention_clause_text": "经甲方确认无质量问题后，质保期满返还"}, "前置条件"),
+        ({"retention_clause_text": "质保期满后返还质保金，返还应在30日内完成"}, "无法确定"),
+        # 质保期自交付使用起算（写在质保金条款里）
+        ({"retention_clause_text": "质保期自交付使用之日起二年，期满后无息返还"}, "返还条件"),
+        (
+            {"retention_clause_text": "质保期自交付使用之日起二年，质保期满后无息返还"},
+            "不是自验收",
+        ),
+    ],
+)
+def test_retention_due_unclear_is_left_blank(today, extra, reason):
+    extra = dict(extra)
+    period_src = extra.pop("_period_src", "《合同》第8条")
+    fields = _daily(retention_unpaid_amount="100000", **extra)
+    fields["warranty_period"] = {"value": "二年", "src": period_src}
+    derived = apply_derived_fields(fields)
+    assert derived["penalty_start_date"]["value"] is None
+    assert reason in derived["penalty_start_date"]["src"]
+    assert derived["penalty_amount"]["value"] is None
+
+
+def _lawyer(value: str) -> dict:
+    return {"value": value, "src": "律师人工确认修改"}
+
+
+def test_amount_follows_lawyer_edited_inputs(today):
+    # #37 复审复现：律师改每日标准、起算日、暂计日后，金额按律师的值重算
+    fields = _daily(payment_clause_text="验收合格后30日内付清")
+    fields["acceptance_latest_date"] = {"value": "2026年8月5日", "src": "《检验报告》"}
+    fields["penalty_daily_text"] = _lawyer("每日200元")
+    fields["penalty_start_date"] = _lawyer("2026年10月1日")
+    fields["penalty_until_date"] = _lawyer("2026年10月5日")
+    derived = apply_derived_fields(fields)
+    assert derived["penalty_amount"]["value"] == 1000  # 200 × 5 天
+    text = render_complaint(fields)
+    assert "¥1000元（自2026年10月1日起，按照每日200元" in text
+    assert "暂计至2026年10月5日" in text
+
+
+def test_lawyer_filled_start_date_enables_amount(today):
+    # 规则推不出起算日，律师补上后金额随之算出
+    fields = _daily(payment_clause_text="验收合格后30个工作日内付款")
+    fields["penalty_start_date"] = _lawyer("2026-10-03")
+    assert (
+        apply_derived_fields(fields)["penalty_amount"]["value"] == 1000
+    )  # 100 × 10 天
+
+
+def test_lawyer_bare_number_rate_and_unreadable_rate(today):
+    fields = _daily(payment_clause_text="验收合格后30日内付清")
+    fields["penalty_daily_text"] = _lawyer("150")
+    days = (_TODAY - date(2023, 12, 20)).days + 1
+    assert apply_derived_fields(fields)["penalty_amount"]["value"] == 150 * days
+    fields["penalty_daily_text"] = _lawyer("按约定标准")
+    node = apply_derived_fields(fields)["penalty_amount"]
+    assert node["value"] is None and "按日违约金标准" in node["src"]
+
+
+def test_lawyer_edited_amount_is_kept(today):
+    fields = _daily(payment_clause_text="验收合格后30日内付清")
+    fields["penalty_amount"] = _lawyer("8888")
+    assert apply_derived_fields(fields)["penalty_amount"]["value"] == "8888"
+
+
+def test_monthly_fixed_amount_is_still_left_blank():
+    # 按月计的固定金额律师未确认写法：不进入按日计算，计算标准仍留【待补充】
+    fields = _penalty("甲方每逾期一个月应支付违约金1000元")
+    derived = apply_derived_fields(fields)
+    assert derived["interest_rate_basis"]["value"] is None
+    assert derived.get("penalty_amount", {}).get("value") is None
 
 
 # ── #31：信息表已写职务时不再追加默认职务 ───────────────────────────────────
@@ -364,3 +614,23 @@ def test_lawyer_edited_rep_is_kept(table):
     fields = _f(contract_type="买卖合同")
     fields["plaintiff_person_in_charge"] = {"value": "王五", "src": "律师人工确认修改"}
     assert apply_derived_fields(fields)["plaintiff_person_in_charge"]["value"] == "王五"
+
+
+@pytest.mark.parametrize(
+    "clause",
+    [
+        # 条款前面写了质保期本身：「24个月」不是返还期限（#37 复审）
+        "质保期24个月，质保期满后30日内返还质保金",
+        # 「竣工验收」是质保期起算的写法，不是返还的前置条件（#37 复审）
+        "质保期自工程竣工验收合格之日起二年，质保期满后30日内无息返还",
+    ],
+)
+def test_retention_due_ignores_text_before_expiry(today, clause):
+    fields = _daily(
+        retention_unpaid_amount="100000",
+        warranty_period="二年",
+        retention_clause_text=clause,
+    )
+    derived = apply_derived_fields(fields)
+    # 2023-11-19 + 二年 = 2025-11-19，+ 30 日 = 2025-12-19，次日起算
+    assert derived["penalty_start_date"]["value"] == "2025-12-20"
