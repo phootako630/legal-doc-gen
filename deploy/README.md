@@ -198,7 +198,7 @@ curl -s https://<域名>/api/auth/me     # {"auth_enabled":true,...} 即已开�
 ```bash
 ssh-keygen -t ed25519 -N "" -C github-deploy -f ~/.ssh/github_deploy
 echo "command=\"$HOME/legal-doc-gen/deploy/deploy.sh\",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty $(cat ~/.ssh/github_deploy.pub)" >> ~/.ssh/authorized_keys
-cat ~/.ssh/github_deploy                     # 私钥：下一步粘贴到 GitHub，之后删掉
+base64 -w0 ~/.ssh/github_deploy; echo       # 私钥（base64 单行，网页终端里复制不易出错）：下一步粘贴到 GitHub，之后删掉
 echo "$(curl -s ifconfig.me) $(cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_key.pub)"   # 服务器指纹
 ```
 
@@ -208,7 +208,7 @@ echo "$(curl -s ifconfig.me) $(cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_key.pub
 |---|---|
 | `DEPLOY_HOST` | 服务器公网 IP |
 | `DEPLOY_USER` | `ubuntu` |
-| `DEPLOY_SSH_KEY` | ① 中 `cat ~/.ssh/github_deploy` 输出的全部内容（含首尾 `-----BEGIN/END …-----` 行） |
+| `DEPLOY_SSH_KEY` | ① 中 `base64 -w0` 输出的那一整行（也接受原样多行私钥，含首尾 `-----BEGIN/END …-----` 行） |
 | `DEPLOY_KNOWN_HOSTS` | ① 最后一行输出（`IP ssh-ed25519 AAAA…`） |
 
 粘贴完回服务器删除私钥文件：`rm ~/.ssh/github_deploy`（公钥已写进 authorized_keys，不受影响）。
@@ -218,4 +218,8 @@ echo "$(curl -s ifconfig.me) $(cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_key.pub
 
 **④ 验证**：仓库 Actions → Deploy → Run workflow，批准后应看到「部署成功」。
 
+> 部署日志出现 `Load key … error in libcrypto` 或「DEPLOY_SSH_KEY 无法识别为私钥」：私钥粘贴不完整。
+> 私钥文件已删的话，先删掉旧授权 `sed -i '/github-deploy/d' ~/.ssh/authorized_keys`，再从 ① 重新生成一遍，
+> 把新的 base64 单行更新到 `DEPLOY_SSH_KEY`，然后在 Actions 里重新运行 Deploy。
+>
 > 停用自动部署：删掉服务器 `~/.ssh/authorized_keys` 里 `github-deploy` 那一行即可（GitHub 再也登录不上）。
