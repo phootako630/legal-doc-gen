@@ -279,3 +279,41 @@ def test_signature_only_still_triggers_ocr(monkeypatch):
     ocr = _ocr_by_page({3: _SIGN_PAGE})
     _run_augment(monkeypatch, ocr, fields=fields, page_count=10)
     assert ocr.await_count == 5  # 第一批（1–5 页）里就有签章页
+
+
+# 质保期（第 8 页）：欠款是质保金、违约金按日计时，起算日要用验收日 + 质保期（补充答复 Q6）
+_WARRANTY_PAGE = "第十条 保修：质保期为二年，自验收合格之日起计算；质保期满后无息返还质保金。"
+
+
+def _retention_daily_fields(breach: str):
+    clauses = {k: {"value": v["value"], "src": v["src"]} for k, v in _CLAUSE_RESULT.items()}
+    clauses["breach_interest_rate_text"] = {"value": breach, "src": "《安装合同.pdf》"}
+    return {
+        **clauses,
+        "contract_sign_date": {"value": "2024年2月26日", "src": "《安装合同.pdf》盖章页"},
+        "contract_party_b": {"value": "某电梯公司分公司", "src": "《安装合同.pdf》盖章页"},
+        "unpaid_amount": {"value": "100000", "src": "《审批表.pdf》"},
+        "retention_unpaid_amount": {"value": "100000", "src": "《审批表.pdf》"},
+        "warranty_period": {"value": None, "src": ""},
+    }
+
+
+def test_warranty_period_is_an_ocr_target(monkeypatch):
+    # 条款都已有，但欠款是质保金、违约金每日 100 元、质保期没读到 → OCR 翻到质保期那页才停
+    fields = _retention_daily_fields("逾期付款的，每日支付违约金100元")
+    result = {
+        "warranty_period": {"value": "二年", "src": "《安装合同.pdf》第十条"},
+    }
+    ocr = _ocr_by_page({2: _PAGE2, 8: _WARRANTY_PAGE})
+    out = _run_augment(monkeypatch, ocr, chat_result=result, fields=fields, page_count=20)
+    assert ocr.await_count == 10  # 第 1–5 批没有质保期 → 第 6–10 批找到 → 停
+    assert out["extracted_fields"]["warranty_period"]["value"] == "二年"
+
+
+def test_warranty_period_not_needed_for_rate_penalty(monkeypatch):
+    # 违约金按比率计（万分之五）：起算日不用质保期，不为它多花 OCR
+    fields = _retention_daily_fields("逾期付款按每日万分之五支付违约金")
+    ocr = _ocr_by_page({8: _WARRANTY_PAGE})
+    out = _run_augment(monkeypatch, ocr, fields=fields, page_count=20)
+    assert ocr.await_count == 0
+    assert out == {}

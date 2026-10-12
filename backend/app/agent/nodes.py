@@ -27,6 +27,7 @@ from app.services.extraction import (
 )
 from app.services.derived_fields import (
     apply_derived_fields,
+    needs_warranty_period,
     parse_percent,
     payable_ratio_options,
 )
@@ -298,7 +299,8 @@ def _needs_signature_page(fields: dict) -> bool:
 
 async def ocr_augment_node(state: GraphState) -> dict:
     """
-    按需 OCR：仅当付款/违约/争议条款字段仍缺失、且存在暂存了字节的扫描合同时，
+    按需 OCR：仅当付款/违约/争议条款字段仍缺失（或签章页、质保金按日违约金所需的质保期
+    还没读到）、且存在暂存了字节的扫描合同时，
     对该合同按批并发 OCR（找到付款 + 争议条款正文即停，跳过目录页；页数受
     AGENT_MAX_OCR_PAGES 约束），再据 OCR 文本定向补齐条款字段，并以合同为准覆盖合同名称、
     合同台数、安装地址，最后重新锚定页码。OCR 不可用则优雅降级、条款保持缺失。
@@ -306,7 +308,9 @@ async def ocr_augment_node(state: GraphState) -> dict:
     fields = state.get("extracted_fields", {})
     missing = {c for c, key in _CLAUSE_INDICATOR.items() if _is_missing(fields, key)}
     need_signature = _needs_signature_page(fields)
-    if not missing and not need_signature:
+    # 欠款是质保金、违约金可能按日计时，起算日要用质保期推算：质保期还没读到也要 OCR 找
+    need_warranty = needs_warranty_period(fields)
+    if not missing and not need_signature and not need_warranty:
         return {}
 
     contracts = [
@@ -334,7 +338,7 @@ async def ocr_augment_node(state: GraphState) -> dict:
     did_ocr = False
 
     for f in contracts:
-        if budget <= 0 or not (missing or need_signature):
+        if budget <= 0 or not (missing or need_signature or need_warranty):
             break
         pdf = file_store.get(f.get("file_id"))
         if pdf is None:
@@ -346,6 +350,8 @@ async def ocr_augment_node(state: GraphState) -> dict:
         # 签约日期、合同乙方以签章页为准：还没从合同读到时，找到签章页才停
         if need_signature:
             targets = targets | {"signature"}
+        if need_warranty:
+            targets = targets | {"warranty"}
         total_pages = min(f.get("page_count") or pdf_page_count(pdf), budget)
         ocr_pages: list[dict] = []
         # 按批并发 OCR（每批 OCR_MAX_CONCURRENCY 页），每批后判断是否已找到目标条款正文
@@ -381,6 +387,8 @@ async def ocr_augment_node(state: GraphState) -> dict:
                 fields[key] = _mark_ocr_src(node, filename)
         apply_rule_guards(fields)
         missing = {c for c in missing if _is_missing(fields, _CLAUSE_INDICATOR[c])}
+        need_signature = need_signature and _needs_signature_page(fields)
+        need_warranty = needs_warranty_period(fields)
 
     if not did_ocr:
         return {}

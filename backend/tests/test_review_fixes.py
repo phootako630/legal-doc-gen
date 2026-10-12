@@ -602,3 +602,23 @@ def test_lawyer_edited_rep_is_kept(table):
     fields = _f(contract_type="买卖合同")
     fields["plaintiff_person_in_charge"] = {"value": "王五", "src": "律师人工确认修改"}
     assert apply_derived_fields(fields)["plaintiff_person_in_charge"]["value"] == "王五"
+
+
+@pytest.mark.parametrize(
+    "clause",
+    [
+        # 条款前面写了质保期本身：「24个月」不是返还期限（#37 复审）
+        "质保期24个月，质保期满后30日内返还质保金",
+        # 「竣工验收」是质保期起算的写法，不是返还的前置条件（#37 复审）
+        "质保期自工程竣工验收合格之日起二年，质保期满后30日内无息返还",
+    ],
+)
+def test_retention_due_ignores_text_before_expiry(today, clause):
+    fields = _daily(
+        retention_unpaid_amount="100000",
+        warranty_period="二年",
+        retention_clause_text=clause,
+    )
+    derived = apply_derived_fields(fields)
+    # 2023-11-19 + 二年 = 2025-11-19，+ 30 日 = 2025-12-19，次日起算
+    assert derived["penalty_start_date"]["value"] == "2025-12-20"
