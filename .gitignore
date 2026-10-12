@@ -53,3 +53,6 @@ backend/data/uploads/
 # 部署：HTTPS 证书只留在服务器（htpasswd 为旧版 nginx 认证遗留，已不再使用）
 deploy/htpasswd
 deploy/certs/
+# Let's Encrypt 账号与证书、域名验证临时文件（deploy/cert.sh 生成）
+deploy/letsencrypt/
+deploy/certbot/
