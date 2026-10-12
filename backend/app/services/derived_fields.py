@@ -751,30 +751,40 @@ _RETENTION_GRACE_RE = re.compile(
     r"(工作日|日历日|自然日|日|天|月)内?"
 )
 _RETENTION_DUE_RE = re.compile(r"质保期(?:满|届满|结束)")
-# 「质保期满」到返还动作之间的文字：须正向确认只写了已解析的返还期限或「无息 / 即」等，
-# 不能因为别的正则都没认出「一年内」「两周后」就当作期满即返还（#37 复审）
-_RETENTION_TAIL_RE = re.compile(
-    r"质保期(?:满|届满|结束)([^。；;]{0,30}?)(?:返还|退还|支付|付清|结清|付)"
+# 返还动作：条款里根本没写返还 / 支付，读不出返还条件
+_RETENTION_PAY_RE = re.compile(r"返还|退还|支付|付清|结清|付")
+# 质保期起算点的写法（「自工程竣工验收合格之日起」）：说的是质保期从哪天算，不是返还条件
+_START_POINT_RE = re.compile(r"[自从][^，,。；;]{0,30}?之日起(?:计算|计)?")
+# 起算点不是验收合格（交付使用、移交等）时按验收日算会错
+_NON_ACCEPTANCE_POINT_RE = re.compile(r"交付|使用|移交|安装完成|签收|开具|备案")
+# 质保期本身（「质保期24个月」「质保期为二年」）不是返还期限
+_PERIOD_STATEMENT_RE = re.compile(
+    r"(?:质保|保修)期限?(?:为|是)?\s*(?:[0-9]+|[零一二两三四五六七八九十贰叁]+)\s*个?\s*(?:年|月)"
 )
-# 只认紧跟「质保期满」的返还期限（锚定开头）：「质保期满，经甲方确认后十五日内」里的
-# 「后十五日内」前面还有别的条件，不算已解析
-_RETENTION_GRACE_TAIL_RE = re.compile(
-    r"^(?:之日)?(?:后|起)的?\s*(?:[0-9]+|[零一二两三四五六七八九十百]+)\s*个?\s*"
+# 已解析的返还期限：须紧跟「质保期满」（「质保期满，经甲方确认后十五日内」不算）
+_RETENTION_GRACE_AT_DUE_RE = re.compile(
+    r"质保期(?:满|届满|结束)(?:之日)?(?:后|起)的?\s*(?:[0-9]+|[零一二两三四五六七八九十百]+)\s*个?\s*"
     r"(?:工作日|日历日|自然日|日|天|月)内?"
 )
-_TIME_HINT_RE = re.compile(r"[0-9零一二两三四五六七八九十百]|年|月|日|天|周|星期|季")
+_TIME_UNIT_RE = re.compile(r"[年月日天周季]|星期")
+# 质保金返还特有的前置条件（付款条款共用的移交 / 结算 / 发票之外）
+_RETENTION_PREREQ_RE = re.compile(r"确认|审核|审批|申请|考核|无质量问题|无遗留问题")
 
 
-def _retention_tail_unparsed(clause: str) -> bool:
-    """「质保期满」之后、返还之前还有没解析的期限（或找不到返还动作）时返回 True。"""
-    tails = _RETENTION_TAIL_RE.findall(clause)
-    if not tails:
-        return True
-    for tail in tails:
-        rest = _RETENTION_GRACE_TAIL_RE.sub("", tail, count=1).replace("之日", "")
-        if _TIME_HINT_RE.search(rest):
-            return True
-    return False
+def _retention_condition_text(clause: str) -> str:
+    """去掉质保期起算点写法后的条款：前置条件、未解析期限都在整条条款上检查（#37 复审）。"""
+    return _START_POINT_RE.sub("", clause)
+
+
+def _retention_unparsed_deadline(clause: str) -> bool:
+    """
+    整条质保金条款里，除质保期本身和紧跟「质保期满」的已解析期限外还有时间字样
+    （「一年内」「返还应在30日内完成」「经甲方确认后十五日内」）时返回 True：
+    不能因为正则没认出就当作期满即返还（#37 复审）。
+    """
+    rest = _PERIOD_STATEMENT_RE.sub("", _retention_condition_text(clause))
+    rest = _RETENTION_GRACE_AT_DUE_RE.sub("质保期满", rest).replace("之日", "")
+    return bool(_TIME_UNIT_RE.search(rest))
 
 
 def _retention_due(fields: dict, accepted: date) -> tuple[date | None, str]:
@@ -792,20 +802,23 @@ def _retention_due(fields: dict, accepted: date) -> tuple[date | None, str]:
     if _NON_ACCEPTANCE_START_RE.search(period_src + period_text):
         return None, "质保期不是自验收合格之日起算，系统不推算，请律师填写起算日"
     clause = _str_value(fields, "retention_clause_text") or ""
-    due_mark = _RETENTION_DUE_RE.search(clause)
-    if not due_mark:
+    if not _RETENTION_DUE_RE.search(clause) or not _RETENTION_PAY_RE.search(clause):
         return None, "未识别出「质保期满后返还」的质保金返还条件，请律师填写起算日"
-    # 前置条件只看「质保期满」之后的返还部分：「质保期自竣工验收合格之日起」里的「竣工」
-    # 是质保期起算的写法，不是返还条件（#37 复审）
-    return_part = clause[due_mark.start():]
-    if len(retention_stages(fields)) > 1 or _PREREQUISITE_RE.search(return_part):
+    if any(_NON_ACCEPTANCE_POINT_RE.search(p) for p in _START_POINT_RE.findall(clause)):
+        return None, "质保期不是自验收合格之日起算，系统不推算，请律师填写起算日"
+    # 前置条件在整条条款上检查（写在「质保期满」前面的「须经结算确认后」也算），只剔除
+    # 「自竣工验收合格之日起」这类质保期起算写法（#37 复审）
+    conditions = _retention_condition_text(clause)
+    if (
+        len(retention_stages(fields)) > 1
+        or _PREREQUISITE_RE.search(conditions)
+        or _RETENTION_PREREQ_RE.search(conditions)
+    ):
         return None, "质保金分期返还或带结算等前置条件，系统不推算，请律师填写起算日"
     grace = {(_cn_int(g), unit) for g, unit in _RETENTION_GRACE_RE.findall(clause)}
     if any(unit == "工作日" for _, unit in grace) or len(grace) > 1:
         return None, "质保金返还期限按工作日计或有多个期限，系统不推算，请律师填写起算日"
-    # 「质保期满」之后还有没解析出来的期限：不当作「期满即返还」，交律师。只看期满之后的
-    # 文字——条款前面写的质保期本身（「质保期24个月」）不是返还期限（#37 复审）
-    if _retention_tail_unparsed(clause):
+    if _retention_unparsed_deadline(clause):
         return None, "质保金返还条款写了期限但系统无法确定，请律师填写起算日"
     months = n * 12 if m.group(2) == "年" else n
     due = _add_months(accepted, months)

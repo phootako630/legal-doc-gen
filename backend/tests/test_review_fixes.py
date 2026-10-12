@@ -441,12 +441,24 @@ def test_retention_grace_period_is_added(today):
         ({"retention_clause_text": "质保期满后30个工作日内返还"}, "工作日"),
         # 写了期限但系统解析不出：不能当作期满即返还（#37 复审）
         ({"retention_clause_text": "质保期满三十天后，甲方返还质保金"}, "无法确定"),
-        ({"retention_clause_text": "质保期满，经甲方确认后十五日内返还"}, "无法确定"),
+        # 「经甲方确认」是返还前置条件
+        ({"retention_clause_text": "质保期满，经甲方确认后十五日内返还"}, "前置条件"),
+        ({"retention_clause_text": "质保期满，甲方于十五日内返还"}, "无法确定"),
         # 按年 / 按周的返还期限：两个正则都没认出也不能当零天（#37 复审）
         ({"retention_clause_text": "质保期满后一年内返还质保金"}, "无法确定"),
         ({"retention_clause_text": "质保期满一年后无息返还"}, "无法确定"),
         ({"retention_clause_text": "质保期满后两周内返还"}, "无法确定"),
         ({"retention_clause_text": "质保期满后一个季度内返还"}, "无法确定"),
+        # 写在「质保期满」前面的前置条件、写在返还之后的期限都要看（#37 复审）
+        ({"retention_clause_text": "须经结算确认后，质保期满无息返还质保金"}, "前置条件"),
+        ({"retention_clause_text": "经甲方确认无质量问题后，质保期满返还"}, "前置条件"),
+        ({"retention_clause_text": "质保期满后返还质保金，返还应在30日内完成"}, "无法确定"),
+        # 质保期自交付使用起算（写在质保金条款里）
+        ({"retention_clause_text": "质保期自交付使用之日起二年，期满后无息返还"}, "返还条件"),
+        (
+            {"retention_clause_text": "质保期自交付使用之日起二年，质保期满后无息返还"},
+            "不是自验收",
+        ),
     ],
 )
 def test_retention_due_unclear_is_left_blank(today, extra, reason):
