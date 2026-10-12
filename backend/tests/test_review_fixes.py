@@ -203,6 +203,11 @@ def test_same_standard_quoted_twice_is_not_tiered():
         ("甲方每逾期一日支付违约金100元", None),
         ("甲方逾期付款的，应支付违约金", "每日100元的违约金标准"),
         ("甲方逾期付款的，按每日500元向乙方支付违约金", None),
+        ("甲方逾期付款的，违约金按100元/日计算", None),
+        ("甲方逾期付款的，违约金按100元每天计算", None),
+        ("甲方每逾期1天，应支付违约金100元", None),
+        # 「一次性结清」是付款方式，不是只计一次
+        ("甲方逾期付款的，违约金按每日100元计算，付款时一次性结清", None),
     ],
 )
 def test_per_period_fixed_amount_is_not_lump_sum(clause, rate):

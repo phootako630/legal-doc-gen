@@ -394,31 +394,27 @@ def breach_clause_sentence_field(fields: dict) -> dict:
 # （「日万分之五」「年利率6%」「每日按……0.05%」「每逾期一日」「按日」）。
 # 只表示触发期限的「逾期超过30日」不算周期；写明「一次性」的一律不算（#30 复审）
 _RATE_RE = re.compile(r"万分之|千分之|百分之|‰|%|％|厘")
+# 计算周期：「每日」「每逾期一日」「每逾期1天」「每个月」「按日」「日万分之五」「年利率」，
+# 以及后缀写法「100元/日」「0.05%/天」「100元每日」
 _PERIOD_RE = re.compile(
-    r"每(?:逾期)?一?[日天月年]|按[日天月年]|[日月年](?:利率|息|万分之|千分之|百分之)"
+    r"每(?:逾期)?(?:一|1)?个?[日天月年]|按[日天月年]|[日月年](?:利率|息|万分之|千分之|百分之)"
+    r"|[元%％‰]\s*[/／]\s*[日天月年]|元\s*每\s*[日天月年]"
 )
 
 
 _YUAN_RE = re.compile(r"\d[\d,，]*(?:\.\d+)?\s*万?\s*元")
 
 
+# 有计算周期就按「按期计付」处理，即使另有「一次性」字样：「按每日100元计算，付款时一次性
+# 结清」里的「一次性」说的是付款方式，不是只计一次（#36 复审）。只有没有任何计算周期、
+# 写「一次性支付 / 逾期超过30日支付5000元」的，才算一次性金额
 def _is_periodic_rate(text: str | None) -> bool:
-    return bool(
-        text
-        and "一次性" not in text
-        and _RATE_RE.search(text)
-        and _PERIOD_RE.search(text)
-    )
+    return bool(text and _RATE_RE.search(text) and _PERIOD_RE.search(text))
 
 
 def _is_periodic_amount(text: str | None) -> bool:
-    """按期计付的固定金额（「每逾期一日支付违约金100元」「每日100元」），不是一次性总额。"""
-    return bool(
-        text
-        and "一次性" not in text
-        and _YUAN_RE.search(text)
-        and _PERIOD_RE.search(text)
-    )
+    """按期计付的固定金额（「每逾期一日支付违约金100元」「100元/日」），不是一次性总额。"""
+    return bool(text and _YUAN_RE.search(text) and _PERIOD_RE.search(text))
 
 
 def _is_periodic(text: str | None) -> bool:
