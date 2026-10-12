@@ -334,15 +334,30 @@ def test_daily_penalty_start_from_payment_term(today, clause, start):
         ({"payment_clause_text": "验收合格后30个工作日内付款"}, "工作日"),
         (
             {"payment_clause_text": "验收合格后30日内付60%，验收合格后90日内付清"},
-            "唯一",
+            "多个付款节点",
+        ),
+        # 逗号连接的不同节点（#37 复审）
+        (
+            {"payment_clause_text": "合同签订后30日内支付20%，验收合格后30日内支付80%"},
+            "多个付款节点",
+        ),
+        # 前置条件单独成句
+        (
+            {"payment_clause_text": "验收合格后30日内付款。付款前乙方须开具发票"},
+            "前置条件",
         ),
         ({"payment_clause_text": "完成移交并办理结算后支付"}, "前置条件"),
         # 多个不同节点：不知道欠款属于哪一期（#37 复审）
         (
+            {"payment_clause_text": "验收合格后30日内付20%；验收合格满一年后30日内付剩余款"},
+            "多个付款节点",
+        ),
+        # 多节点且含移交 / 结算：前置条件检查先命中
+        (
             {
                 "payment_clause_text": "验收合格后30日内付20%；完整移交并结算后60日内付剩余款"
             },
-            "多个付款节点",
+            "前置条件",
         ),
         ({"payment_clause_text": "验收合格后30日内并收到发票后付款"}, "前置条件"),
         ({"retention_unpaid_amount": "100000"}, "质保期"),
@@ -366,6 +381,33 @@ def test_daily_penalty_not_yet_started(today):
     assert derived["penalty_start_date"]["value"] == "2028-11-20"
     assert derived["penalty_amount"]["value"] is None
     assert "尚未产生" in derived["penalty_amount"]["src"]
+
+
+@pytest.mark.parametrize(
+    "clause",
+    [
+        "预留5%质保金，质保期满后30日内返还",
+        "质保期满后30日返还质保金",
+        "质保期满后的30日内返还质保金",
+        "质保期满后30个日历日内返还",
+    ],
+)
+def test_retention_grace_written_variously(today, clause):
+    fields = _daily(
+        retention_unpaid_amount="100000",
+        warranty_period="二年",
+        retention_clause_text=clause,
+    )
+    assert apply_derived_fields(fields)["penalty_start_date"]["value"] == "2025-12-20"
+
+
+def test_retention_grace_in_months(today):
+    fields = _daily(
+        retention_unpaid_amount="100000",
+        warranty_period="二年",
+        retention_clause_text="质保期满后三个月返还",
+    )
+    assert apply_derived_fields(fields)["penalty_start_date"]["value"] == "2026-02-20"
 
 
 def test_retention_grace_period_is_added(today):
@@ -397,6 +439,9 @@ def test_retention_grace_period_is_added(today):
         ({"retention_clause_text": "质保期满并办理结算后返还"}, "前置条件"),
         # 按工作日
         ({"retention_clause_text": "质保期满后30个工作日内返还"}, "工作日"),
+        # 写了期限但系统解析不出：不能当作期满即返还（#37 复审）
+        ({"retention_clause_text": "质保期满三十天后，甲方返还质保金"}, "无法确定"),
+        ({"retention_clause_text": "质保期满，经甲方确认后十五日内返还"}, "无法确定"),
     ],
 )
 def test_retention_due_unclear_is_left_blank(today, extra, reason):

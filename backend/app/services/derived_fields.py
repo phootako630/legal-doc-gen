@@ -609,7 +609,12 @@ _CN_DIGITS = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五":
               "六": 6, "七": 7, "八": 8, "九": 9}
 # 付款期限：「验收合格后30日内」「验收合格之日起两个月内」「验收合格后30个工作日内」
 _DUE_AFTER_ACCEPTANCE_RE = re.compile(
-    r"验收合格(?:之日)?(?:后|起)\s*([0-9]+|[零一二两三四五六七八九十百]+)\s*个?\s*(工作日|日|天|月)内"
+    r"验收合格(?:之日)?(?:后|起)的?\s*([0-9]+|[零一二两三四五六七八九十百]+)\s*个?\s*"
+    r"(工作日|日历日|自然日|日|天|月)内?"
+)
+# 条款里任何「N 日 / N 天 / N 个月 / N 个工作日」期限（不论写在哪个付款节点）
+_DEADLINE_RE = re.compile(
+    r"(?:[0-9]+|[零一二两三四五六七八九十百]+)\s*个?\s*(?:工作日|日历日|自然日|日|天|月)"
 )
 # 质保期：「二年」「2年」「24个月」「贰年」
 _PERIOD_TEXT_RE = re.compile(r"([0-9]+|[零一二两三四五六七八九十贰叁]+)\s*个?\s*(年|月)")
@@ -692,13 +697,17 @@ def _penalty_start(fields: dict) -> tuple[date | None, str]:
         return _retention_due(fields, accepted)
     clause = _str_value(fields, "payment_clause_text") or ""
     # 只处理「整个付款条款只有一个付款节点，且就是验收合格后 N 日 / 月内」的情况：
-    # 多个付款节点时不知道本次欠款属于哪一期，带移交 / 结算等前置条件的也不推算（#37 复审）
-    segments = [s for s in _CLAUSE_SPLIT_RE.split(clause) if _PAY_VERB_RE.search(s)]
-    if len(segments) != 1:
-        return None, "付款条款有多个付款节点或未找到付款节点，无法确定本次欠款的期限，请律师填写起算日"
-    if _PREREQUISITE_RE.search(segments[0]):
+    # 按整条条款数付款动作、期限和比例（逗号连接的多期付款也算多个节点），多于一个就不推算；
+    # 移交 / 结算 / 发票等前置条件写在条款任何位置（包括单独成句）也不推算（#37 复审）
+    if _PREREQUISITE_RE.search(clause):
         return None, "付款条件还含移交 / 结算等前置条件，系统不推算，请律师填写起算日"
-    terms = {(_cn_int(n), unit) for n, unit in _DUE_AFTER_ACCEPTANCE_RE.findall(segments[0])}
+    if (
+        len(_PAY_VERB_RE.findall(clause)) != 1
+        or len(_DEADLINE_RE.findall(clause)) != 1
+        or len(set(_ANY_PERCENT_RE.findall(clause))) > 1
+    ):
+        return None, "付款条款有多个付款节点或未找到付款节点，无法确定本次欠款的期限，请律师填写起算日"
+    terms = {(_cn_int(n), unit) for n, unit in _DUE_AFTER_ACCEPTANCE_RE.findall(clause)}
     if any(unit == "工作日" for _, unit in terms):
         return None, "付款期限按工作日计，系统不推算，请律师填写起算日"
     if len(terms) != 1:
@@ -713,14 +722,14 @@ def _penalty_start(fields: dict) -> tuple[date | None, str]:
     )
 
 
-_CLAUSE_SPLIT_RE = re.compile(r"[；;。\n]")
 _PAY_VERB_RE = re.compile(r"支付|付清|付款|付至|付\s*\d|付剩余|付余款|返还|结清")
 _PREREQUISITE_RE = re.compile(r"移交|结算|审计|发票|竣工|准运|备案")
 # 质保期的起算点不是验收合格时（「自交付使用之日起」等），按验收日算会错
 _NON_ACCEPTANCE_START_RE = re.compile(r"交付|使用|移交|竣工|安装完成|签收|开具|备案")
 # 质保金返还期限：「质保期满后30日内返还」「质保期届满之日起两个月内」
 _RETENTION_GRACE_RE = re.compile(
-    r"质保期(?:满|届满|结束)(?:之日)?(?:后|起)\s*([0-9]+|[零一二两三四五六七八九十百]+)\s*个?\s*(工作日|日|天|月)内"
+    r"质保期(?:满|届满|结束)(?:之日)?(?:后|起)的?\s*([0-9]+|[零一二两三四五六七八九十百]+)\s*个?\s*"
+    r"(工作日|日历日|自然日|日|天|月)内?"
 )
 _RETENTION_DUE_RE = re.compile(r"质保期(?:满|届满|结束)")
 
@@ -747,6 +756,10 @@ def _retention_due(fields: dict, accepted: date) -> tuple[date | None, str]:
     grace = {(_cn_int(g), unit) for g, unit in _RETENTION_GRACE_RE.findall(clause)}
     if any(unit == "工作日" for _, unit in grace) or len(grace) > 1:
         return None, "质保金返还期限按工作日计或有多个期限，系统不推算，请律师填写起算日"
+    # 条款里有期限却没能按「质保期满后 N 日 / 月」解析出来：不当作「期满即返还」，交律师
+    # （只有确认没有额外期限时才按 0 天处理，#37 复审）
+    if len(_DEADLINE_RE.findall(clause)) != len(grace):
+        return None, "质保金返还条款写了期限但系统无法确定，请律师填写起算日"
     months = n * 12 if m.group(2) == "年" else n
     due = _add_months(accepted, months)
     grace_note = ""
