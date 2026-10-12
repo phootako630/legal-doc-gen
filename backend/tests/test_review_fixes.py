@@ -442,6 +442,11 @@ def test_retention_grace_period_is_added(today):
         # 写了期限但系统解析不出：不能当作期满即返还（#37 复审）
         ({"retention_clause_text": "质保期满三十天后，甲方返还质保金"}, "无法确定"),
         ({"retention_clause_text": "质保期满，经甲方确认后十五日内返还"}, "无法确定"),
+        # 按年 / 按周的返还期限：两个正则都没认出也不能当零天（#37 复审）
+        ({"retention_clause_text": "质保期满后一年内返还质保金"}, "无法确定"),
+        ({"retention_clause_text": "质保期满一年后无息返还"}, "无法确定"),
+        ({"retention_clause_text": "质保期满后两周内返还"}, "无法确定"),
+        ({"retention_clause_text": "质保期满后一个季度内返还"}, "无法确定"),
     ],
 )
 def test_retention_due_unclear_is_left_blank(today, extra, reason):

@@ -732,6 +732,28 @@ _RETENTION_GRACE_RE = re.compile(
     r"(工作日|日历日|自然日|日|天|月)内?"
 )
 _RETENTION_DUE_RE = re.compile(r"质保期(?:满|届满|结束)")
+# 「质保期满」到返还动作之间的文字：须正向确认只写了已解析的返还期限或「无息 / 即」等，
+# 不能因为别的正则都没认出「一年内」「两周后」就当作期满即返还（#37 复审）
+_RETENTION_TAIL_RE = re.compile(
+    r"质保期(?:满|届满|结束)([^。；;]{0,30}?)(?:返还|退还|支付|付清|结清|付)"
+)
+_RETENTION_GRACE_TAIL_RE = re.compile(
+    r"(?:之日)?(?:后|起)的?\s*(?:[0-9]+|[零一二两三四五六七八九十百]+)\s*个?\s*"
+    r"(?:工作日|日历日|自然日|日|天|月)内?"
+)
+_TIME_HINT_RE = re.compile(r"[0-9零一二两三四五六七八九十百]|年|月|日|天|周|星期|季")
+
+
+def _retention_tail_unparsed(clause: str) -> bool:
+    """「质保期满」之后、返还之前还有没解析的期限（或找不到返还动作）时返回 True。"""
+    tails = _RETENTION_TAIL_RE.findall(clause)
+    if not tails:
+        return True
+    for tail in tails:
+        rest = _RETENTION_GRACE_TAIL_RE.sub("", tail, count=1).replace("之日", "")
+        if _TIME_HINT_RE.search(rest):
+            return True
+    return False
 
 
 def _retention_due(fields: dict, accepted: date) -> tuple[date | None, str]:
@@ -758,7 +780,7 @@ def _retention_due(fields: dict, accepted: date) -> tuple[date | None, str]:
         return None, "质保金返还期限按工作日计或有多个期限，系统不推算，请律师填写起算日"
     # 条款里有期限却没能按「质保期满后 N 日 / 月」解析出来：不当作「期满即返还」，交律师
     # （只有确认没有额外期限时才按 0 天处理，#37 复审）
-    if len(_DEADLINE_RE.findall(clause)) != len(grace):
+    if len(_DEADLINE_RE.findall(clause)) != len(grace) or _retention_tail_unparsed(clause):
         return None, "质保金返还条款写了期限但系统无法确定，请律师填写起算日"
     months = n * 12 if m.group(2) == "年" else n
     due = _add_months(accepted, months)
