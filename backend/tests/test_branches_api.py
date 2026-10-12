@@ -111,3 +111,52 @@ def test_save_merges_identical_duplicates(client):
     res = client.post("/api/branches", json={"entries": [row, row]}, headers=_admin())
     assert res.status_code == 200
     assert [e["name"] for e in res.json()["entries"]] == ["甲公司"]
+
+
+def test_save_and_restore_record_uploader(client):
+    # nginx 认证后把登录账号放在 X-Remote-User；保存与恢复都记入该版本
+    files = {"file": ("t.xlsx", _xlsx("张"))}
+    entries = client.post(
+        "/api/branches/preview", files=files, headers=_admin()
+    ).json()["entries"]
+    saved = client.post(
+        "/api/branches",
+        json={"entries": entries, "source_file": "t.xlsx"},
+        headers={**_admin(), "X-Remote-User": "lawyer-a"},
+    ).json()
+    assert saved["uploaded_by"] == "lawyer-a"
+    assert client.get("/api/branches").json()["uploaded_by"] == "lawyer-a"
+
+    entries2 = client.post(
+        "/api/branches/preview",
+        files={"file": ("t2.xlsx", _xlsx("李"))},
+        headers=_admin(),
+    ).json()["entries"]
+    client.post(
+        "/api/branches",
+        json={"entries": entries2, "source_file": "t2.xlsx"},
+        headers={**_admin(), "X-Remote-User": "lawyer-b"},
+    )
+    history = client.get("/api/branches/history").json()
+    assert history[0]["uploaded_by"] == "lawyer-a"  # 被替换下来的旧版本保留原上传人
+
+    restored = client.post(
+        "/api/branches/restore",
+        json={"version_id": history[0]["id"]},
+        headers={**_admin(), "X-Remote-User": "lawyer-b"},
+    ).json()
+    assert restored["uploaded_by"] == "lawyer-b"  # 恢复操作记执行人
+
+
+@pytest.mark.parametrize("header", [None, "", "has space", "x" * 33, "a;b"])
+def test_missing_or_malformed_uploader_is_blank(client, header):
+    # 本地开发没有 nginx，或请求头格式不对：不记上传人，也不影响保存
+    headers = _admin()
+    if header is not None:
+        headers["X-Remote-User"] = header
+    res = client.post(
+        "/api/branches",
+        json={"entries": [{"name": "甲公司", "credit_code": GOOD}]},
+        headers=headers,
+    )
+    assert res.status_code == 200 and res.json()["uploaded_by"] is None

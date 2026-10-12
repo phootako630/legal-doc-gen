@@ -32,7 +32,9 @@ export function BranchHistory({ refreshKey, busy, onRestore }: BranchHistoryProp
         {items.slice(0, 10).map((h) => (
           <li key={h.id} className="flex items-center justify-between gap-3 px-3 py-2">
             <span className="text-muted-foreground">
-              {formatBranchDate(h.updated_at)} · {h.source_file ?? '未知文件'} · {h.count} 家
+              {formatBranchDate(h.updated_at)}
+              {h.uploaded_by ? ` · 上传人 ${h.uploaded_by}` : ''} · {h.source_file ?? '未知文件'} ·{' '}
+              {h.count} 家
             </span>
             <Button variant="ghost" size="sm" disabled={busy} onClick={() => onRestore(h)}>
               恢复此版本

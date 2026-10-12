@@ -70,8 +70,9 @@ def _str_value(fields: dict, key: str) -> str | None:
 
 def derive_court_district(address: str | None) -> str | None:
     """
-    由地址推定法院辖区（「市+区/县」），如
-    「江苏省南京市雨花台区某某二期项目」→「南京市雨花台区」。推不出返回 None。
+    由地址推定法院辖区，如「江苏省南京市雨花台区某某二期项目」→「南京市雨花台区」。
+    县级市只写县级市：「江苏省苏州市昆山市花桥镇」→「昆山市」（法院为「昆山市人民法院」，
+    律师确认单（四）第 3 题）；市辖区、县仍写「市 + 区县」。推不出返回 None。
     """
     if not address:
         return None
@@ -81,6 +82,8 @@ def derive_court_district(address: str | None) -> str | None:
     m = _CITY_DISTRICT_RE.match(s)
     if not m:
         return None
+    if m.group(2).endswith("市"):
+        return m.group(2)
     return m.group(1) + m.group(2)
 
 

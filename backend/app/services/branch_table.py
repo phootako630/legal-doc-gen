@@ -6,7 +6,9 @@
 #
 # 存储格式（branch_info.json）：
 #   {"updated_at": "2026-09-29T10:00:00+08:00", "source_file": "原告信息表.xls",
+#    "uploaded_by": "lawyer-a",
 #    "entries": [{"name", "credit_code", "address", "representative", "phone"}]}
+# uploaded_by 是上传人的登录账号（部署时 nginx 账号，见 routers/branches.py），本地开发没有则为空。
 # 兼容早期手写格式 {"headquarters": {...}, "branches": [...]}（读取时转换）。
 from __future__ import annotations
 
@@ -49,6 +51,7 @@ class BranchTable:
     entries: list[dict[str, str]]
     updated_at: str | None = None
     source_file: str | None = None
+    uploaded_by: str | None = None
 
 
 @dataclass
@@ -241,7 +244,12 @@ def load_table(path: str) -> BranchTable | None:
         entries = [normalize_entry(e) for e in data["entries"] if isinstance(e, dict)]
     else:
         entries = _from_legacy(data)
-    return BranchTable(entries, data.get("updated_at"), data.get("source_file"))
+    return BranchTable(
+        entries,
+        data.get("updated_at"),
+        data.get("source_file"),
+        data.get("uploaded_by"),
+    )
 
 
 def _write_json(path: str, table: BranchTable) -> None:
@@ -252,6 +260,7 @@ def _write_json(path: str, table: BranchTable) -> None:
             {
                 "updated_at": table.updated_at,
                 "source_file": table.source_file,
+                "uploaded_by": table.uploaded_by,
                 "entries": table.entries,
             },
             f,
@@ -272,13 +281,16 @@ def save_table(
     path: str,
     history_dir: str,
     now: datetime | None = None,
+    uploaded_by: str | None = None,
 ) -> BranchTable:
-    """保存新版本为当前表；保存前把旧版本存入历史目录。"""
+    """保存新版本为当前表；保存前把旧版本存入历史目录。uploaded_by 为上传人账号。"""
     current = load_table(path)
     if current is not None:
         _write_json(os.path.join(history_dir, f"{_history_id(current)}.json"), current)
     stamp = (now or datetime.now(_CN_TZ)).isoformat(timespec="seconds")
-    table = BranchTable([normalize_entry(e) for e in entries], stamp, source_file)
+    table = BranchTable(
+        [normalize_entry(e) for e in entries], stamp, source_file, uploaded_by
+    )
     _write_json(path, table)
     return table
 
@@ -298,6 +310,7 @@ def list_history(history_dir: str) -> list[dict[str, object]]:
                     "id": fname[:-5],
                     "updated_at": table.updated_at,
                     "source_file": table.source_file,
+                    "uploaded_by": table.uploaded_by,
                     "count": len(table.entries),
                 }
             )
@@ -305,9 +318,14 @@ def list_history(history_dir: str) -> list[dict[str, object]]:
 
 
 def restore_table(
-    version_id: str, path: str, history_dir: str, now: datetime | None = None
+    version_id: str,
+    path: str,
+    history_dir: str,
+    now: datetime | None = None,
+    uploaded_by: str | None = None,
 ) -> BranchTable:
-    """把某个历史版本恢复为当前表（恢复本身也是一次更新，当前版本同样先存档）。"""
+    """把某个历史版本恢复为当前表（恢复本身也是一次更新，当前版本同样先存档）。
+    uploaded_by 记执行恢复的人。"""
     if not re.fullmatch(r"[0-9A-Za-z_-]+", version_id):
         raise ValueError("版本号不合法")
     old = load_table(os.path.join(history_dir, f"{version_id}.json"))
@@ -316,7 +334,7 @@ def restore_table(
     source = (
         f"恢复自 {old.updated_at or version_id} 版（{old.source_file or '未知文件'}）"
     )
-    return save_table(old.entries, source, path, history_dir, now)
+    return save_table(old.entries, source, path, history_dir, now, uploaded_by)
 
 
 def age_days(table: BranchTable, now: datetime | None = None) -> int | None:

@@ -216,6 +216,7 @@ export interface BranchTable {
   entries: BranchEntry[];
   updated_at: string | null;
   source_file: string | null;
+  uploaded_by?: string | null; // 上传人登录账号（部署时由 nginx 记录，本地开发为空）
   age_days: number | null;
   stale: boolean; // 从未上传或超过 stale_days 天未更新
   stale_days: number;
@@ -243,6 +244,7 @@ export interface BranchHistoryItem {
   id: string;
   updated_at: string | null;
   source_file: string | null;
+  uploaded_by?: string | null;
   count: number;
 }
 

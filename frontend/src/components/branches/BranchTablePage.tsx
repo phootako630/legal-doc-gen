@@ -10,6 +10,9 @@ import { BranchAdminPanel } from './BranchAdminPanel';
 import { BranchList } from './BranchList';
 import { ArrowLeft, CircleCheck, Download, Loader2, TriangleAlert } from 'lucide-react';
 
+/** 「（上传人：xxx）」；没有记录上传人（本地开发或旧版本）时为空 */
+const uploader = (user?: string | null) => (user ? `（上传人：${user}）` : '');
+
 export function BranchTablePage({ onBack }: { onBack: () => void }) {
   const [table, setTable] = useState<BranchTable | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -41,7 +44,7 @@ export function BranchTablePage({ onBack }: { onBack: () => void }) {
             <div className="flex flex-wrap items-center justify-between gap-3">
               <p className="text-sm text-muted-foreground">
                 {hasTable
-                  ? `当前版本：${formatBranchDate(table.updated_at)} 更新 · 来源《${table.source_file ?? '未知文件'}》 · 共 ${table.entries.length} 家`
+                  ? `当前版本：${formatBranchDate(table.updated_at)} 更新${uploader(table.uploaded_by)} · 来源《${table.source_file ?? '未知文件'}》 · 共 ${table.entries.length} 家`
                   : '尚未上传原告信息表，起诉状中原告的这几项会留【待补充】'}
               </p>
               {hasTable && (
