@@ -7,8 +7,9 @@
                                                                           └─ 命名卷 case-data（案件数据）
 ```
 
-> **合规提醒**：真实客户案卷只能部署在**中国大陆**服务器上，且公网访问必须走 HTTPS。
-> 大陆服务器用域名对外提供访问须先完成 **ICP 备案**；备案下来之前可用 IP + HTTP 在内网/本机验证，但不要上传真实案卷。
+> **部署地点与合规**：当前部署在**中国香港**服务器（免 ICP 备案），律所已书面确认接受案卷存放在香港、扫描件经阿里云国际站（新加坡）做 OCR。
+> 案卷含一般个人信息（联系人、法定代表人姓名等），不上传身份证、银行流水等敏感个人信息；公网访问必须走 HTTPS。
+> 若日后委托方或律所要求数据留在大陆：换大陆服务器并完成 **ICP 备案**（备案前不要上传真实案卷），同时把 OCR 换成阿里云国内站（另需国内站账号与 API Key）。
 
 ---
 
@@ -177,3 +178,44 @@ curl -s https://<域名>/api/auth/me     # {"auth_enabled":true,...} 即已开�
 ```
 
 浏览器打开站点 → 登录页输入账号密码 → 上传一套**脱敏或自造**的测试材料走通全流程，确认无误再交给律师使用真实案卷。
+
+---
+
+## 8. 自动部署（GitHub Actions + 审批）
+
+合并 PR 到 `master` 且 CI 通过后，GitHub 先等你**批准**，批准后才登录服务器执行 `deploy/deploy.sh`：
+拉取该提交 → 重新构建启动 → 检查服务 → **失败自动回滚到上一个版本**。部署记录和日志在仓库 Actions 页面的「Deploy」里。
+
+- 只部署 `master` 上的提交；服务器上有人手改过受版本控制的文件时拒绝部署（不覆盖手工修改）。
+- 部署会重启后端，进行中的分析会中断（律师重新点「开始分析」即可），建议挑律师不用的时间批准。
+- API 密钥只在服务器的 `backend/.env`，不进 GitHub；部署流程也不读它。
+- 也可以在服务器上手动部署：`deploy/deploy.sh`（部署 origin/master 最新版），效果一样。
+
+### 一次性配置
+
+**① 在服务器上生成专用部署密钥**，并限定它只能运行部署脚本（拿不到 shell）：
+
+```bash
+ssh-keygen -t ed25519 -N "" -C github-deploy -f ~/.ssh/github_deploy
+echo "command=\"$HOME/legal-doc-gen/deploy/deploy.sh\",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty $(cat ~/.ssh/github_deploy.pub)" >> ~/.ssh/authorized_keys
+cat ~/.ssh/github_deploy                     # 私钥：下一步粘贴到 GitHub，之后删掉
+echo "$(curl -s ifconfig.me) $(cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_key.pub)"   # 服务器指纹
+```
+
+**② 在 GitHub 仓库 → Settings → Secrets and variables → Actions → New repository secret** 添加 4 项：
+
+| 名称 | 值 |
+|---|---|
+| `DEPLOY_HOST` | 服务器公网 IP |
+| `DEPLOY_USER` | `ubuntu` |
+| `DEPLOY_SSH_KEY` | ① 中 `cat ~/.ssh/github_deploy` 输出的全部内容（含首尾 `-----BEGIN/END …-----` 行） |
+| `DEPLOY_KNOWN_HOSTS` | ① 最后一行输出（`IP ssh-ed25519 AAAA…`） |
+
+粘贴完回服务器删除私钥文件：`rm ~/.ssh/github_deploy`（公钥已写进 authorized_keys，不受影响）。
+
+**③ 在 GitHub 仓库 → Settings → Environments → New environment**，名称填 `production`：
+勾选 **Required reviewers** 并添加自己；**Deployment branches** 选 `Selected branches` 只允许 `master`。
+
+**④ 验证**：仓库 Actions → Deploy → Run workflow，批准后应看到「部署成功」。
+
+> 停用自动部署：删掉服务器 `~/.ssh/authorized_keys` 里 `github-deploy` 那一行即可（GitHub 再也登录不上）。

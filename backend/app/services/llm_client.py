@@ -47,7 +47,7 @@ def _strip_markdown_json(raw: str) -> str:
     return cleaned.strip()
 
 
-# JSON 模式下补充的系统指令。deepseek-v4-flash 在 response_format=json_object 时常把答案包成
+# JSON 模式下补充的系统指令。DeepSeek Flash（自 deepseek-v4-flash 起）在 response_format=json_object 时常把答案包成
 # {"type": "json_object", "content": ...}（content 可能是对象或字符串，偶尔缺结尾括号），
 # 甚至只回 {"type": "json_object"}。实测（真实案卷抽取，每组 4 次）：无此指令仅 1/4 可直接用，
 # 加上后 4/4。
