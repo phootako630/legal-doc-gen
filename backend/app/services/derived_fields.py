@@ -17,13 +17,15 @@
 # 律师改过的值（src 以「律师」开头）一律保留，不覆盖：AI 只提议，律师拍板。
 from __future__ import annotations
 
+import calendar
 import re
 from collections.abc import Callable
+from datetime import date, datetime, timedelta, timezone
 
 from app.config import PLAINTIFF_HQ_NAME, PLAINTIFF_HQ_REP_TITLE, PLAINTIFF_PHONE
 from app.services.branch_registry import lookup_plaintiff, resolve_plaintiff_name
 from app.services.branch_table import normalize_name
-from app.services.validators import parse_amount, parse_qty
+from app.services.validators import parse_amount, parse_date, parse_qty
 
 # 逾期付款利息的常规话术（诉状中"按照……计至实际付清之日止"）
 # 补充确认单第 3 题：以「全国银行间同业拆借中心公布的一年期贷款市场报价利率」为准
@@ -71,8 +73,9 @@ def _str_value(fields: dict, key: str) -> str | None:
 def derive_court_district(address: str | None) -> str | None:
     """
     由地址推定法院辖区，如「江苏省南京市雨花台区某某二期项目」→「南京市雨花台区」。
-    县级市只写县级市：「江苏省苏州市昆山市花桥镇」→「昆山市」（法院为「昆山市人民法院」，
-    律师确认单（四）第 3 题）；市辖区、县仍写「市 + 区县」。推不出返回 None。
+    县级市、县只写县级市 / 县：「江苏省苏州市昆山市花桥镇」→「昆山市」（律师确认单（四）
+    第 3 题）、「江苏省徐州市沛县某镇」→「沛县」（补充答复 Q5）；市辖区写「市 + 区」。
+    推不出返回 None。
     """
     if not address:
         return None
@@ -82,7 +85,7 @@ def derive_court_district(address: str | None) -> str | None:
     m = _CITY_DISTRICT_RE.match(s)
     if not m:
         return None
-    if m.group(2).endswith("市"):
+    if m.group(2).endswith(("市", "县")):
         return m.group(2)
     return m.group(1) + m.group(2)
 
@@ -451,6 +454,11 @@ def interest_basis_field(fields: dict) -> dict:
             "value": "不适用（违约金为固定金额或一次性比例，诉请直接写金额）",
             "src": "按律师规则：合同约定固定金额 / 一次性比例违约金，不按利率计算",
         }
+    if is_daily_amount_penalty(fields):
+        return {
+            "value": "不适用（违约金按每日固定金额计算，诉请写金额与起算日）",
+            "src": "按律师规则：合同约定按日计付的固定金额违约金，不按利率计算",
+        }
     if _breach_is_penalty(fields) and not _is_periodic_rate(breach):
         # 条款按期计付但没有可直接套用的费率（费率没抽出来，或是「每日100元」这类每期固定金额，
         # 写法尚未经律师确认）：不套用 LPR，也不当一次性金额，留给律师填
@@ -549,6 +557,8 @@ def penalty_amount_field(fields: dict) -> dict | None:
     写比例的按合同总价或未付金额算出；一律标待核实，提醒办案律师核对。算不出时留【待补充】。
     不是这类违约金时不派生。
     """
+    if is_daily_amount_penalty(fields):
+        return _daily_penalty_amount(fields)
     if not is_lump_sum_penalty(fields):
         return None
     text = "；".join(
@@ -583,6 +593,185 @@ def penalty_amount_field(fields: dict) -> dict | None:
     return {
         "value": None,
         "src": "合同约定固定金额 / 一次性比例违约金，但未能确定金额，请律师填写",
+    }
+
+
+# ── 按日计付的固定金额违约金（补充答复 Q6）───────────────────────────────────
+# 诉请写「支付违约金¥X元（自A起，按照每日N元计至实际付清之日止，暂计至B）」：
+#   A = 按付款条件推定的起算日（付款期限届满的次日）；B = 生成起诉状当日；
+#   X = 每日金额 × A 至 B 的天数（头尾都算）。A、X 一律标待核实。
+# 只处理按「日 / 天」计的固定金额；按月 / 年计的仍留【待补充】。
+_DAILY_RE = re.compile(
+    r"每(?:逾期)?(?:一|1)?[日天]|按[日天]|元\s*[/／]\s*[日天]|元\s*每\s*[日天]"
+)
+_CN_TZ = timezone(timedelta(hours=8))
+_CN_DIGITS = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,
+              "六": 6, "七": 7, "八": 8, "九": 9}
+# 付款期限：「验收合格后30日内」「验收合格之日起两个月内」「验收合格后30个工作日内」
+_DUE_AFTER_ACCEPTANCE_RE = re.compile(
+    r"验收合格(?:之日)?(?:后|起)\s*([0-9]+|[零一二两三四五六七八九十百]+)\s*个?\s*(工作日|日|天|月)内"
+)
+# 质保期：「二年」「2年」「24个月」「贰年」
+_PERIOD_TEXT_RE = re.compile(r"([0-9]+|[零一二两三四五六七八九十贰叁]+)\s*个?\s*(年|月)")
+
+
+def _today() -> date:
+    """起诉状生成当日（北京时间）；单独成函数便于测试固定日期。"""
+    return datetime.now(_CN_TZ).date()
+
+
+def _cn_int(text: str) -> int | None:
+    """「30」「三十」「二十四」「两」「贰」→ 整数；认不出返回 None。"""
+    text = text.replace("贰", "二").replace("叁", "三")
+    if text.isdigit():
+        return int(text)
+    if text == "十":
+        return 10
+    if "十" in text:
+        tens, _, ones = text.partition("十")
+        t = _CN_DIGITS.get(tens, None) if tens else 1
+        o = _CN_DIGITS.get(ones, None) if ones else 0
+        return None if t is None or o is None else t * 10 + o
+    return _CN_DIGITS.get(text) if len(text) == 1 else None
+
+
+def _add_months(d: date, months: int) -> date:
+    year, month = divmod(d.month - 1 + months, 12)
+    year += d.year
+    day = min(d.day, calendar.monthrange(year, month + 1)[1])
+    return date(year, month + 1, day)
+
+
+def _is_daily_amount(text: str | None) -> bool:
+    return bool(
+        text and _YUAN_RE.search(text) and _DAILY_RE.search(text) and not _RATE_RE.search(text)
+    )
+
+
+def is_daily_amount_penalty(fields: dict) -> bool:
+    """违约金按「每日 N 元」计付（不是比率），律师没改过计算标准。"""
+    if _lawyer_edited(fields.get("interest_rate_basis")) or not _breach_is_penalty(fields):
+        return False
+    breach = _str_value(fields, "breach_interest_rate_text")
+    clause = _str_value(fields, "breach_clause_text")
+    if _is_periodic_rate(breach) or _is_periodic_rate(clause):
+        return False
+    return _is_daily_amount(breach) or _is_daily_amount(clause)
+
+
+def _daily_rate(fields: dict) -> float | None:
+    """每日金额：条款只写了一个金额、没有上限 / 分档等附加条件时才取。"""
+    text = "；".join(
+        t
+        for t in (
+            _str_value(fields, "breach_interest_rate_text"),
+            _str_value(fields, "breach_clause_text"),
+        )
+        if t
+    )
+    if _penalty_ambiguity(text):
+        return None
+    return _penalty_fixed(text)
+
+
+def _penalty_start(fields: dict) -> tuple[date | None, str]:
+    """
+    违约金起算日 = 欠款付款期限届满的次日：
+      欠款是质保金 → 最晚验收合格日 + 质保期，再加一天（律师例：2023-11-19 验收、保修二年 →
+      2025-11-20 起算）；
+      否则按付款条款「验收合格后 N 日 / N 个月内」→ 最晚验收合格日 + N，再加一天。
+    按工作日计、条款里有多个不同期限、缺验收日期等推不出时返回 None 和原因。
+    """
+    acc = parse_date(_str_value(fields, "acceptance_latest_date"))
+    if acc is None:
+        return None, "缺最晚验收合格日期，无法推定起算日"
+    accepted = date(*acc)
+    unpaid = parse_amount(_node(fields, "unpaid_amount").get("value"))
+    retention = parse_amount(_node(fields, "retention_unpaid_amount").get("value"))
+    if unpaid and retention and abs(unpaid - retention) <= 0.01:
+        period_text = _str_value(fields, "warranty_period") or ""
+        m = _PERIOD_TEXT_RE.search(period_text)
+        n = _cn_int(m.group(1)) if m else None
+        if not n:
+            return None, "欠款为质保金，但未识别出质保期，无法推定起算日"
+        months = n * 12 if m.group(2) == "年" else n
+        due = _add_months(accepted, months)
+        return due + timedelta(days=1), (
+            f"欠款为质保金：最晚验收合格日 {accepted.isoformat()} + 质保期「{period_text}」"
+            "（按自验收合格之日起算）的次日"
+        )
+    clause = _str_value(fields, "payment_clause_text") or ""
+    terms = {(_cn_int(n), unit) for n, unit in _DUE_AFTER_ACCEPTANCE_RE.findall(clause)}
+    if any(unit == "工作日" for _, unit in terms):
+        return None, "付款期限按工作日计，系统不推算，请律师填写起算日"
+    if len(terms) != 1:
+        return None, "付款条款中未找到唯一的「验收合格后 N 日 / 月内」期限，请律师填写起算日"
+    (n, unit), = terms
+    if not n:
+        return None, "付款期限的天数无法识别，请律师填写起算日"
+    due = _add_months(accepted, n) if unit == "月" else accepted + timedelta(days=n)
+    label = f"{n}个月" if unit == "月" else f"{n}日"
+    return due + timedelta(days=1), (
+        f"最晚验收合格日 {accepted.isoformat()} + 付款期限「验收合格后{label}内」的次日"
+    )
+
+
+def penalty_daily_text_field(fields: dict) -> dict | None:
+    """诉请括号里的「按照每日N元」。"""
+    if not is_daily_amount_penalty(fields):
+        return None
+    rate = _daily_rate(fields)
+    if rate is None:
+        return {"value": None, "src": "未能确定每日违约金金额（可能有上限或分档），请律师填写"}
+    return {
+        "value": f"每日{_plain_number(rate)}元",
+        "src": "合同约定的每日违约金金额，待核实",
+        "channel": "text",
+    }
+
+
+def penalty_start_date_field(fields: dict) -> dict | None:
+    if not is_daily_amount_penalty(fields):
+        return None
+    start, note = _penalty_start(fields)
+    if start is None:
+        return {"value": None, "src": note}
+    return {
+        "value": start.isoformat(),
+        "src": f"按律师规则：{note}，待核实",
+        "channel": "text",
+    }
+
+
+def penalty_until_date_field(fields: dict) -> dict | None:
+    """「暂计至」= 生成起诉状当日。每次生成都按当天刷新。"""
+    if not is_daily_amount_penalty(fields):
+        return None
+    return {"value": _today().isoformat(), "src": "按律师规则：暂计至起诉状生成当日"}
+
+
+def _daily_penalty_amount(fields: dict) -> dict:
+    """违约金暂计金额 = 每日金额 × 起算日至生成日的天数（头尾都算）。"""
+    rate = _daily_rate(fields)
+    start, note = _penalty_start(fields)
+    if rate is None:
+        return {"value": None, "src": "未能确定每日违约金金额，请律师填写"}
+    if start is None:
+        return {"value": None, "src": note}
+    until = _today()
+    days = (until - start).days + 1
+    if days <= 0:
+        return {
+            "value": None,
+            "src": f"违约金起算日 {start.isoformat()} 晚于今天，尚未产生违约金，请律师核对",
+        }
+    return {
+        "value": round(rate * days, 2),
+        "src": (
+            f"按律师规则：每日{_plain_number(rate)}元 × {days}天"
+            f"（{start.isoformat()} 至 {until.isoformat()}，头尾都算），待核实"
+        ),
+        "channel": "text",
     }
 
 
@@ -854,6 +1043,9 @@ _DERIVERS: list[tuple[str, Callable[[dict], dict | None], bool]] = [
     ("interest_term", interest_term_field, True),
     ("breach_clause_sentence", breach_clause_sentence_field, False),
     ("interest_rate_basis", interest_basis_field, False),
+    ("penalty_daily_text", penalty_daily_text_field, True),
+    ("penalty_start_date", penalty_start_date_field, True),
+    ("penalty_until_date", penalty_until_date_field, True),
     ("penalty_amount", penalty_amount_field, True),
     ("paid_note", paid_note_field, True),
     ("unpaid_note", unpaid_note_field, True),

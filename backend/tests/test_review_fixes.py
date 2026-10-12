@@ -1,10 +1,11 @@
 # Codex 复审发现的三处问题的回归测试（#29 交货地、#30 违约金、#31 职务）。数据均为虚构。
 import json
+from datetime import date
 
 import pytest
 
 from app.config import PLAINTIFF_HQ_NAME as HQ
-from app.services import branch_registry
+from app.services import branch_registry, derived_fields
 from app.services.complaint_renderer import render_complaint
 from app.services.derived_fields import apply_derived_fields
 
@@ -211,15 +212,15 @@ def test_same_standard_quoted_twice_is_not_tiered():
     ],
 )
 def test_per_period_fixed_amount_is_not_lump_sum(clause, rate):
-    # 「每日100元」是按期计付，不能当成一次性总额 100 元；写法待律师确认，先留【待补充】
+    # 「每日100元」是按日累计，不能当成一次性总额；按补充答复 Q6 写起算日与暂计日
     fields = _penalty(clause, rate=rate)
     derived = apply_derived_fields(fields)
-    assert derived.get("penalty_amount", {}).get("value") is None
-    assert derived["interest_rate_basis"]["value"] is None
-    assert "按期计付的固定金额" in derived["interest_rate_basis"]["src"]
+    assert "不适用" in derived["interest_rate_basis"]["value"]
     text = render_complaint(fields)
-    assert "支付违约金⚠️ 待核实：¥100元" not in text
-    assert "按照【待补充】计至实际付清之日止" in text
+    claim = next(line for line in text.splitlines() if line.startswith("2、"))
+    assert "按照⚠️ 待核实：每日" in claim and "计至实际付清之日止，暂计至" in claim
+    # 测试数据没有验收日期：起算日推不出，金额留【待补充】，不派生一次性 100 元
+    assert claim.startswith("2、判令被告向原告支付违约金【待补充】（自【待补充】起")
     assert "贷款市场报价利率" not in text
 
 
@@ -271,6 +272,91 @@ def test_periodic_penalty_keeps_agreed_rate(rate):
 def test_plain_interest_still_defaults_to_lpr():
     text = render_complaint(_f(unpaid_amount=100000))
     assert "支付逾期付款利息" in text and "贷款市场报价利率" in text
+
+
+# ── 补充答复 Q6：按日计付的固定金额违约金 ───────────────────────────────────
+
+_TODAY = date(2026, 10, 12)
+
+
+@pytest.fixture
+def today(monkeypatch):
+    monkeypatch.setattr(derived_fields, "_today", lambda: _TODAY)
+
+
+def _daily(**extra) -> dict:
+    fields = _penalty("甲方逾期付款的，每逾期一日应向乙方支付违约金100元")
+    fields["acceptance_latest_date"] = {
+        "value": "2023年11月19日",
+        "src": "《检验报告》",
+    }
+    for k, v in extra.items():
+        fields[k] = {"value": v, "src": "《合同》"}
+    return fields
+
+
+def test_daily_penalty_for_retention_follows_lawyer_example(today):
+    # 律师例：欠款为质保金，保修二年，最晚验收 2023-11-19 → 2025-11-20 起算
+    fields = _daily(retention_unpaid_amount="100000.00元", warranty_period="二年")
+    derived = apply_derived_fields(fields)
+    assert derived["penalty_start_date"]["value"] == "2025-11-20"
+    days = (_TODAY - date(2025, 11, 20)).days + 1  # 头尾都算
+    assert derived["penalty_amount"]["value"] == 100 * days
+    assert f"{days}天" in derived["penalty_amount"]["src"]
+    text = render_complaint(fields)
+    claim = next(line for line in text.splitlines() if line.startswith("2、"))
+    assert claim == (
+        f"2、判令被告向原告支付违约金⚠️ 待核实：¥{100 * days}元（自⚠️ 待核实：2025年11月20日起，"
+        "按照⚠️ 待核实：每日100元计至实际付清之日止，暂计至2026年10月12日）；"
+    )
+
+
+@pytest.mark.parametrize(
+    ("clause", "start"),
+    [
+        ("电梯验收合格后30日内，甲方支付至合同总价的100%", "2023-12-20"),
+        ("验收合格之日起两个月内付清余款", "2024-01-20"),
+    ],
+)
+def test_daily_penalty_start_from_payment_term(today, clause, start):
+    fields = _daily(payment_clause_text=clause)
+    assert apply_derived_fields(fields)["penalty_start_date"]["value"] == start
+
+
+@pytest.mark.parametrize(
+    ("extra", "reason"),
+    [
+        ({"payment_clause_text": "验收合格后30个工作日内付款"}, "工作日"),
+        (
+            {"payment_clause_text": "验收合格后30日内付60%，验收合格后90日内付清"},
+            "唯一",
+        ),
+        ({"payment_clause_text": "完成移交并办理结算后支付"}, "唯一"),
+        ({"retention_unpaid_amount": "100000"}, "质保期"),
+    ],
+)
+def test_daily_penalty_start_unknown_is_left_blank(today, extra, reason):
+    fields = _daily(**extra)
+    derived = apply_derived_fields(fields)
+    assert derived["penalty_start_date"]["value"] is None
+    assert reason in derived["penalty_start_date"]["src"]
+    assert derived["penalty_amount"]["value"] is None
+
+
+def test_daily_penalty_not_yet_started(today):
+    fields = _daily(retention_unpaid_amount="100000", warranty_period="五年")
+    derived = apply_derived_fields(fields)
+    assert derived["penalty_start_date"]["value"] == "2028-11-20"
+    assert derived["penalty_amount"]["value"] is None
+    assert "尚未产生" in derived["penalty_amount"]["src"]
+
+
+def test_monthly_fixed_amount_is_still_left_blank():
+    # 按月计的固定金额律师未确认写法：不进入按日计算，计算标准仍留【待补充】
+    fields = _penalty("甲方每逾期一个月应支付违约金1000元")
+    derived = apply_derived_fields(fields)
+    assert derived["interest_rate_basis"]["value"] is None
+    assert derived.get("penalty_amount", {}).get("value") is None
 
 
 # ── #31：信息表已写职务时不再追加默认职务 ───────────────────────────────────

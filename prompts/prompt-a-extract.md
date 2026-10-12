@@ -34,6 +34,7 @@
 - `breach_interest_clause_location` / `breach_interest_rate_text` / `breach_clause_text`：甲方（发包方 / 买方）逾期付款的违约条款，location 写条款编号，rate_text 写能放进「按照____计至实际付清之日止」的短语（如「日万分之零点五的利率」），clause_text 照抄条款原文；乙方工期、施工等方面的违约金不算
 - `project_site`：工程所在地（含省市区的完整地址，如「江苏省南京市雨花台区XX项目」）
 - `delivery_place`：买卖合同约定的交货地点，照抄；没有填 null
+- `warranty_period`：合同质保期 / 保修期条款约定的期限，只写期限（如「二年」「24个月」）；src 写条款位置，起算点不是验收合格之日的在 src 注明；没有填 null
 - `install_address`：验收 / 监督检验报告的「安装地点」（或「设备使用地点」），照抄；多份报告取第一份
 
 ## 材料清点结果（第一步已确认）
@@ -89,6 +90,7 @@
   "dispute_clause_text": {"value": null, "src": ""},
   "project_site": {"value": null, "src": ""},
   "delivery_place": {"value": null, "src": ""},
+  "warranty_period": {"value": null, "src": ""},
   "install_address": {"value": null, "src": ""},
   "internet_lookup_status": {"value": null, "src": ""}
 }

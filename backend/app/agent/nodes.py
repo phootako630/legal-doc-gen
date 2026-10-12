@@ -55,6 +55,7 @@ _ALL_CLAUSE_KEYS = [
     "dispute_clause_location",
     "dispute_clause_text",
     "delivery_place",  # 第三轮第 9 题：约定交货地法院时取交货地点
+    "warranty_period",  # 补充答复 Q6：质保金按日违约金的起算日 = 验收 + 质保期的次日
     "payment_clause_summary",
     "retention_ratio",
     "retention_clause_text",

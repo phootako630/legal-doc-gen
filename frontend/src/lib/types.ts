@@ -118,7 +118,11 @@ export interface ExtractedFields {
   unpaid_note?: FieldValue; // 派生：欠款占合同款比例，或（到期金额-已付）算式
   delivery_place?: FieldValue; // 买卖合同交货地点
   install_address?: FieldValue; // 验收报告安装地点（推断管辖用）
-  penalty_amount?: FieldValue; // 派生：固定金额 / 一次性比例违约金的金额
+  penalty_amount?: FieldValue; // 派生：违约金金额（一次性；或按日计付的暂计金额）
+  penalty_daily_text?: FieldValue; // 派生：按日计付标准「每日N元」
+  penalty_start_date?: FieldValue; // 派生：按日违约金起算日（付款期限届满次日）
+  penalty_until_date?: FieldValue; // 派生：暂计至（起诉状生成当日）
+  warranty_period?: FieldValue; // 合同质保期（如「二年」）
 }
 
 /** 交叉校验单项结果（②：由后端确定性代码判定，非 LLM） */

@@ -15,7 +15,11 @@ from __future__ import annotations
 
 import re
 
-from app.services.derived_fields import apply_derived_fields, is_lump_sum_penalty
+from app.services.derived_fields import (
+    apply_derived_fields,
+    is_daily_amount_penalty,
+    is_lump_sum_penalty,
+)
 from app.services.prompt_loader import load_prompt
 from app.services.validators import parse_amount, parse_date, run_all_checks
 
@@ -109,7 +113,12 @@ def amount_to_chinese_rmb(amount: object) -> str | None:
 _AMOUNT_KEYS = {"total_amount", "paid_amount", "unpaid_amount"}
 # 违约金金额自带「¥…元」：待核实标注放在整个金额前（「⚠️ 待核实：¥5000元」）
 _YUAN_KEYS = {"penalty_amount"}
-_DATE_KEYS = {"contract_sign_date", "acceptance_latest_date"}
+_DATE_KEYS = {
+    "contract_sign_date",
+    "acceptance_latest_date",
+    "penalty_start_date",
+    "penalty_until_date",
+}
 
 
 def _format_arabic(num: float) -> str:
@@ -289,6 +298,11 @@ _PERIODIC_CALC = (
     "计至实际付清之日止）"
 )
 _LUMP_SUM_CALC = "{{penalty_amount}}"
+# 按日计付的固定金额违约金（补充答复 Q6）
+_DAILY_CALC = (
+    "{{penalty_amount}}（自{{penalty_start_date}}起，按照{{penalty_daily_text}}"
+    "计至实际付清之日止，暂计至{{penalty_until_date}}）"
+)
 
 
 def _prepare(fields: dict, template: str | None) -> tuple[dict, str]:
@@ -300,6 +314,8 @@ def _prepare(fields: dict, template: str | None) -> tuple[dict, str]:
     fields = apply_derived_fields(dict(fields))
     if is_lump_sum_penalty(fields):
         template = template.replace(_PERIODIC_CALC, _LUMP_SUM_CALC)
+    elif is_daily_amount_penalty(fields):
+        template = template.replace(_PERIODIC_CALC, _DAILY_CALC)
     kind = fields.get("document_kind")
     if isinstance(kind, dict) and kind.get("value") == "仲裁申请书":
         template = to_arbitration_template(template)
