@@ -3,7 +3,7 @@
 一台 Linux 云服务器 + Docker 即可跑起整套系统：
 
 ```
-浏览器 ──HTTPS + 账号密码──▶ web（nginx：页面 + /api 反代 + Basic 认证）──▶ backend（FastAPI，不对外）
+浏览器 ──HTTPS──▶ web（nginx：页面 + /api 反代）──▶ backend（FastAPI：登录校验 + 业务，不对外）
                                                                           └─ 命名卷 case-data（案件数据）
 ```
 
@@ -70,16 +70,7 @@ cp deploy/compose.env.example .env
 - `NGINX_MODE`：`http`（内网/验证）或 `https`（公网，必须）
 - 国内服务器把 `PIP_INDEX_URL`、`NPM_REGISTRY` 两行取消注释
 
-### 3.3 访问账号：`deploy/htpasswd`
-
-系统本身没有登录功能，由 nginx 的账号密码挡在最前面。**启动前必须至少建一个账号**（否则 docker 会把 `deploy/htpasswd` 建成空目录，web 起不来）：
-
-```bash
-deploy/add-user.sh lawyer01      # 交互输入密码（≥10 位，不回显）
-deploy/add-user.sh dev01
-```
-
-每人一个账号，便于以后停用。删账号：编辑 `deploy/htpasswd` 删掉对应行。改完执行 `docker compose restart web`。
+访问账号在系统启动后创建，见第 5 步。
 
 ---
 
@@ -121,6 +112,26 @@ docker compose up -d --build
 
 停止：`docker compose down`（**不要加 `-v`**，否则会删除案件数据卷）。
 
+### 5.1 登录账号
+
+打开网站先显示中文登录页，账号密码正确才能进入；登录后 7 天内免登录，页头有「修改密码」和「退出登录」。
+系统没有注册入口，账号由管理员在服务器上建（每人一个，便于停用）：
+
+```bash
+docker compose exec backend python scripts/manage_users.py add lawyer01   # 交互输入密码（≥10 位，不回显）
+docker compose exec backend python scripts/manage_users.py add dev01
+docker compose exec backend python scripts/manage_users.py list            # 列出账号
+docker compose exec backend python scripts/manage_users.py passwd lawyer01 # 律师忘记密码时重设
+docker compose exec backend python scripts/manage_users.py disable lawyer01  # 停用（立即退出所有电脑）
+```
+
+- 律师登录后可在页头「修改密码」自己改；改完其他电脑上的登录会失效。
+- 同一 IP 对同一账号连续输错 5 次（或同一 IP 累计输错 20 次）锁定 15 分钟；后端重启后计数清零。
+- 账号库在数据卷里（`auth.sqlite`），只存加盐哈希，不存明文密码；不随案件过期清除。
+
+> **从旧版（nginx 弹窗账号）升级**：`git pull && docker compose up -d --build` 后旧的 `deploy/htpasswd` 不再使用，
+> 用上面的命令把账号重建一遍即可；`deploy/htpasswd` 文件可删除。
+
 > 后端必须单进程（Dockerfile 里 `--workers 1`）：上传/分析进度和进行中的分析任务在进程内存里。
 > 更新重启时正在跑的分析会中断，律师重新点「开始分析」即可；已完成的会话保存在数据卷里不受影响。
 
@@ -136,6 +147,7 @@ docker compose up -d --build
 | `uploads/` | 上传的扫描件（按需 OCR 用） |
 | `branch_info.json`、`branch_history/` | 原告信息表（管理员维护，**需要备份**） |
 | `run_log.jsonl` | 运行日志：只记字段名、耗时、token 数，不含案件内容 |
+| `auth.sqlite` | 登录账号与会话（密码只存哈希），不随案件过期清除 |
 
 - 案件会话与扫描件超过 `CASE_RETENTION_DAYS`（默认 7 天）自动清除，反馈随会话一并清除。
 - 备份原告信息表：
@@ -158,9 +170,8 @@ docker compose exec backend python scripts/list_feedback.py --run <会话ID>
 ## 7. 上线前自检
 
 ```bash
-curl -I http://<域名或IP>/                    # 无账号 → 401（https 模式下为 301 跳转）
-curl -I -u lawyer01 https://<域名>/           # 输入密码后 → 200
-curl -u lawyer01 https://<域名>/api/branches  # 返回 JSON 即后端连通
+curl -s -o /dev/null -w "%{http_code}\n" https://<域名>/api/branches  # 未登录 → 401
+curl -s https://<域名>/api/auth/me     # {"auth_enabled":true,...} 即已开启登录
 ```
 
-浏览器打开站点 → 输入账号密码 → 上传一套**脱敏或自造**的测试材料走通全流程，确认无误再交给律师使用真实案卷。
+浏览器打开站点 → 登录页输入账号密码 → 上传一套**脱敏或自造**的测试材料走通全流程，确认无误再交给律师使用真实案卷。

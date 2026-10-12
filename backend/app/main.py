@@ -17,9 +17,12 @@ from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
 from app.agent.graph import get_graph, reset_graph  # noqa: E402
 from app.agent.runner import retention_loop  # noqa: E402
+from app import config  # noqa: E402
 from app.config import CORS_ORIGINS  # noqa: E402
+from app.services import auth_store  # noqa: E402
 from app.routers import (  # noqa: E402
     analyze,
+    auth,
     branches,
     extract,
     feedback,
@@ -31,6 +34,12 @@ from app.routers import (  # noqa: E402
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """启动时建好 checkpoint 库（尽早暴露路径/权限问题）并开始定时清理过期案件数据，关闭时收尾。"""
+    if config.AUTH_ENABLED:
+        users = await asyncio.to_thread(auth_store.list_users)  # 顺带建好账号库
+        if not users:
+            print("[AUTH] 已开启登录，但还没有任何账号：用 scripts/manage_users.py add 创建", flush=True)
+    else:
+        print("[AUTH] 未开启登录（AUTH_ENABLED!=1）：所有接口无需登录，仅限本地开发", flush=True)
     await get_graph()
     purge_task = asyncio.create_task(retention_loop())
     yield
@@ -49,7 +58,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# 登录校验：除登录相关接口外，所有 /api 都要求已登录（AUTH_ENABLED 关闭时放行）
+app.middleware("http")(auth.auth_middleware)
 
+app.include_router(auth.router, prefix="/api")
 app.include_router(files.router, prefix="/api")
 app.include_router(extract.router, prefix="/api")
 app.include_router(analyze.router, prefix="/api")

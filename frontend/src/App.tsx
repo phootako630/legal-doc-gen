@@ -1,7 +1,12 @@
 // 根组件：单页面 Stepper 容器，管理 upload → processing → review → preview 四步流程；
-// 页头「原告信息表」切换到表格维护页（不打断正在进行的案件，返回后流程状态仍在）
+// 页头「原告信息表」切换到表格维护页（不打断正在进行的案件，返回后流程状态仍在）。
+// 后端开启登录时先显示登录页；登录失效后回到登录页，重新登录后流程状态仍在。
 import { useState } from 'react';
 import { useComplaintFlow } from '@/hooks/useComplaintFlow';
+import { useAuth } from '@/hooks/useAuth';
+import { LoginPage } from '@/components/auth/LoginPage';
+import { UserMenu } from '@/components/auth/UserMenu';
+import { AppLogo } from '@/components/layout/AppLogo';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Stepper } from '@/components/layout/Stepper';
 import { UploadStep } from '@/components/upload/UploadStep';
@@ -13,7 +18,11 @@ import { Building2 } from 'lucide-react';
 
 export default function App() {
   const flow = useComplaintFlow();
+  const auth = useAuth();
   const [view, setView] = useState<'flow' | 'branches'>('flow');
+
+  if (auth.phase === 'loading') return <div className="min-h-screen bg-background" />;
+  if (auth.phase === 'login') return <LoginPage notice={auth.notice} onLogin={auth.login} />;
 
   return (
     <TooltipProvider delay={300}>
@@ -22,13 +31,7 @@ export default function App() {
       <header className="sticky top-0 z-10 border-b border-border bg-white shadow-sm">
         <div className="mx-auto flex max-w-5xl items-center justify-between px-8 py-3.5">
           <div className="flex items-center gap-3">
-            {/* 法律天平图标 */}
-            <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary text-primary-foreground">
-              <svg viewBox="0 0 24 24" className="h-4.5 w-4.5 fill-current" aria-hidden>
-                <path d="M12 3a1 1 0 0 1 .894.553l3.5 7A1 1 0 0 1 15.5 12H13v5h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-5H8.5a1 1 0 0 1-.894-1.447l3.5-7A1 1 0 0 1 12 3Z" opacity=".3"/>
-                <path d="M3 7a1 1 0 0 1 1-1h4a1 1 0 0 1 0 2H5.414l2.293 2.293a1 1 0 0 1-1.414 1.414l-3-3A1 1 0 0 1 3 8V7Zm14-1h4a1 1 0 0 1 .707 1.707l-3 3a1 1 0 0 1-1.414-1.414L19.586 8H18a1 1 0 1 1 0-2Zm-5-3a1 1 0 0 1 1 1v16a1 1 0 1 1-2 0V4a1 1 0 0 1 1-1Z"/>
-              </svg>
-            </div>
+            <AppLogo />
             <div>
               <h1 className="text-[15px] font-semibold leading-tight tracking-tight text-foreground">起诉状助手</h1>
               <p className="text-[11px] leading-tight text-muted-foreground">安装合同纠纷 · 自动化生成系统</p>
@@ -50,6 +53,9 @@ export default function App() {
             <span className="rounded-full border border-border bg-muted px-3 py-1 text-[11px] font-medium text-muted-foreground">
               v1.0 内部版
             </span>
+            {auth.authEnabled && auth.username && (
+              <UserMenu username={auth.username} onLogout={auth.logout} />
+            )}
           </div>
         </div>
       </header>

@@ -205,7 +205,7 @@ pnpm dev                   # http://localhost:5173，/api/* 代理转发到 :800
 
 ## 部署（UAT / 生产）
 
-`docker compose up -d --build` 一键启动（nginx 账号密码 + HTTPS + 案件数据卷），完整步骤见 [deploy/README.md](./deploy/README.md)。
+`docker compose up -d --build` 一键启动（登录页 + HTTPS + 案件数据卷），完整步骤见 [deploy/README.md](./deploy/README.md)。
 
 ---
 
@@ -225,4 +225,4 @@ pnpm dev                   # http://localhost:5173，/api/* 代理转发到 :800
 
 ## v2 不包含（后续迭代预留）
 
-用户账号体系（当前为 nginx 访问账号）、批量案件处理、向量检索、LangChain 本体等——详见 [CLAUDE.md](./CLAUDE.md)。
+账号权限分级（目前所有账号权限相同）、批量案件处理、向量检索、LangChain 本体等——详见 [CLAUDE.md](./CLAUDE.md)。

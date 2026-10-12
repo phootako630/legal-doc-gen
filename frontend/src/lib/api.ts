@@ -10,16 +10,20 @@ import type {
   CaseState,
   FeedbackRequest,
 } from './types';
+import { noteLoginRequired } from './auth-api';
 
 const BASE = '/api';
 
-/** fetch 包装：将网络层异常（TypeError: Failed to fetch）转为中文错误 */
+/** fetch 包装：将网络层异常（TypeError: Failed to fetch）转为中文错误；登录失效时通知回登录页 */
 async function safeFetch(url: string, opts?: RequestInit): Promise<Response> {
+  let res: Response;
   try {
-    return await fetch(url, opts);
+    res = await fetch(url, opts);
   } catch {
     throw new Error('网络连接失败，请检查网络设置后重试');
   }
+  noteLoginRequired(res);
+  return res;
 }
 
 /** 从后端响应中提取中文错误信息 */

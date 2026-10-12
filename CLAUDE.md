@@ -22,7 +22,7 @@
 
 **核心用户**：中国大陆律师团队，不懂技术，不看 JSON，不看英文。所有面向用户的内容必须是中文。
 
-**目标**：验证 AI 抽取准确率和律师使用体验。支持可解析 PDF、扫描件 PDF（OCR）和 Word 文件。应用内无用户认证（部署时由 nginx Basic 认证挡在最前，见 `deploy/README.md`）；案件状态（agent checkpoint、上传的扫描件）落盘到 `backend/data/`（SQLite + 文件），服务重启后仍可 resume，超过 `CASE_RETENTION_DAYS`（默认 7 天）自动清除（服务启动即清、之后每小时清，resume / 读取时也拒绝过期数据）；落盘文件仅属主可读写（目录 0700、文件 0600）；不引入业务数据库。
+**目标**：验证 AI 抽取准确率和律师使用体验。支持可解析 PDF、扫描件 PDF（OCR）和 Word 文件。登录：账号由管理员在服务器上用 `scripts/manage_users.py` 创建（无注册入口），会话 Cookie 7 天免登录，律师可自行修改密码；部署时强制开启（`AUTH_ENABLED=1`），本地开发与单测默认关闭；案件状态（agent checkpoint、上传的扫描件）落盘到 `backend/data/`（SQLite + 文件），服务重启后仍可 resume，超过 `CASE_RETENTION_DAYS`（默认 7 天）自动清除（服务启动即清、之后每小时清，resume / 读取时也拒绝过期数据）；落盘文件仅属主可读写（目录 0700、文件 0600）；不引入业务数据库。
 
 ---
 
@@ -185,6 +185,13 @@ POST /api/generate
   处理：render_complaint（模板填槽，非 LLM 自由生成）
   输出：{ complaint_text }            # 或直接返回结构化字段供前端 docx-js 渲染
 
+# 登录（AUTH_ENABLED=1 时，除下面三个外所有 /api 未登录一律 401 + 响应头 X-Login-Required: 1）
+POST /api/auth/login               # 账号 + 密码 → 设置 HttpOnly / SameSite=Strict 会话 Cookie（HTTPS 下加 Secure）
+POST /api/auth/logout              # 注销当前会话
+GET  /api/auth/me                  # { auth_enabled, username }，前端据此决定是否显示登录页
+POST /api/auth/change-password     # 需登录；本机会话保留，其他会话失效
+#   同一 IP 对同一账号连续输错 5 次 / 同一 IP 累计 20 次 → 锁 15 分钟（services/login_guard.py，进程内存）
+
 # 原告信息表（查看 / 下载不限；标 🔒 的须请求头 X-Admin-Token = 管理员口令）
 GET  /api/branches                 # 当前表 + 更新时间 + 是否过期
 GET  /api/branches/export          # 下载 .xlsx
@@ -301,7 +308,7 @@ value=null                    → ❌ 缺失
 ### 原告信息表（全所共用底表，管理员维护）
 
 - 原告的统一社会信用代码、法定代表人 / 负责人、住所地不在案件材料里，取自律师维护的《原告信息表》（Excel：原告名称 | 统一社会信用代码 | 住所地 | 法定代表人\负责人 | 联系方式）。它是全所共用的底表，**不是**每个案件上传的材料。
-- 前端页头「原告信息表」入口：所有人可查看、下载当前 Excel；**只有管理员**（输入服务器 `ADMIN_TOKEN` 口令）能上传新版本或恢复历史版本。系统暂无账号体系，口令经请求头 `X-Admin-Token`（encodeURIComponent 编码）传给后端比对；未配置 `ADMIN_TOKEN` 时任何人都不能更新。部署时 nginx 把 Basic 认证的登录账号经 `X-Remote-User` 转给后端（覆盖浏览器自带的同名头），保存 / 恢复时记为该版本的上传人（`uploaded_by`），页面与历史列表显示；本地开发没有 nginx 则为空。只想让某位律师上传：把口令只告诉这位律师。
+- 前端页头「原告信息表」入口：所有人可查看、下载当前 Excel；**只有管理员**（输入服务器 `ADMIN_TOKEN` 口令）能上传新版本或恢复历史版本。系统暂无账号体系，口令经请求头 `X-Admin-Token`（encodeURIComponent 编码）传给后端比对；未配置 `ADMIN_TOKEN` 时任何人都不能更新。保存 / 恢复时把当前登录账号（`request.state.user`）记为该版本的上传人（`uploaded_by`），页面与历史列表显示；未开启登录（本地开发）则为空。只想让某位律师上传：把口令只告诉这位律师。
 - 更新分两步：`POST /api/branches/preview` 解析 + 校验 + 与当前版本比对（不保存）→ 管理员确认后 `POST /api/branches` 保存。完全相同的重复行自动合并并提醒；同名但内容不同 / 缺名称阻止保存；信用代码校验位不符、缺负责人或住址只提醒。
 - 存储：`BRANCH_INFO_PATH`（默认 `backend/data/branch_info.json`），每次更新前旧版本存入 `BRANCH_HISTORY_DIR`，可 `POST /api/branches/restore` 回退。数据留在部署服务器，不进 git。
 - 名称比对前去空白、半角括号转全角（律师表里部分行写「日立电梯(中国)」）。查询按文件修改时间缓存，上传后立即生效、无需重启。
@@ -331,7 +338,8 @@ legal-doc-app/
 │   │   │   ├── processing/          # StepProgress（消费 SSE 进展）
 │   │   │   ├── review/              # FieldTable, FieldRow, ValidationReport, HighlightList, ConflictResolver
 │   │   │   ├── preview/             # ComplaintPreview
-│   │   │   └── branches/            # 原告信息表页面（查看 / 管理员上传 / 历史回退）
+│   │   │   ├── branches/            # 原告信息表页面（查看 / 管理员上传 / 历史回退）
+│   │   │   └── auth/                # 登录页、修改密码弹窗、页头账号菜单
 │   │   ├── hooks/
 │   │   │   ├── useFileUpload.ts
 │   │   │   └── useComplaintFlow.ts  # 流程状态 + analyze/resume 往返
@@ -353,7 +361,8 @@ legal-doc-app/
 │   │   │   ├── analyze.py           # POST /api/analyze（启动 agent，SSE）
 │   │   │   ├── resume.py            # POST /api/resume（断点恢复）
 │   │   │   ├── generate.py          # POST /api/generate
-│   │   │   └── branches.py          # /api/branches（原告信息表，更新须管理员口令）
+│   │   │   ├── branches.py          # /api/branches（原告信息表，更新须管理员口令）
+│   │   │   └── auth.py              # /api/auth（登录 / 退出 / 改密码）+ 登录校验中间件
 │   │   ├── agent/
 │   │   │   ├── graph.py             # LangGraph 状态图定义（节点/边/interrupt）
 │   │   │   ├── state.py             # CaseState（Pydantic）
@@ -372,6 +381,8 @@ legal-doc-app/
 │   │   │   ├── equipment_list.py    # 合同设备清单中 VGE 家用电梯计数
 │   │   │   ├── confidence.py        # ③ 可信度评分
 │   │   │   ├── anchoring.py         # 值回原文命中/定位
+│   │   │   ├── auth_store.py        # 账号与会话（SQLite，scrypt 哈希；令牌只存摘要）
+│   │   │   ├── login_guard.py       # 登录输错锁定
 │   │   │   ├── run_log.py           # 运行日志（JSONL：节点耗时/断点/LLM token/OCR 页数/律师改动；只记 key 不记取值）
 │   │   │   └── company_lookup.py    # 联网企业信息查询
 │   │   └── config.py
@@ -379,7 +390,7 @@ legal-doc-app/
 │   ├── requirements.txt
 │   └── .env.example                 # DEEPSEEK_API_KEY, DASHSCOPE_API_KEY
 │
-├── deploy/                          # nginx 配置（http/https）、访问账号脚本、中文部署指南
+├── deploy/                          # nginx 配置（http/https）、中文部署指南
 └── docker-compose.yml               # 一键部署：backend（不对外）+ web（nginx 认证 + 反代）
 ```
 
@@ -893,7 +904,7 @@ pnpm dev                   # 默认 http://localhost:5173
 ## 不包含（后续迭代预留）
 
 - 数据库（PostgreSQL）— 案件持久化（agent checkpoint 届时落 DB）
-- 应用内用户账号 / 权限管理（当前仅 nginx 访问账号）
+- 账号权限分级（目前所有登录账号权限相同；原告信息表更新另凭管理员口令）
 - 多模态 LLM 直传扫描件（替代 OCR，进一步砍误差链）
 - 批量案件处理
 - Node.js 后端（Fastify）

@@ -205,7 +205,7 @@ Backend tests: `cd backend && python -m pytest`
 
 ## Deployment (UAT / production)
 
-`docker compose up -d --build` starts everything (nginx basic auth + HTTPS + a case-data volume). Full guide (Chinese): [deploy/README.md](./deploy/README.md).
+`docker compose up -d --build` starts everything (login page + HTTPS + a case-data volume). Full guide (Chinese): [deploy/README.md](./deploy/README.md).
 
 ---
 
@@ -225,4 +225,4 @@ Backend tests: `cd backend && python -m pytest`
 
 ## Not included in v2 (reserved for later)
 
-A user account system (access is currently gated by nginx accounts), batch case processing, vector retrieval, full LangChain, etc. — see [CLAUDE.md](./CLAUDE.md).
+Role-based permissions (all accounts currently have the same access), batch case processing, vector retrieval, full LangChain, etc. — see [CLAUDE.md](./CLAUDE.md).
