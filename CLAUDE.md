@@ -390,7 +390,7 @@ legal-doc-app/
 │   ├── requirements.txt
 │   └── .env.example                 # DEEPSEEK_API_KEY, DASHSCOPE_API_KEY
 │
-├── deploy/                          # nginx 配置（http/https）、HTTPS 证书脚本 cert.sh（Let's Encrypt）、中文部署指南
+├── deploy/                          # nginx 配置（http/https）、cert.sh（Let's Encrypt 证书）、deploy.sh（部署 + 失败回滚，GitHub Actions 审批后调用）、中文部署指南
 └── docker-compose.yml               # 一键部署：backend（不对外，含登录校验）+ web（nginx 静态页 + 反代 + HTTPS）
 ```
 

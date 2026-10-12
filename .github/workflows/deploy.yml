@@ -1,0 +1,47 @@
+# 自动部署：master 上的 CI 通过后，等管理员在 GitHub 上批准（production 环境的审批人），
+# 再用专用部署密钥 SSH 到服务器执行 deploy/deploy.sh（失败自动回滚）。
+# 也可在 Actions 页面手动运行（部署 master 最新提交）。配置步骤见 deploy/README.md「8. 自动部署」。
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [master]
+  workflow_dispatch:
+
+# 同一时间只跑一个部署；排队的不取消，按顺序部署
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    # 只部署 master 推送（合并 PR）触发且通过的 CI；PR 自身的 CI 不触发部署
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 20
+    steps:
+      - name: 部署到服务器
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          TARGET_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          # 服务器端用 authorized_keys 的 command= 强制执行 deploy.sh，这里传的只是提交号
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o ServerAliveInterval=30 "$DEPLOY_USER@$DEPLOY_HOST" "$TARGET_SHA"
