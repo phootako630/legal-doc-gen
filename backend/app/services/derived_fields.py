@@ -44,8 +44,9 @@ _CITY_DISTRICT_RE = re.compile(
 )
 # 合同常把地级市的「市」字省掉（「苏州吴江区锦湖路以北……」）：两字城市名 + 市辖区。
 # 只认以「区」结尾的市辖区，不认开发区 / 园区等功能区（它们未必设法院）；结果照常标待核实
-# 区名至少两字（「吴江区」）：防止把没写城市的「雨花台区……」拆成「雨花」+「台区」
-_CITY_NO_SHI_RE = re.compile(f"^([{_CJK}]{{2}})([{_CJK}]{{2,4}}?区)")
+# 只认「两字城市 + 两字区名 + 区」（「苏州吴江区」）：三四字城市（乌鲁木齐、呼和浩特、石家庄）
+# 和三字区名分不清边界，宁可不推、交律师填（#43 复审：不能凭长度拆分拼造辖区）
+_CITY_NO_SHI_RE = re.compile(f"^([{_CJK}]{{2}})([{_CJK}]{{2}}区)")
 _FUNCTION_ZONE_RE = re.compile(r"(?:开发|园|高新|新|保税|工业)区$")
 # 争议条款里点名的具体法院（不是「所在地 / 当地」法院）
 _NAMED_COURT_RE = re.compile(r"(?:[市区县]|中级)人民法院")
@@ -1234,14 +1235,29 @@ def payable_ratio_options(fields: dict) -> list[str]:
 
 # 「质保金」条款实为乙方另开银行质保保函（不从合同款里扣留）：如「同时乙方向甲方开具安装结算
 # 金额5%，有效期至质保期满的银行质保保函」。条款里同时写了预留 / 扣留等字样时仍按质保金处理
-_GUARANTEE_RE = re.compile(r"保函")
-_RETAINED_RE = re.compile(r"预留|扣留|留存|暂扣|扣除|扣减|暂留|保留|返还|退还|无息")
+# 正向确认：须写明「乙方（向甲方）开具 / 提供 / 出具 / 提交……保函」
+_GUARANTEE_ISSUE_RE = re.compile(r"乙方[^。；;]{0,15}?(?:开具|提供|出具|提交)[^。；;]{0,40}?保函")
+# 否定保函（「不采用银行保函」「无需提供保函」）
+_GUARANTEE_NEGATED_RE = re.compile(r"(?:不采用|不提供|不出具|不需|无需|免于|不以)[^。；;]{0,10}?保函")
+# 保函只是付款前提（「待乙方提交银行保函后支付」）：合同款里仍有待付的质保金
+_PAY_AFTER_GUARANTEE_RE = re.compile(r"保函[^。；;]{0,8}?(?:后|方可|才)[^。；;]{0,6}?(?:支付|付款|付清|返还)")
+# 现金质保金的写法：条款里出现「质保金」字样，或预留 / 扣留 / 返还等
+_RETAINED_RE = re.compile(r"质保金|保修金|预留|扣留|留存|暂扣|扣除|扣减|暂留|保留|返还|退还|无息")
 
 
 def retention_is_guarantee(fields: dict) -> bool:
-    """合同的「质保金」只是乙方开具的银行质保保函，合同款里没有扣留质保金。"""
-    clause = _str_value(fields, "retention_clause_text") or ""
-    return bool(_GUARANTEE_RE.search(clause)) and not _RETAINED_RE.search(clause)
+    """
+    合同的「质保金」只是乙方另开的银行质保保函，合同款里没有扣留质保金：须正向写明乙方开具保函，
+    且没有否定保函、没有「保函后付款」、没有任何现金质保金写法；拿不准就按质保金问律师
+    （#43 复审：不能只凭出现「保函」二字跳过律师确认）。
+    """
+    clause = re.sub(r"\s+", "", _str_value(fields, "retention_clause_text") or "")
+    return (
+        bool(_GUARANTEE_ISSUE_RE.search(clause))
+        and not _GUARANTEE_NEGATED_RE.search(clause)
+        and not _PAY_AFTER_GUARANTEE_RE.search(clause)
+        and not _RETAINED_RE.search(clause)
+    )
 
 
 def payable_ratio_field(fields: dict) -> dict:

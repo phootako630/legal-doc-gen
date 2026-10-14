@@ -21,7 +21,6 @@ from app.services.derived_fields import (
         ("位于南京市雨花台区", "南京市雨花台区"),
         # 合同省了「市」字：两字城市名 + 市辖区
         ("苏州吴江区某某路以北、某某路以东地块", "苏州市吴江区"),
-        ("江苏省南京雨花台区某某二期", "南京市雨花台区"),
     ],
 )
 def test_derive_court_district(site, expected):
@@ -40,6 +39,11 @@ def test_derive_court_district(site, expected):
         # 开发区 / 园区等功能区未必设法院，不推
         "苏州工业园区某某路",
         "南京江北新区某某路",
+        # 三四字城市 / 三字区名省了「市」字：分不清城市边界，不推（#43 复审）
+        "乌鲁木齐天山区某路",
+        "呼和浩特赛罕区某路",
+        "石家庄长安区某路",
+        "南京雨花台区某某二期",
     ],
 )
 def test_derive_court_district_unknown_returns_none(site):
@@ -423,6 +427,11 @@ _GUARANTEE_CLAUSE = (
     [
         (_GUARANTEE_CLAUSE, True),
         ("预留合同金额5%的质保金，质保期满后无息返还", False),
+        # 否定保函 / 保函只是付款前提：合同款里仍有质保金，要问律师（#43 复审）
+        ("本合同不采用银行保函，质保金为合同价款5%，质保期满后支付", False),
+        ("剩余5%质保金待乙方提交银行保函后支付", False),
+        # 只出现「保函」二字、没写乙方开具：拿不准，按质保金处理
+        ("质保期内以银行保函担保", False),
         # 既扣留质保金、又可用保函替换：仍按质保金问律师
         ("预留5%质保金，乙方可提供银行保函替换，质保期满后返还", False),
         (None, False),
@@ -547,3 +556,29 @@ def test_elevator_qty_keeps_ocr_warning_from_scanned_reports():
     assert "OCR" in out["elevator_qty"]["src"]
     # 起诉状里验收台数带待核实标记，不是直接写「2台电梯」
     assert "⚠️ 待核实：2台电梯均于" in render_complaint(fields)
+
+
+@pytest.mark.parametrize(
+    "clause",
+    ["本合同不采用银行保函，质保金为合同价款5%，质保期满后支付", "剩余5%质保金待乙方提交银行保函后支付"],
+)
+def test_cash_retention_with_guarantee_wording_still_asks_lawyer(clause):
+    import asyncio
+
+    from app.agent import nodes
+
+    fields = apply_derived_fields(_f(retention_ratio="5%", retention_clause_text=clause))
+    assert "保函" not in fields["payable_ratio"]["src"]
+    asked = []
+
+    def fake_interrupt(payload):
+        asked.append(payload)
+        return {}
+
+    orig = nodes.interrupt
+    nodes.interrupt = fake_interrupt
+    try:
+        asyncio.run(nodes.retention_node({"extracted_fields": fields}))
+    finally:
+        nodes.interrupt = orig
+    assert asked and asked[0]["pending"]["field_keys"] == ["payable_ratio"]
