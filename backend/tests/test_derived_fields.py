@@ -19,6 +19,9 @@ from app.services.derived_fields import (
         ("江苏省徐州市沛县某镇某路", "沛县"),  # 县只写县名（补充答复 Q5）  # 县级市只写县级市（确认单四第 3 题）
         ("山东省济南市市中区经十路", "济南市市中区"),
         ("位于南京市雨花台区", "南京市雨花台区"),
+        # 合同省了「市」字：两字城市名 + 市辖区
+        ("苏州吴江区某某路以北、某某路以东地块", "苏州市吴江区"),
+        ("江苏省南京雨花台区某某二期", "南京市雨花台区"),
     ],
 )
 def test_derive_court_district(site, expected):
@@ -26,7 +29,18 @@ def test_derive_court_district(site, expected):
 
 
 @pytest.mark.parametrize(
-    "site", [None, "", "某某二期项目", "雨花台区某某二期", "某某大厦附近南京市"]
+    "site",
+    [
+        None,
+        "",
+        "某某二期项目",
+        "雨花台区某某二期",
+        "某某大厦附近南京市",
+        "鼓楼区某路1号",
+        # 开发区 / 园区等功能区未必设法院，不推
+        "苏州工业园区某某路",
+        "南京江北新区某某路",
+    ],
 )
 def test_derive_court_district_unknown_returns_none(site):
     # 推不出宁可不推（宁缺勿造），交律师填
@@ -395,3 +409,46 @@ def test_document_kind_and_addressee():
     )
     assert fields["document_kind"]["value"] == "民事起诉状"
     assert fields["addressee"]["value"] == "南京市雨花台区人民法院"
+
+
+# 合同里的「5%」是乙方另开的银行质保保函，不是从合同款扣留的质保金（新案卷核对）
+_GUARANTEE_CLAUSE = (
+    "办理结算完成后25个工作日内，甲方向乙方支付至安装结算金额的100%，同时乙方向甲方开具"
+    "安装结算金额5%，有效期至质保期（两年）满的银行质保保函作为对乙方保修期内安装服务的担保"
+)
+
+
+@pytest.mark.parametrize(
+    ("clause", "guarantee"),
+    [
+        (_GUARANTEE_CLAUSE, True),
+        ("预留合同金额5%的质保金，质保期满后无息返还", False),
+        # 既扣留质保金、又可用保函替换：仍按质保金问律师
+        ("预留5%质保金，乙方可提供银行保函替换，质保期满后返还", False),
+        (None, False),
+    ],
+)
+def test_retention_is_guarantee(clause, guarantee):
+    from app.services.derived_fields import retention_is_guarantee
+
+    fields = _f(retention_ratio="5%", retention_clause_text=clause)
+    assert retention_is_guarantee(fields) is guarantee
+
+
+def test_guarantee_only_pays_to_full_contract():
+    fields = apply_derived_fields(
+        _f(retention_ratio="5%", retention_clause_text=_GUARANTEE_CLAUSE)
+    )
+    node = fields["payable_ratio"]
+    assert node["value"] == "100%"
+    assert "保函" in node["src"] and "待核实" in node["src"]
+
+
+def test_retention_node_skips_guarantee_only():
+    import asyncio
+
+    from app.agent.nodes import retention_node
+
+    state = {"extracted_fields": _f(retention_ratio="5%", retention_clause_text=_GUARANTEE_CLAUSE)}
+    # 不进 interrupt（在图外调用 interrupt 会抛错）：直接返回、不改字段
+    assert asyncio.run(retention_node(state)) == {}

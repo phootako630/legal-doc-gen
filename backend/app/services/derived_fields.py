@@ -42,6 +42,11 @@ _PROVINCE_RE = re.compile(f"^[{_CJK}]{{2,7}}?(?:省|自治区)")
 _CITY_DISTRICT_RE = re.compile(
     f"^([{_CJK}]{{2,6}}?市)([{_CJK}]{{1,6}}?(?:新区|区|县|市|旗))"
 )
+# 合同常把地级市的「市」字省掉（「苏州吴江区锦湖路以北……」）：两字城市名 + 市辖区。
+# 只认以「区」结尾的市辖区，不认开发区 / 园区等功能区（它们未必设法院）；结果照常标待核实
+# 区名至少两字（「吴江区」）：防止把没写城市的「雨花台区……」拆成「雨花」+「台区」
+_CITY_NO_SHI_RE = re.compile(f"^([{_CJK}]{{2}})([{_CJK}]{{2,4}}?区)")
+_FUNCTION_ZONE_RE = re.compile(r"(?:开发|园|高新|新|保税|工业)区$")
 # 争议条款里点名的具体法院（不是「所在地 / 当地」法院）
 _NAMED_COURT_RE = re.compile(r"(?:[市区县]|中级)人民法院")
 _PLAINTIFF_SIDE = "原告|乙方|承包方|承包人|卖方|供方|出卖人"
@@ -75,6 +80,7 @@ def derive_court_district(address: str | None) -> str | None:
     由地址推定法院辖区，如「江苏省南京市雨花台区某某二期项目」→「南京市雨花台区」。
     县级市、县只写县级市 / 县：「江苏省苏州市昆山市花桥镇」→「昆山市」（律师确认单（四）
     第 3 题）、「江苏省徐州市沛县某镇」→「沛县」（补充答复 Q5）；市辖区写「市 + 区」。
+    地址省了「市」字的「苏州吴江区……」按「苏州市吴江区」推定。
     推不出返回 None。
     """
     if not address:
@@ -84,6 +90,9 @@ def derive_court_district(address: str | None) -> str | None:
     s = _PROVINCE_RE.sub("", s, count=1)
     m = _CITY_DISTRICT_RE.match(s)
     if not m:
+        m2 = _CITY_NO_SHI_RE.match(s)
+        if m2 and not _FUNCTION_ZONE_RE.search(m2.group(2)):
+            return f"{m2.group(1)}市{m2.group(2)}"
         return None
     if m.group(2).endswith(("市", "县")):
         return m.group(2)
@@ -1154,9 +1163,26 @@ def payable_ratio_options(fields: dict) -> list[str]:
     return sorted(set(options), key=lambda x: -float(x.rstrip("%")))
 
 
+# 「质保金」条款实为乙方另开银行质保保函（不从合同款里扣留）：如「同时乙方向甲方开具安装结算
+# 金额5%，有效期至质保期满的银行质保保函」。条款里同时写了预留 / 扣留等字样时仍按质保金处理
+_GUARANTEE_RE = re.compile(r"保函")
+_RETAINED_RE = re.compile(r"预留|扣留|留存|暂扣|扣除|扣减|暂留|保留|返还|退还|无息")
+
+
+def retention_is_guarantee(fields: dict) -> bool:
+    """合同的「质保金」只是乙方开具的银行质保保函，合同款里没有扣留质保金。"""
+    clause = _str_value(fields, "retention_clause_text") or ""
+    return bool(_GUARANTEE_RE.search(clause)) and not _RETAINED_RE.search(clause)
+
+
 def payable_ratio_field(fields: dict) -> dict:
     """「被告应按合同约定支付至__合同款」：无质保金 100%；有质保金由 retention 断点问律师。"""
     ratio = parse_percent(_str_value(fields, "retention_ratio"))
+    if ratio and retention_is_guarantee(fields):
+        return {
+            "value": "100%",
+            "src": f"合同约定的 {ratio:g}% 为乙方开具的银行质保保函，未扣留合同款，待核实",
+        }
     if ratio == 0:
         return {"value": "100%", "src": "合同无质保金"}
     if ratio is None:

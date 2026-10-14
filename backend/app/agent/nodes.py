@@ -30,6 +30,7 @@ from app.services.derived_fields import (
     needs_warranty_period,
     parse_percent,
     payable_ratio_options,
+    retention_is_guarantee,
 )
 from app.services.llm_client import chat
 from app.services.ocr_engine import ocr_page, pdf_page_count
@@ -532,7 +533,8 @@ async def retention_node(state: GraphState) -> dict:
     lawyer_set = isinstance(node, dict) and str(node.get("src") or "").startswith(
         "律师"
     )
-    if not ratio or lawyer_set:
+    # 只是银行质保保函、合同款里没有扣留质保金：不问律师，按支付至 100%（payable_ratio_field）
+    if not ratio or lawyer_set or retention_is_guarantee(fields):
         return {}
     clause = _str_value(fields, "retention_clause_text")
     unpaid = _str_value(fields, "retention_unpaid_amount")
