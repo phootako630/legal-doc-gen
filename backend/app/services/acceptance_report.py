@@ -60,3 +60,13 @@ def first_install_address(pages: list[dict]) -> tuple[str, int | None] | None:
             if addr and addr != "/":
                 return addr, page.get("page")
     return None
+
+
+def first_pages_without_date(pages: list[dict]) -> int:
+    """报告首页里没读到「批准」日期的页数（照片裁边、OCR 截断）：最晚日期可能漏掉这几份。"""
+    return sum(
+        1
+        for page in pages
+        if _FIRST_PAGE_RE.search(_plain(page.get("text") or ""))
+        and not _APPROVED_DATE_RE.search(_plain(page.get("text") or ""))
+    )

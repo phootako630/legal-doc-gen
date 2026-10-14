@@ -119,7 +119,7 @@ def test_mixed_text_and_scanned_reports_aggregate_all(monkeypatch):
     f = asyncio.run(nodes_mod.report_ocr_node(state))["extracted_fields"]
     assert f["acceptance_latest_date"]["value"] == "2025年5月1日"
     assert f["elevator_qty_by_acceptance"]["value"] == 4
-    assert "文本报告 1 台 + 扫描报告按首页计数 3 份" in f["elevator_qty_by_acceptance"]["src"]
+    assert "文本报告 1 台 + 《验收报告.pdf》按报告首页计数 3 份" in f["elevator_qty_by_acceptance"]["src"]
 
 
 def test_scanned_report_later_than_text_report_wins(monkeypatch):
@@ -161,3 +161,44 @@ def test_count_first_pages_survives_cropped_report_number_and_html():
     ]
     assert count_report_first_pages(pages) == 2
     assert first_install_address(pages) == ("某某市某路1号", 1)
+
+
+def test_existing_text_date_flagged_when_scan_incomplete_and_no_date(monkeypatch):
+    # 扫描报告 2 页、预算只够 1 页，读到的首页又没有批准日期：文本日期保留但标待核实（#44 复审）
+    monkeypatch.setattr(nodes_mod, "AGENT_MAX_REPORT_OCR_PAGES", 1)
+
+    async def fake(_pdf, n):
+        return "| 设备品种 | 曳引驱动乘客电梯 |\n| 检验结论 | 合格 |"
+
+    monkeypatch.setattr(nodes_mod, "ocr_page", AsyncMock(side_effect=fake))
+    fields = {"acceptance_latest_date": {"value": "2024年1月1日", "src": "《文本报告.pdf》批准日期"}}
+    state = {"extracted_fields": fields, "files": [_text_report("2024年1月1日"), _scanned_report(2)]}
+    f = asyncio.run(nodes_mod.report_ocr_node(state))["extracted_fields"]
+    node = f["acceptance_latest_date"]
+    assert node["value"] == "2024年1月1日"
+    assert "待核实" in node["src"] and "可能不全" in node["src"]
+
+
+def test_scanned_report_without_first_page_label_falls_back_to_report_numbers(monkeypatch):
+    # 扫描页「设备品种」被裁掉、报告编号清晰：按编号计数，与文本报告合并为 2 台
+    async def fake(_pdf, n):
+        return "报告编号：BBB222222\n批 准：某某 日期：2024年1月2日"
+
+    monkeypatch.setattr(nodes_mod, "ocr_page", AsyncMock(side_effect=fake))
+    text = _text_report("2024年1月1日")
+    text["text"] = "报告编号：AAA111111\n批 准：某某 日期：2024年1月1日"
+    state = {"extracted_fields": {}, "files": [text, _scanned_report(1)]}
+    f = asyncio.run(nodes_mod.report_ocr_node(state))["extracted_fields"]
+    assert f["elevator_qty_by_acceptance"]["value"] == 2
+    assert "按设备代码 / 报告编号计数 1 台" in f["elevator_qty_by_acceptance"]["src"]
+
+
+def test_pure_scanned_without_label_or_number_marks_incomplete(monkeypatch):
+    async def fake(_pdf, n):
+        return "模糊不清的照片"
+
+    monkeypatch.setattr(nodes_mod, "ocr_page", AsyncMock(side_effect=fake))
+    fields = {"elevator_qty_by_acceptance": {"value": 3, "src": "初抽"}}
+    state = {"extracted_fields": fields, "files": [_scanned_report(1)]}
+    f = asyncio.run(nodes_mod.report_ocr_node(state))["extracted_fields"]
+    assert "可能不全" in f["elevator_qty_by_acceptance"]["src"]

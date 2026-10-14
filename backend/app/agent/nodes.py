@@ -20,6 +20,7 @@ from app.config import (
 from app.services import file_store, llm_progress, run_log
 from app.services.acceptance_report import (
     count_report_first_pages,
+    first_pages_without_date,
     first_install_address,
     latest_approved_date,
 )
@@ -435,6 +436,7 @@ async def report_ocr_node(state: GraphState) -> dict:
     budget = AGENT_MAX_REPORT_OCR_PAGES
     incomplete = False
     ocr_reports: list[tuple[str, list[dict]]] = []
+    ocr_files: list[dict] = []
     for f in scanned:
         pdf = file_store.get(f.get("file_id"))
         if pdf is None or budget <= 0:
@@ -459,13 +461,14 @@ async def report_ocr_node(state: GraphState) -> dict:
         f["pages"] = pages
         f["text"] = "\n\n".join(p["text"] for p in pages if p["text"])
         ocr_reports.append((f.get("filename", "验收报告"), pages))
+        ocr_files.append(f)
     if not ocr_reports:
         return {}
 
     fields = copy.deepcopy(fields)
     partial = "；部分扫描报告未识别，可能不全，待核实" if incomplete else ""
     _merge_acceptance_date(fields, ocr_reports, partial)
-    _merge_acceptance_qty(fields, reports, ocr_reports, partial)
+    _merge_acceptance_qty(fields, reports, ocr_files, partial)
     if _is_missing(fields, "install_address"):
         for filename, pages in ocr_reports:
             found = first_install_address(pages)
@@ -484,23 +487,29 @@ async def report_ocr_node(state: GraphState) -> dict:
 def _merge_acceptance_date(
     fields: dict, ocr_reports: list[tuple[str, list[dict]]], partial: str
 ) -> None:
-    """OCR 读到的批准日期与文本报告已抽到的日期取最晚（审批表兜底的日期不参与比较）。"""
+    """
+    OCR 读到的批准日期与文本报告已抽到的日期取最晚（审批表兜底的日期不参与比较）。
+    扫描报告没读全、或有报告首页没读到批准日期时，最晚日期可能漏掉：已有日期也标待核实。
+    """
+    undated = sum(first_pages_without_date(pages) for _, pages in ocr_reports)
+    if undated:
+        partial += f"；{undated} 份扫描报告未识别出批准日期，可能不是最晚，待核实"
     best = None
     for filename, pages in ocr_reports:
         found = latest_approved_date(pages)
         if found and (best is None or _date_key(found[0]) > _date_key(best[1][0])):
             best = (filename, found)
-    if best is None:
-        return
-    filename, (value, page) = best
     existing = None if _acceptance_from_approval(fields) else _str_value(
         fields, "acceptance_latest_date"
     )
-    if existing and _date_key(existing) >= _date_key(value):
-        node = dict(fields["acceptance_latest_date"])
-        node["src"] = f"{node.get('src') or ''}（已与扫描报告比对，取最晚{partial}）"
-        fields["acceptance_latest_date"] = node
+    if best is None or (existing and _date_key(existing) >= _date_key(best[1][0])):
+        if partial and not _is_missing(fields, "acceptance_latest_date"):
+            node = dict(fields["acceptance_latest_date"])
+            note = "已与扫描报告比对，取最晚" if best else "扫描报告未读到批准日期"
+            node["src"] = f"{node.get('src') or ''}（{note}{partial}）"
+            fields["acceptance_latest_date"] = node
         return
+    filename, (value, page) = best
     fields["acceptance_latest_date"] = {
         "value": value,
         "src": f"《{filename}》第{page}页批准日期（多份取最晚；OCR识别，请核实{partial}）",
@@ -512,31 +521,49 @@ def _merge_acceptance_date(
 def _merge_acceptance_qty(
     fields: dict,
     reports: list[dict],
-    ocr_reports: list[tuple[str, list[dict]]],
+    ocr_files: list[dict],
     partial: str,
 ) -> None:
     """
-    验收台数 = 文本报告计数（设备代码 / 报告编号）+ 扫描报告首页计数（「设备品种」栏）。
-    扫描报告按首页数：手机拍照常把报告编号裁掉，按编号去重会少数。
+    验收台数 = 文本报告计数（设备代码 / 报告编号）+ 扫描报告计数。扫描报告先按首页（「设备品种」栏）
+    数——手机拍照常把报告编号裁掉，按编号去重会少数；某份扫描报告数不出首页时，退回按设备代码 /
+    报告编号计数；仍数不出就注明台数不全，不静默保留旧的子集数。
     """
-    ocr_count = sum(count_report_first_pages(pages) for _, pages in ocr_reports)
-    if not ocr_count:
-        return
+    parts: list[str] = []
+    total = 0
+    uncounted = False
     text_reports = [f for f in reports if not f.get("is_scanned") and f.get("text")]
-    parts = [f"扫描报告按首页计数 {ocr_count} 份"]
-    text_count = 0
     if text_reports:
         counted = count_acceptance_units(text_reports)
         if counted is None:
-            partial = partial or "；文本报告台数未数出，可能不全，待核实"
+            uncounted = True
         else:
-            text_count = counted[0]
-            parts.insert(0, f"文本报告 {text_count} 台")
-    names = "、".join(f"《{name}》" for name, _ in ocr_reports)
-    total = text_count + ocr_count
+            total += counted[0]
+            parts.append(f"文本报告 {counted[0]} 台")
+    for f in ocr_files:
+        name = f"《{f.get('filename', '验收报告')}》"
+        first_pages = count_report_first_pages(f.get("pages") or [])
+        if first_pages:
+            total += first_pages
+            parts.append(f"{name}按报告首页计数 {first_pages} 份")
+            continue
+        counted = count_acceptance_units([f])
+        if counted is None:
+            uncounted = True
+        else:
+            total += counted[0]
+            parts.append(f"{name}按设备代码 / 报告编号计数 {counted[0]} 台")
+    if uncounted:
+        partial += "；有报告数不出台数，可能不全，待核实"
+    if not total:
+        if not _is_missing(fields, "elevator_qty_by_acceptance"):
+            node = dict(fields["elevator_qty_by_acceptance"])
+            node["src"] = f"{node.get('src') or ''}（扫描报告未数出台数{partial}）"
+            fields["elevator_qty_by_acceptance"] = node
+        return
     fields["elevator_qty_by_acceptance"] = {
         "value": total,
-        "src": f"{names}等：{' + '.join(parts)}，共 {total} 台（OCR识别，请核实{partial}）",
+        "src": f"{' + '.join(parts)}，共 {total} 台（OCR识别，请核实{partial}）",
         "channel": "ocr",
     }
 
