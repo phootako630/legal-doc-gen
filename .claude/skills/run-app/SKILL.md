@@ -12,7 +12,7 @@ description: 启动起诉状系统（FastAPI 后端 + Vite 前端），用 Playw
 - 依赖：云端会话由 `.claude/hooks/session-start.sh` 自动安装（后端 requirements、前端 pnpm）。本地运行需自行安装。
 - API 密钥：`DEEPSEEK_API_KEY`、`DASHSCOPE_API_KEY` 需在环境变量或 `backend/.env` 中。缺了也能启动和看页面，但「开始分析」会失败。检查时只看是否设置，**不要打印取值**：
   ```bash
-  for k in DEEPSEEK_API_KEY DASHSCOPE_API_KEY; do [ -n "${!k:-}" ] && echo "$k 已设置" || echo "$k 未设置"; done
+  for k in DEEPSEEK_API_KEY DASHSCOPE_API_KEY DASHSCOPE_API_KEY_BACKUP; do [ -n "${!k:-}" ] && echo "$k 已设置" || echo "$k 未设置"; done
   ```
 - 注意 `config.py` 用 `load_dotenv(override=True)`：`backend/.env` 里的同名变量会覆盖命令行传入的环境变量。
 

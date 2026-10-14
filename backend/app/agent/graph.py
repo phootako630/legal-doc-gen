@@ -14,6 +14,7 @@ from app.agent.nodes import (
     extract_node,
     ocr_augment_node,
     qty_check_node,
+    report_ocr_node,
     retention_node,
     validate_node,
 )
@@ -35,6 +36,8 @@ async def get_graph():
         builder.add_node("extract", traced_node("extract", extract_node))
         # 按需 OCR：缺条款且有扫描合同时，逐页 OCR 定向补齐（命中即停）
         builder.add_node("ocr_augment", traced_node("ocr_augment", ocr_augment_node))
+        # 扫描验收报告（手机拍照等）按需 OCR：取批准日期、安装地点、按设备代码数台数
+        builder.add_node("report_ocr", traced_node("report_ocr", report_ocr_node))
         # 台数核对：合同与验收报告台数不一致时补读合同设备清单数 VGE 家用电梯，仍对不上则暂停问律师
         builder.add_node("contract_scan", traced_node("contract_scan", contract_scan_node))
         builder.add_node("qty_check", traced_node("qty_check", qty_check_node))
@@ -47,7 +50,8 @@ async def get_graph():
             "intake", after_checklist, {"extract": "extract", "end": END}
         )
         builder.add_edge("extract", "ocr_augment")
-        builder.add_edge("ocr_augment", "contract_scan")
+        builder.add_edge("ocr_augment", "report_ocr")
+        builder.add_edge("report_ocr", "contract_scan")
         builder.add_edge("contract_scan", "qty_check")
         builder.add_edge("qty_check", "retention")
         builder.add_edge("retention", "validate")

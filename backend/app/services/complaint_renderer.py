@@ -213,7 +213,7 @@ def _contacts_display(contacts: object) -> str:
 _WORDING_KEYS = {"contract_action", "price_term", "plaintiff_rep_label", "interest_term"}
 # 可有可无的句子 / 括注（违约条款引用、已付与欠款的比例或算式）：规则判定不需要时为空，
 # 渲染为空串，不算【待补充】，也不计入就绪度
-_OPTIONAL_KEYS = {"breach_clause_sentence", "paid_note", "unpaid_note"}
+_OPTIONAL_KEYS = {"breach_clause_sentence", "paid_note", "unpaid_note", "penalty_cap"}
 
 # 约定仲裁时整篇改为仲裁申请书（律师补充确认单第 6 题）。只替换模板的固定文字，不动填入的值；
 # 按顺序替换，「原、被告」须先于单独的「原告」「被告」。
@@ -295,7 +295,7 @@ _PLACEHOLDER_RE = re.compile(r"\{\{(\w+)\}\}")
 # （律师确认单（四）第 1 题）。须在换仲裁措辞之前替换（仲裁会改掉「自起诉之日起」）
 _PERIODIC_CALC = (
     "（以¥{{unpaid_amount}}元为基数，自起诉之日起，按照{{interest_rate_basis}}"
-    "计至实际付清之日止）"
+    "计至实际付清之日止{{penalty_cap}}）"
 )
 _LUMP_SUM_CALC = "{{penalty_amount}}"
 # 按日计付的固定金额违约金（补充答复 Q6）

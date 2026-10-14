@@ -16,13 +16,14 @@
 - `defendant_name`：审批表「合同买方名称」栏
 - `defendant_credit_code`：验收报告「使用单位统一社会信用代码」等处有原文才填
 - `defendant_legal_rep` / `defendant_address`：律师一律用企查查等工商登记信息，**不要取审批表「买方单位地址」**；材料里没有工商登记信息就填 null
+- `defendant_address_ref`：审批表「买方单位地址」照抄（没有时取合同盖章页甲方地址）。只供系统推断被告所在地法院，不写进起诉状
 - `contacts`：只取审批表「联系人」「联系电话」栏，不取「甲方收款联系人」。每人输出 `{"name": {...}, "phone": {...}}`
-- `contract_sign_date`：合同盖章页的签署日期（不是封面的「合同订立时间」）；合同是扫描件暂未识别时，取审批表「签约时间」
+- `contract_sign_date`：合同盖章页的签署日期；盖章页没写日期时，取封面上写到年月日的「签订日期」（只写到年月的「合同订立时间」不取）；合同是扫描件暂未识别时，取审批表「签约时间」
 - `contract_title` / `contract_no`：合同封面；封面标题分行时按顺序连成全称，项目名不能丢，不取正文首页的简短标题；合同编号审批表上也有
 - `elevator_qty_by_approval`：审批表「签约台数」/「实际履行台数」；`elevator_qty_by_contract`：合同约定的台数；验收报告台数由系统按设备代码计数
 - `total_amount`：审批表「合同总额」处；或合同前部「合同总额」「合同金额」等表述
 - `paid_amount`：审批表「已付款」处；`unpaid_amount`：审批表「未付款金额」处
-- `acceptance_latest_date`：验收报告上的**批准 / 盖章日期**（不是检验日期、制造日期或下次检验日期），多份报告取最晚的一个
+- `acceptance_latest_date`：验收报告上的**批准 / 盖章日期**（不是检验日期、制造日期或下次检验日期），多份报告取最晚的一个；验收报告是扫描件暂未识别时，取审批表「政府验收时间」，src 写「《审批表文件名》政府验收时间（验收报告未识别，待核实）」
 - `payment_clause_location` / `payment_clause_text`：只在合同中，location 写章节号如「第二十八章」，text 照抄原文
 - `payment_clause_summary`：把付款条款归纳成一句话，写明各付款节点与比例，例如「电梯安装完成后，30个工作日内支付合同总价的60%；电梯通过当地政府部门验收合格、完整移交并办理完工程结算手续后，30个工作日内支付至合同总价的100%」
 - `retention_ratio`：合同约定的质保金比例合计（如「5%」）；合同明确没有质保金填「无」；找不到填 null
@@ -62,6 +63,7 @@
   "defendant_credit_code": {"value": null, "src": ""},
   "defendant_legal_rep": {"value": null, "src": ""},
   "defendant_address": {"value": null, "src": ""},
+  "defendant_address_ref": {"value": null, "src": ""},
   "contacts": [],
   "contract_no": {"value": null, "src": ""},
   "contract_title": {"value": null, "src": ""},

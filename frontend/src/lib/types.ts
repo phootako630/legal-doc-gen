@@ -123,6 +123,8 @@ export interface ExtractedFields {
   penalty_start_date?: FieldValue; // 派生：按日违约金起算日（付款期限届满次日）
   penalty_until_date?: FieldValue; // 派生：暂计至（起诉状生成当日）
   warranty_period?: FieldValue; // 合同质保期（如「二年」）
+  defendant_address_ref?: FieldValue; // 审批表买方地址 / 合同甲方地址（仅推断被告所在地法院）
+  penalty_cap?: FieldValue; // 派生：违约金 / 利息上限「，最高不超过……」
 }
 
 /** 交叉校验单项结果（②：由后端确定性代码判定，非 LLM） */

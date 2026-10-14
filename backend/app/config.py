@@ -21,10 +21,13 @@ LLM_TIMEOUT = 120  # 秒
 # 当前实现：Qwen 多模态模型经 DashScope 云端 API 识别（无需本地模型）
 # Benchmark 备用：RapidOCR（本地 ONNX，见 ocr_engine.py 注释区）
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
+# 付费备用 key：主 key（免费额度）被拒（HTTP 401/403，额度用完即 403）时自动改用，之后本次运行
+# 一直用备用 key；限流（429）不切换。不配则只用主 key
+DASHSCOPE_API_KEY_BACKUP = os.getenv("DASHSCOPE_API_KEY_BACKUP")
 DASHSCOPE_BASE_URL = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
-# 默认 qwen3.8-max（支持图片输入，识别质量更好）；可在 .env 用 QWEN_OCR_MODEL 覆盖，
-# 如改回专用 OCR 模型 qwen-vl-ocr（更快更便宜）。
-QWEN_OCR_MODEL = os.getenv("QWEN_OCR_MODEL", "qwen3.8-max")
+# 默认 qwen3.8-flash（支持图片输入；实测扫描合同、手机拍照的检验报告都能完整识别表格，
+# 价格远低于 qwen3.8-max）；可在 .env 用 QWEN_OCR_MODEL 覆盖，如 qwen3.8-max / qwen-vl-ocr。
+QWEN_OCR_MODEL = os.getenv("QWEN_OCR_MODEL", "qwen3.8-flash")
 # 关闭思考模式：OCR 只需照录原文，推理既增加耗时/费用，也可能让模型"纠正"原文（违背宁缺勿造）。
 QWEN_OCR_ENABLE_THINKING = False
 
@@ -37,6 +40,12 @@ if DASHSCOPE_API_KEY:
     )
 else:
     print("[CONFIG] WARNING: DASHSCOPE_API_KEY not set!", flush=True)
+if DASHSCOPE_API_KEY_BACKUP:
+    _b = DASHSCOPE_API_KEY_BACKUP.strip()
+    print(
+        f"[CONFIG] DASHSCOPE_API_KEY_BACKUP loaded: {_b[:8]}...{_b[-4:]} (len={len(_b)})",
+        flush=True,
+    )
 
 OCR_TIMEOUT = 300  # 秒——整份文件（所有页并发处理）的总超时，不是单页超时
 OCR_PAGE_TIMEOUT = 60  # 秒——单页请求的超时（原先误用整份文件的超时给单页，太宽松）
@@ -49,6 +58,8 @@ SCANNED_PDF_TEXT_THRESHOLD = 50
 # 找到付款 + 争议两类条款正文即提前停止。实测 45 页安装合同的付款条款在第 21 页，
 # 原上限 20 页会恰好错过，故放宽到 50（覆盖常见安装合同全文）。
 AGENT_MAX_OCR_PAGES = 50
+# 扫描验收报告（常为手机拍照，每台一张首页）按需 OCR 的页数上限：取批准日期、安装地点、台数
+AGENT_MAX_REPORT_OCR_PAGES = 30
 
 # ── 企业信息联网查询（预留）────────────────────────────────────────────────────
 # 企查查 / 天眼查 / 国家企业信用信息公示系统查询 API 的密钥（暂未接入）。

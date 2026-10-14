@@ -60,7 +60,7 @@ UI 组件：    shadcn/ui
 框架：         FastAPI
 Agent 编排：   LangGraph（状态图 + interrupt 断点 + checkpoint；仅用图与检查点，不引入整个 LangChain 生态）
 文件解析：     PyMuPDF（fitz）提取 PDF 文本；python-docx 提取 Word 文本
-OCR：          Qwen 多模态云端 API（阿里云 DashScope，默认 qwen3.8-max）；备用 RapidOCR（本地 ONNX，代码注释保留）
+OCR：          Qwen 多模态云端 API（阿里云 DashScope，默认 qwen3.8-flash；免费额度 key + 付费备用 key）；备用 RapidOCR（本地 ONNX，代码注释保留）
 LLM 调用：     OpenAI SDK（兼容 DeepSeek API），启用 function calling / 结构化输出
 模板渲染：     docxtpl（可选，后端渲染）或前端 docx-js（默认，见 API 设计）
 企业信息查询： 联网工具（企查查/天眼查/公示系统 API，按信用代码补全法人全称）
@@ -274,20 +274,20 @@ value=null                    → ❌ 缺失
   - 原告：买卖合同 = 总公司全称（`PLAINTIFF_HQ_NAME`）；安装合同 = 总公司全称 + 审批表「合同分公司」路径中的第一个分公司；路径里是独立的工程 / 营销公司（以「有限公司」结尾、非总公司）时原告就是该公司，按原告信息表补全称，查不到标待核实；「合同分公司」未填时取合同盖章页乙方 / 安装方 / 安装单位。再与合同盖章页乙方（`contract_party_b`）核对，不一致以合同乙方为准并标待核实；第三行：分公司写「负责人」，总公司和独立公司写「法定代表人」；只有总公司在姓名后加职务（`PLAINTIFF_HQ_REP_TITLE`，「张三，董事长」），信息表已写了职务（「姓名，职务」「姓名、职务」「姓名（职务）」或空格后的常见职务名）的保留原写法、不再追加，职务按全称比较（「副董事长」≠「董事长」），不同的标待核实；分不清写法的（如「網谷 憲晴」「张三 监事」）保留原文、不追加、标待核实；电话固定 `PLAINTIFF_PHONE`；信用代码 / 负责人 / 住址取原告信息表（见下「原告信息表」）
   - 合同类型（审批表「合同类型」）切换措辞：买卖合同「安装」→「供货」、「安装价格」→「产品价格」
   - 台数：「约定原告负责安装 N 台」取合同台数（`elevator_qty_contract`），「N 台均于……验收合格」取验收报告台数（`elevator_qty`，代码按设备代码计数）。合同与报告不一致时，`contract_scan` 节点补读合同设备清单、数 VGE 型号（家用电梯，无需验收报告，`services/equipment_list.py`）：报告 = 合同 − VGE → 继续并提醒家用电梯；否则 `qty_check` 节点暂停，提醒律师核对报告是否齐全 / 有无补充协议 / 是否口头取消部分电梯，由律师定台数
-  - 签约日期：合同盖章页日期；扫描合同未识别时暂取审批表「签约时间」
-  - 被告住址 / 法定代表人：一律用工商登记信息（企查查、爱企查、启信宝），审批表地址不用（`extraction.apply_rule_guards` 清空）
+  - 签约日期：合同盖章页日期；盖章页没写日期时取封面写到年月日的「签订日期」（只写到年月的「合同订立时间」不取）；扫描合同未识别时暂取审批表「签约时间」
+  - 被告住址 / 法定代表人：一律用工商登记信息（企查查、爱企查、启信宝），审批表地址不用（`extraction.apply_rule_guards` 清空）；审批表买方地址 / 合同盖章页甲方地址存为 `defendant_address_ref`，不写进起诉状，只在约定被告所在地（或未约定地点）管辖、工商住址还没填时推断法院，管辖句写明「【系统按被告地址「…」推断，待核实】」
   - 联系人：只取审批表「联系人」，不取「甲方收款联系人」
-  - 验收日期：检验报告的批准 / 盖章日期，多份取最晚一批
+  - 验收日期：检验报告的批准 / 盖章日期，多份取最晚一批。报告是扫描件（常为手机拍照）时，还有没读过的扫描报告 `report_ocr` 节点就逐页 OCR（上限 `AGENT_MAX_REPORT_OCR_PAGES`），按全部报告汇总（文本报告与扫描报告的批准日期取最晚，台数 = 文本报告计数 + 扫描报告首页计数；预算用尽或有页失败时出处注明「可能不全」，扫描计数的 OCR 待核实提示带到起诉状台数），用代码取「批准」后的日期、第一份「安装地点」，并按报告首页（「设备品种」栏）数台数——照片常裁掉报告编号，按编号去重会少数（`services/acceptance_report.py`；OCR 输出的 markdown / HTML 表格先统一成纯文本）；仍读不到时退回审批表「政府验收时间」，标待核实
   - 付款条款：原文（`payment_clause_text`）+ AI 归纳（`payment_clause_summary`，标「AI 归纳，待核实」），起诉状默认写归纳句
-  - 诉请金额 = 审批表「未付款金额」。质保金：合同有质保金时 `retention` 节点暂停，附质保金条款原文与审批表未付质保金，按分期比例给出选项（如 5% → 100% / 95%；满一年 2%、满二年 3% → 100% / 97% / 95%），律师选定「支付至 X% 合同款」；条款写的只是乙方另开银行质保保函（「保函」且无预留 / 扣留 / 返还等字样，`derived_fields.retention_is_guarantee`）时不暂停，按支付至 100%（待核实）
+  - 诉请金额 = 审批表「未付款金额」。质保金：合同有质保金时 `retention` 节点暂停，附质保金条款原文与审批表未付质保金，按分期比例给出选项（如 5% → 100% / 95%；满一年 2%、满二年 3% → 100% / 97% / 95%），律师选定「支付至 X% 合同款」；条款写的只是乙方另开银行质保保函（须正向写明「乙方……开具 / 提供……保函」，且无否定保函、无「保函后支付」、无「质保金」/ 预留 / 扣留 / 返还等现金质保写法，`derived_fields.retention_is_guarantee`；拿不准仍问律师）时不暂停，按支付至 100%（待核实）
   - 「案涉电梯已全部移交物业」固定；合同付款条件含「结算」才加「并办理结算」（`handover_text`）
   - 逾期利息：合同有甲方逾期付款利率 → 用约定（待核实）；否则「全国银行间同业拆借中心公布的一年期贷款市场报价利率」，一律自起诉之日起算，基数为欠款金额
-  - 违约金：合同甲方逾期付款条款写的是「违约金」（`breach_clause_text` / `breach_interest_rate_text` 含「违约金」）→ 诉请与事实理由写「违约金」（`interest_term`），并在违约段落前引用条款「依据合同第X条约定，<原文>。」（`breach_clause_sentence`，待核实）；否则写「逾期付款利息」、不引用。安装 / 买卖合同一样。约定违约金却没有按日 / 月 / 年计算的标准（须同时有比率或金额与计算周期，周期含「每日 / 每逾期一日 / 按日 / 日万分之 / 100元/日」等写法；「逾期超过30日」只是触发期限；「一次性结清」等付款方式字样不改变按期计算）时，按固定金额 / 一次性比例处理（律师确认单（四）第 1 题）：诉请与事实理由的「（以¥…为基数……计至实际付清之日止）」整段换成违约金金额（`penalty_amount`，`complaint_renderer` 替换模板），条款只有一个金额的照抄，写「合同总价 / 欠款的 X%」的按合同总价或未付金额算出，一律标待核实；含上限 / 下限 / 累计等附加条件、出现多个计算标准（按「基数 + 比例」比较，如「欠款的5%」与「合同总价的5%」算两档）或多个金额（分档）、比例与金额混用、比例基数识别不了、缺基数时不自动计算，留【待补充】；「每日100元」这类按期计付的固定金额不算一次性金额；律师改过计算标准则不切换
+  - 违约金：合同甲方逾期付款条款写的是「违约金」（`breach_clause_text` / `breach_interest_rate_text` 含「违约金」）→ 诉请与事实理由写「违约金」（`interest_term`），并在违约段落前引用条款「依据合同第X条约定，<原文>。」（`breach_clause_sentence`，待核实）；否则写「逾期付款利息」、不引用。安装 / 买卖合同一样。约定违约金却没有按日 / 月 / 年计算的标准（须同时有比率或金额与计算周期，周期含「每日 / 每逾期一日 / 按日 / 日万分之 / 100元/日」等写法；「逾期超过30日」只是触发期限；「一次性结清」等付款方式字样不改变按期计算）时，按固定金额 / 一次性比例处理（律师确认单（四）第 1 题）：诉请与事实理由的「（以¥…为基数……计至实际付清之日止）」整段换成违约金金额（`penalty_amount`，`complaint_renderer` 替换模板），条款只有一个金额的照抄，写「合同总价 / 欠款的 X%」的按合同总价或未付金额算出，一律标待核实；含上限 / 下限 / 累计等附加条件、出现多个计算标准（按「基数 + 比例」比较，如「欠款的5%」与「合同总价的5%」算两档）或多个金额（分档）、比例与金额混用、比例基数识别不了、缺基数时不自动计算，留【待补充】；「每日100元」这类按期计付的固定金额不算一次性金额；律师改过计算标准则不切换。按合同费率计付且条款约定了上限（「最高不超过安装费总额的10%」）时，诉请与事实理由括号末尾照写上限（`penalty_cap`，可选占位符，待核实；金额千分位逗号不断句，写到哪分不清时留【待补充】）
   - 按日计付的固定金额违约金（补充答复 Q6）：诉请写「支付违约金¥X元（自A起，按照每日N元计至实际付清之日止，暂计至B）」（`complaint_renderer._DAILY_CALC`）。A（`penalty_start_date`）= 付款期限届满的次日：欠款是质保金（`retention_unpaid_amount` = 未付金额）→ 最晚验收合格日 + 质保期（`warranty_period`）+ 质保金返还期限（`retention_clause_text`「质保期满后 N 日内返还」，「质保期满后无息返还」为 0）的次日，质保期不自验收起算、没写返还条件、分期返还、带结算等前置条件、整条质保金条款里除质保期本身（「质保期24个月」）和紧跟「质保期满」的已解析期限外还有时间字样（如「一年内」「返还应在30日内完成」）时不推算（不按零天）；结算 / 确认 / 审批等前置条件在整条条款上检查（写在「质保期满」前面也算），只剔除「自竣工验收合格之日起」这类质保期起算写法；否则付款条款须只有一个付款节点且为「验收合格后 N 日 / N 个月内」、无移交 / 结算 / 发票等前置条件 → 最晚验收合格日 + N 的次日；按工作日计、多个付款节点（分号、句号或逗号连接的多期付款均算）、缺验收日期等推不出时留【待补充】。B（`penalty_until_date`）= 生成起诉状当日。X = 每日金额 × A 至 B 天数（头尾都算），三项取最终审核字段（律师改了每日标准 / 起算日 / 暂计日，金额按律师的值重算）；A、X 标待核实。按月 / 年计的固定金额仍留【待补充】
   - 已付 / 欠款：已付 + 欠款 = 合同总价 → 写「（占合同款的X%）」（`paid_note` / `unpaid_note`）；不等 → 欠款后写算式「（到期金额-已付款）」，到期金额 = 已付 + 欠款（待核实）
   - 争议条款提到工程所在地 / 签订地 / 履行地 / 交货地点时，位置同时引用约定该地点的条款
   - 工程所在地 / 交货地点管辖：地点写到区县的直接采纳；只写了项目名的，按验收报告安装地点（`install_address`）推断并标待核实；仍推不出留【待补充】。约定交货地点法院时只取合同约定的 `delivery_place`，缺失时不拿工程地点充当（管辖句写「因交货地点为【待补充】」，法院按安装地点推断并标待核实）。法院按安装地点推断时，管辖句里直接写明「【系统按验收报告安装地点「…」推断，待核实】」，律师改过法院则不加
-  - 管辖句 `jurisdiction_text` 按争议条款生成（一律待核实）：工程所在地 → 模板原句；原告 / 被告所在地 → 「故原告向 XX 人民法院提起诉讼」（XX 为该方住所地法院辖区）；未约定地点 → 「依据《中华人民共和国民事诉讼法》第二十四条，故原告向（被告住所地）XX 人民法院提起诉讼」；点名具体法院 → 留待补充交律师；不考虑中级法院。法院名称：县级市、县只写县级市 / 县（「昆山市人民法院」「沛县人民法院」），市辖区写「市 + 区」（「南京市雨花台区人民法院」），地址省了「市」字的「苏州吴江区……」按「苏州市吴江区」推定（开发区 / 园区等功能区不推）——`derive_court_district`，律师确认单（四）第 3 题、补充答复 Q5
+  - 管辖句 `jurisdiction_text` 按争议条款生成（一律待核实）：工程所在地 → 模板原句；原告 / 被告所在地 → 「故原告向 XX 人民法院提起诉讼」（XX 为该方住所地法院辖区）；未约定地点 → 「依据《中华人民共和国民事诉讼法》第二十四条，故原告向（被告住所地）XX 人民法院提起诉讼」；点名具体法院 → 留待补充交律师；不考虑中级法院。法院名称：县级市、县只写县级市 / 县（「昆山市人民法院」「沛县人民法院」），市辖区写「市 + 区」（「南京市雨花台区人民法院」），地址省了「市」字的「苏州吴江区……」按「苏州市吴江区」推定（只认两字城市 + 两字区名；三四字城市、三字区名、开发区 / 园区等功能区分不清边界，不推）——`derive_court_district`，律师确认单（四）第 3 题、补充答复 Q5
   - 约定仲裁 → 整篇改为仲裁申请书（`document_kind`）：模板固定文字替换 民事起诉状→仲裁申请书、原告→申请人、被告→被申请人、诉讼请求→仲裁请求、诉讼费用→仲裁费用、提起诉讼→提请仲裁、自起诉之日起→自申请仲裁之日起、诉至贵院→提请贵委仲裁、祈判如所请→祈裁如所请、贵院→贵委、判令/判决→裁决；管辖句「故申请人向 XX 仲裁委员会提请仲裁」，致送合同约定的仲裁机构（`addressee`）
   - 不附付款进度表（由办案律师自行决定）
   - 派生值随依据刷新：依据变了（如律师更换原告）而规则推不出新值时，清除旧推定值留【待补充】，不残留旧原告的信用代码 / 负责人 / 住址；派生的合同台数沿用合同台数的出处（页码、OCR 待核实标记）
@@ -590,6 +590,8 @@ export interface ExtractedFields {
   delivery_place?: FieldValue;        // 买卖合同交货地点
   install_address?: FieldValue;       // 验收报告安装地点（推断管辖用）
   penalty_amount?: FieldValue;        // 派生：违约金金额（一次性；或按日计付的暂计金额）
+  penalty_cap?: FieldValue;           // 派生：违约金 / 利息上限「，最高不超过……」
+  defendant_address_ref?: FieldValue; // 审批表买方地址 / 合同甲方地址（仅推断管辖）
   penalty_daily_text?: FieldValue;    // 派生：按日计付标准「每日N元」
   penalty_start_date?: FieldValue;    // 派生：按日违约金起算日
   penalty_until_date?: FieldValue;    // 派生：暂计至（生成当日）
@@ -718,6 +720,8 @@ export const fieldNameMap: Record<string, string> = {
   delivery_place: '交货地点',
   install_address: '安装地点（验收报告）',
   penalty_amount: '违约金金额（写入诉请）',
+  penalty_cap: '违约金 / 利息上限（写入诉请）',
+  defendant_address_ref: '被告地址（审批表 / 合同，仅推断管辖）',
   penalty_daily_text: '按日违约金标准',
   penalty_start_date: '违约金起算日',
   penalty_until_date: '违约金暂计至',
@@ -735,6 +739,7 @@ export const reviewFieldKeys: string[] = [
   'defendant_credit_code',
   'defendant_legal_rep',
   'defendant_address',
+  'defendant_address_ref',
   'contacts',
   'contract_no',
   'contract_title',
@@ -764,6 +769,7 @@ export const reviewFieldKeys: string[] = [
   'interest_term',
   'breach_interest_rate_text',
   'interest_rate_basis',
+  'penalty_cap',
   'penalty_amount',
   'penalty_daily_text',
   'penalty_start_date',
@@ -805,8 +811,9 @@ LLM_TIMEOUT = 120  # 秒
 
 # Qwen-VL-OCR（阿里云 DashScope）
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
+DASHSCOPE_API_KEY_BACKUP = os.getenv("DASHSCOPE_API_KEY_BACKUP")  # 付费备用：主 key 被拒（401/403）时改用，429 不切换
 DASHSCOPE_BASE_URL = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
-QWEN_OCR_MODEL = os.getenv("QWEN_OCR_MODEL", "qwen3.8-max")  # 关闭思考模式调用；可改回 qwen-vl-ocr
+QWEN_OCR_MODEL = os.getenv("QWEN_OCR_MODEL", "qwen3.8-flash")  # 关闭思考模式调用；可改 qwen3.8-max / qwen-vl-ocr
 
 OCR_TIMEOUT = 120  # 秒
 
@@ -816,6 +823,7 @@ SCANNED_PDF_TEXT_THRESHOLD = 50
 # Agent 护栏
 AGENT_MAX_STEPS = 12          # 单次运行最大工具/循环步数
 AGENT_MAX_OCR_PAGES = 50      # 单次运行最多按需 OCR 的页数（成本上限；找到付款+争议条款正文即停）
+AGENT_MAX_REPORT_OCR_PAGES = 30  # 扫描验收报告按需 OCR 的页数上限
 
 # 可信度阈值
 CONFIDENCE_UNCERTAIN_BELOW = 60   # 低于此值标记为"待核实"
@@ -836,6 +844,8 @@ CORS_ORIGINS = ["http://localhost:5173"]
 DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxx
 # 阿里云 DashScope，用于 Qwen 多模态模型识别扫描件 PDF
 DASHSCOPE_API_KEY=sk-xxxxxxxxxxxxxxxx
+# 可选：付费备用 key（主 key 免费额度被拒时自动改用）
+# DASHSCOPE_API_KEY_BACKUP=sk-xxxxxxxxxxxxxxxx
 # 管理员口令：更新原告信息表时输入
 ADMIN_TOKEN=
 # 运行日志（backend/data/run_log.jsonl，不进 git）；设为 0 关闭

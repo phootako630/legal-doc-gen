@@ -80,3 +80,23 @@ def test_no_retention_no_pause(monkeypatch):
     state = asyncio.run(run_analyze([{"filename": "审批表.pdf", "text": "x"}], True))
     assert state.pending is None
     assert state.extracted_fields["payable_ratio"]["value"] == "100%"
+
+
+def test_approval_defendant_address_kept_as_reference():
+    # 审批表买方地址不写进起诉状，但留作推断被告所在地法院的参考（新案卷核对）
+    from app.services.extraction import apply_rule_guards
+
+    fields = {"defendant_address": {"value": "某省某市某区某路1号", "src": "《审批表.pdf》买方单位地址"}}
+    apply_rule_guards(fields)
+    assert fields["defendant_address"]["value"] is None
+    assert fields["defendant_address_ref"]["value"] == "某省某市某区某路1号"
+
+
+def test_acceptance_date_from_approval_marked_uncertain():
+    from app.services.extraction import apply_rule_guards
+
+    fields = {
+        "acceptance_latest_date": {"value": "2022年12月26日", "src": "《审批表.pdf》政府验收时间"}
+    }
+    apply_rule_guards(fields)
+    assert "待核实" in fields["acceptance_latest_date"]["src"]

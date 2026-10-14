@@ -21,7 +21,6 @@ from app.services.derived_fields import (
         ("位于南京市雨花台区", "南京市雨花台区"),
         # 合同省了「市」字：两字城市名 + 市辖区
         ("苏州吴江区某某路以北、某某路以东地块", "苏州市吴江区"),
-        ("江苏省南京雨花台区某某二期", "南京市雨花台区"),
     ],
 )
 def test_derive_court_district(site, expected):
@@ -40,6 +39,11 @@ def test_derive_court_district(site, expected):
         # 开发区 / 园区等功能区未必设法院，不推
         "苏州工业园区某某路",
         "南京江北新区某某路",
+        # 三四字城市 / 三字区名省了「市」字：分不清城市边界，不推（#43 复审）
+        "乌鲁木齐天山区某路",
+        "呼和浩特赛罕区某路",
+        "石家庄长安区某路",
+        "南京雨花台区某某二期",
     ],
 )
 def test_derive_court_district_unknown_returns_none(site):
@@ -423,6 +427,11 @@ _GUARANTEE_CLAUSE = (
     [
         (_GUARANTEE_CLAUSE, True),
         ("预留合同金额5%的质保金，质保期满后无息返还", False),
+        # 否定保函 / 保函只是付款前提：合同款里仍有质保金，要问律师（#43 复审）
+        ("本合同不采用银行保函，质保金为合同价款5%，质保期满后支付", False),
+        ("剩余5%质保金待乙方提交银行保函后支付", False),
+        # 只出现「保函」二字、没写乙方开具：拿不准，按质保金处理
+        ("质保期内以银行保函担保", False),
         # 既扣留质保金、又可用保函替换：仍按质保金问律师
         ("预留5%质保金，乙方可提供银行保函替换，质保期满后返还", False),
         (None, False),
@@ -452,3 +461,124 @@ def test_retention_node_skips_guarantee_only():
     state = {"extracted_fields": _f(retention_ratio="5%", retention_clause_text=_GUARANTEE_CLAUSE)}
     # 不进 interrupt（在图外调用 interrupt 会抛错）：直接返回、不改字段
     assert asyncio.run(retention_node(state)) == {}
+
+
+# 约定被告所在地法院、工商登记住址还没查：按审批表买方地址推断法院并在管辖句写明（新案卷核对）
+def test_defendant_seat_court_from_reference_address_real_shape():
+    fields = apply_derived_fields(
+        _f(
+            dispute_clause_text="协商不成，任何一方可依法向甲方所在地的人民法院起诉",
+            defendant_address_ref="湖南省邵阳市邵东市某某街道某路1号",
+        )
+    )
+    assert fields["court_district"]["value"] == "邵东市"
+    assert "待核实" in fields["court_district"]["src"]
+    text = fields["jurisdiction_text"]["value"]
+    assert "【系统按被告地址「湖南省邵阳市邵东市某某街道某路1号」推断，待核实】" in text
+    assert text.endswith("故原告向邵东市人民法院提起诉讼。")
+
+
+def test_defendant_seat_court_prefers_registered_address():
+    fields = apply_derived_fields(
+        _f(
+            dispute_clause_text="向甲方所在地的人民法院起诉",
+            defendant_address="江苏省南京市鼓楼区某路1号",
+            defendant_address_ref="湖南省邵阳市邵东市某某街道某路1号",
+        )
+    )
+    assert fields["court_district"]["value"] == "南京市鼓楼区"
+    assert "推断" not in fields["jurisdiction_text"]["value"]
+
+
+@pytest.mark.parametrize(
+    ("clause", "rate", "cap"),
+    [
+        (
+            "甲方未按规定的时间和金额支付安装费的，按未付款金额每天万分之二的比例向乙方支付"
+            "逾期付款违约金。甲方逾期付款违约金最高不超过安装费总额的 10%。",
+            "每日万分之二的标准",
+            "，最高不超过安装费总额的10%",
+        ),
+        ("甲方逾期付款的，按每日万分之五支付违约金", "每日万分之五的标准", ""),
+    ],
+)
+def test_penalty_cap(clause, rate, cap):
+    fields = apply_derived_fields(
+        _f(breach_clause_text=clause, breach_interest_rate_text=rate)
+    )
+    assert fields["penalty_cap"]["value"] == cap
+
+
+def test_penalty_cap_rendered_in_claim():
+    from app.services.complaint_renderer import render_complaint
+
+    clause = "甲方逾期付款违约金按每天万分之二计，最高不超过安装费总额的10%"
+    text = render_complaint(
+        _f(breach_clause_text=clause, breach_interest_rate_text="每日万分之二的标准", unpaid_amount="1000")
+    )
+    # 上限照合同写在括号末尾（来源待核实，前面带核实标记）
+    assert "计至实际付清之日止⚠️ 待核实：，最高不超过安装费总额的10%）" in text
+    # 无上限时括号照旧闭合，不留占位符或【待补充】
+    plain = render_complaint(_f(unpaid_amount="1000"))
+    assert "计至实际付清之日止）" in plain and "penalty_cap" not in plain
+
+
+@pytest.mark.parametrize(
+    ("clause", "cap"),
+    [
+        # 金额千分位逗号不截断（半角 / 全角）
+        ("甲方逾期付款的，按每日万分之五支付违约金，最高不超过人民币10,000元。", "，最高不超过人民币10,000元"),
+        ("甲方逾期付款的，按每日万分之五支付违约金，最高不超过人民币10，000元，另行", "，最高不超过人民币10，000元"),
+        # 普通逗号仍断句
+        ("按每日万分之五支付违约金，最高不超过合同总价的5%，并赔偿损失", "，最高不超过合同总价的5%"),
+        # 分不清上限写到哪：不输出截断金额，留【待补充】
+        ("按每日万分之五支付违约金，最高不超过1,5", None),
+    ],
+)
+def test_penalty_cap_thousands_separator(clause, cap):
+    fields = apply_derived_fields(
+        _f(breach_clause_text=clause, breach_interest_rate_text="每日万分之五的标准")
+    )
+    assert fields["penalty_cap"]["value"] == cap
+
+
+def test_elevator_qty_keeps_ocr_warning_from_scanned_reports():
+    from app.services.complaint_renderer import render_complaint
+
+    fields = _f(elevator_qty_by_approval="2", elevator_qty_by_contract="2")
+    fields["elevator_qty_by_acceptance"] = {
+        "value": 2,
+        "src": "《验收报告.pdf》等：扫描报告按首页计数 2 份，共 2 台（OCR识别，请核实）",
+        "channel": "ocr",
+    }
+    out = apply_derived_fields(fields)
+    assert out["elevator_qty"]["channel"] == "ocr"
+    assert "OCR" in out["elevator_qty"]["src"]
+    # 起诉状里验收台数带待核实标记，不是直接写「2台电梯」
+    assert "⚠️ 待核实：2台电梯均于" in render_complaint(fields)
+
+
+@pytest.mark.parametrize(
+    "clause",
+    ["本合同不采用银行保函，质保金为合同价款5%，质保期满后支付", "剩余5%质保金待乙方提交银行保函后支付"],
+)
+def test_cash_retention_with_guarantee_wording_still_asks_lawyer(clause):
+    import asyncio
+
+    from app.agent import nodes
+
+    fields = apply_derived_fields(_f(retention_ratio="5%", retention_clause_text=clause))
+    assert "保函" not in fields["payable_ratio"]["src"]
+    asked = []
+
+    def fake_interrupt(payload):
+        asked.append(payload)
+        return {}
+
+    orig = nodes.interrupt
+    nodes.interrupt = fake_interrupt
+    try:
+        asyncio.run(nodes.retention_node({"extracted_fields": fields}))
+    finally:
+        nodes.interrupt = orig
+    assert asked and asked[0]["pending"]["field_keys"] == ["payable_ratio"]

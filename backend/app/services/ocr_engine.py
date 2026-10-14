@@ -18,6 +18,7 @@ from typing import TypedDict
 
 from app.config import (
     DASHSCOPE_API_KEY,
+    DASHSCOPE_API_KEY_BACKUP,
     DASHSCOPE_BASE_URL,
     OCR_MAX_CONCURRENCY,
     OCR_PAGE_TIMEOUT,
@@ -52,10 +53,8 @@ async def ocr_pdf(pdf_bytes: bytes) -> OcrResult:
         RuntimeError: API Key 未配置，或 OCR 处理失败
         TimeoutError: OCR 超时
     """
-    if not DASHSCOPE_API_KEY:
-        raise RuntimeError(
-            "未配置 DASHSCOPE_API_KEY，请在 backend/.env 中填入阿里云 DashScope API Key"
-        )
+    if not _keys():
+        raise RuntimeError(_MISSING_KEY)
 
     print(f"[OCR ENGINE] ocr_pdf() called, pdf_bytes len={len(pdf_bytes)}", flush=True)
     loop = asyncio.get_event_loop()
@@ -75,14 +74,51 @@ async def ocr_pdf(pdf_bytes: bytes) -> OcrResult:
     return result
 
 
-def _ocr_image_b64(img_b64: str) -> str:
-    """对单页 PNG（base64）调用 Qwen-VL-OCR，返回识别文本（异常/异常结构返回空串）。"""
+_MISSING_KEY = "未配置 DASHSCOPE_API_KEY，请在 backend/.env 中填入阿里云 DashScope API Key"
+# 主 key（免费额度）被拒时改用付费备用 key：401 / 403（额度用完、无权限）才切换，429 限流不切换
+_SWITCH_STATUSES = {401, 403}
+_use_backup = False  # 切换后本次进程一直用备用 key，不再先撞一次主 key
+
+
+def _keys() -> list[str]:
+    """按尝试顺序返回可用 key（主 key 在前；已切换到备用 key 时只剩备用 key）。"""
+    primary = (DASHSCOPE_API_KEY or "").strip()
+    backup = (DASHSCOPE_API_KEY_BACKUP or "").strip()
+    keys = [backup] if _use_backup else [primary, backup]
+    return [k for k in keys if k]
+
+
+def _post_with_fallback(payload: dict):
+    """先用主 key 调用；被拒（401/403）且配了备用 key 时用备用 key 重试一次，并记住切换。"""
     import requests
 
-    headers = {
-        "Authorization": f"Bearer {DASHSCOPE_API_KEY.strip()}",
-        "Content-Type": "application/json",
-    }
+    global _use_backup
+    keys = _keys()
+    if not keys:
+        raise RuntimeError(_MISSING_KEY)
+    for i, key in enumerate(keys):
+        resp = requests.post(
+            DASHSCOPE_BASE_URL,
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=OCR_PAGE_TIMEOUT,
+        )
+        is_last = i == len(keys) - 1
+        if resp.status_code in _SWITCH_STATUSES and not is_last:
+            # 不打印 key，只记状态码，方便排查免费额度何时用完
+            print(
+                f"[OCR ENGINE] 主 key 被拒（HTTP {resp.status_code}），改用付费备用 key",
+                flush=True,
+            )
+            _use_backup = True
+            continue
+        resp.raise_for_status()
+        return resp
+    raise RuntimeError("OCR 处理失败：没有可用的 DashScope key")  # 不会走到
+
+
+def _ocr_image_b64(img_b64: str) -> str:
+    """对单页 PNG（base64）调用 Qwen-VL-OCR，返回识别文本（异常/异常结构返回空串）。"""
     payload = {
         "model": QWEN_OCR_MODEL,
         "input": {
@@ -102,10 +138,7 @@ def _ocr_image_b64(img_b64: str) -> str:
         },
     }
 
-    resp = requests.post(
-        DASHSCOPE_BASE_URL, headers=headers, json=payload, timeout=OCR_PAGE_TIMEOUT
-    )
-    resp.raise_for_status()
+    resp = _post_with_fallback(payload)
     data = resp.json()
 
     # DashScope 原生 API 响应结构：output.choices[0].message.content[0].text
@@ -156,10 +189,8 @@ async def ocr_page(pdf_bytes: bytes, page_num: int) -> str:
         RuntimeError: API Key 未配置，或 OCR 处理失败
         TimeoutError: 单页 OCR 超时
     """
-    if not DASHSCOPE_API_KEY:
-        raise RuntimeError(
-            "未配置 DASHSCOPE_API_KEY，请在 backend/.env 中填入阿里云 DashScope API Key"
-        )
+    if not _keys():
+        raise RuntimeError(_MISSING_KEY)
 
     loop = asyncio.get_event_loop()
     try:

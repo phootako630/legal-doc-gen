@@ -44,8 +44,9 @@ _CITY_DISTRICT_RE = re.compile(
 )
 # 合同常把地级市的「市」字省掉（「苏州吴江区锦湖路以北……」）：两字城市名 + 市辖区。
 # 只认以「区」结尾的市辖区，不认开发区 / 园区等功能区（它们未必设法院）；结果照常标待核实
-# 区名至少两字（「吴江区」）：防止把没写城市的「雨花台区……」拆成「雨花」+「台区」
-_CITY_NO_SHI_RE = re.compile(f"^([{_CJK}]{{2}})([{_CJK}]{{2,4}}?区)")
+# 只认「两字城市 + 两字区名 + 区」（「苏州吴江区」）：三四字城市（乌鲁木齐、呼和浩特、石家庄）
+# 和三字区名分不清边界，宁可不推、交律师填（#43 复审：不能凭长度拆分拼造辖区）
+_CITY_NO_SHI_RE = re.compile(f"^([{_CJK}]{{2}})([{_CJK}]{{2}}区)")
 _FUNCTION_ZONE_RE = re.compile(r"(?:开发|园|高新|新|保税|工业)区$")
 # 争议条款里点名的具体法院（不是「所在地 / 当地」法院）
 _NAMED_COURT_RE = re.compile(r"(?:[市区县]|中级)人民法院")
@@ -348,7 +349,15 @@ def elevator_qty_field(fields: dict) -> dict | None:
         )
     elif approval is not None and approval != acceptance:
         src += f"（审批表 {approval} 台）"
-    return {"value": acceptance, "src": src, "channel": "text"}
+    node = {"value": acceptance, "src": src, "channel": "text"}
+    # 验收台数来自扫描报告 OCR 计数时，沿用 OCR 通道并提示核实（审核页与起诉状都标待核实）
+    base = fields.get("elevator_qty_by_acceptance")
+    if isinstance(base, dict) and (
+        base.get("channel") == "ocr" or "OCR" in str(base.get("src") or "")
+    ):
+        node["channel"] = "ocr"
+        node["src"] = f"{src}（{base.get('src') or '扫描验收报告'}；OCR识别，请核实）"
+    return node
 
 
 def handover_text_field(fields: dict) -> dict:
@@ -488,6 +497,44 @@ def interest_basis_field(fields: dict) -> dict:
         "src": "常规话术（合同未约定甲方逾期付款利率）",
         "channel": "text",
     }
+
+
+# 违约金 / 利息上限：「逾期付款违约金最高不超过安装费总额的10%」→「，最高不超过安装费总额的10%」
+# 逗号断句，但金额里的千分位逗号（「10,000元」「10，000元」）不算断句
+_CAP_RE = re.compile(r"最高(?:不得?超过|为)(?:[^。；;，,]|(?<=\d)[,，](?=\d{3})){1,40}")
+
+
+def penalty_cap_field(fields: dict) -> dict:
+    """
+    诉请括号「……计至实际付清之日止」后补写合同约定的上限（新案卷核对：律师诉状写
+    「按每日万分之二的利率计算至实际付清之日止，最高不超过安装费总额的10%」）。
+    只在按合同约定费率计付时写；一次性 / 按日固定金额、LPR 常规话术不写；律师已把上限写进
+    计算标准时不重复。
+    """
+    none = {"value": "", "src": "合同违约条款未约定上限，或不按合同费率计算"}
+    basis = _node(fields, "interest_rate_basis")
+    basis_value = str(basis.get("value") or "")
+    if (
+        is_lump_sum_penalty(fields)
+        or is_daily_amount_penalty(fields)
+        or not basis_value
+        or basis_value == LPR_INTEREST_BASIS
+        or "最高" in basis_value
+    ):
+        return none
+    for key in ("breach_clause_text", "breach_interest_rate_text"):
+        text = re.sub(r"\s+", "", _str_value(fields, key) or "")
+        m = _CAP_RE.search(text)
+        if m and m.group(0)[-1].isdigit() and text[m.end() : m.end() + 1] in (",", "，"):
+            # 数字后紧跟逗号又不像千分位（「1,5」）：分不清上限写到哪，宁缺勿造
+            return {"value": None, "src": "合同约定了上限，但写法无法完整识别，请律师填写"}
+        if m:
+            return {
+                "value": f"，{m.group(0)}",
+                "src": "按合同违约条款约定的上限，待核实",
+                "channel": "text",
+            }
+    return none
 
 
 # 违约金金额：「人民币5000元」「5,000.00元」「1.5万元」；比例：「合同总价的10%」「欠款的5%」
@@ -999,22 +1046,40 @@ def _jurisdiction(fields: dict) -> tuple[str, str | None, str]:
             "约定原告所在地法院，按原告住址推定，待核实",
         )
     if _DEFENDANT_SEAT_RE.search(dispute):
-        addr = _str_value(fields, "defendant_address")
-        return (
-            "defendant",
-            derive_court_district(addr),
-            "约定被告所在地法院，按被告住址推定，待核实",
-        )
+        return ("defendant", *_defendant_seat_court(fields, "约定被告所在地法院"))
     if _SIGN_PLACE_RE.search(dispute) and not _SITE_RE.search(dispute):
         return "sign_place", None, "约定合同签订地法院，请律师确定具体法院"
     if _SITE_RE.search(dispute) or not dispute:
         return _site_jurisdiction(fields, delivery=bool(_DELIVERY_RE.search(dispute)))
+    return ("general", *_defendant_seat_court(fields, "未约定具体地点"))
+
+
+def _defendant_seat_court(fields: dict, basis: str) -> tuple[str | None, str]:
+    """
+    被告住所地法院：先按被告住址（工商登记）推定；还没查工商时，按审批表买方地址 / 合同甲方地址
+    （`defendant_address_ref`，不写进起诉状）推断并标待核实（新案卷核对）。
+    """
     addr = _str_value(fields, "defendant_address")
-    return (
-        "general",
-        derive_court_district(addr),
-        "未约定具体地点，按被告住所地推定，待核实",
-    )
+    district = derive_court_district(addr)
+    if district:
+        return district, f"{basis}，按被告住址推定，待核实"
+    ref = _str_value(fields, "defendant_address_ref")
+    district = derive_court_district(ref)
+    if district:
+        return district, f"{basis}，被告住址（工商登记）未填，系统按「{ref}」推断，待核实"
+    return None, f"{basis}，按被告住址推定，请律师确定管辖法院"
+
+
+def _seat_ref_note(fields: dict) -> str:
+    """法院按被告参考地址推断时，管辖句里直接写明依据；律师改过法院或已填被告住址则不加。"""
+    if _lawyer_edited(fields.get("court_district")):
+        return ""
+    if derive_court_district(_str_value(fields, "defendant_address")):
+        return ""
+    ref = _str_value(fields, "defendant_address_ref")
+    if not derive_court_district(ref):
+        return ""
+    return f"【系统按被告地址「{ref}」推断，待核实】"
 
 
 def _site_place(fields: dict, delivery: bool) -> tuple[str | None, str]:
@@ -1106,7 +1171,12 @@ def jurisdiction_text_field(fields: dict) -> dict:
             f"{_inferred_court_note(fields, place)}，故原告向{court}人民法院提起诉讼。"
         )
     elif mode == "general":
-        text = f"{_GENERAL_JURISDICTION_BASIS}，故原告向{court}人民法院提起诉讼。"
+        text = (
+            f"{_GENERAL_JURISDICTION_BASIS}{_seat_ref_note(fields)}，"
+            f"故原告向{court}人民法院提起诉讼。"
+        )
+    elif mode == "defendant":
+        text = f"{_seat_ref_note(fields)}故原告向{court}人民法院提起诉讼。"
     else:
         text = f"故原告向{court}人民法院提起诉讼。"
     return {
@@ -1165,14 +1235,29 @@ def payable_ratio_options(fields: dict) -> list[str]:
 
 # 「质保金」条款实为乙方另开银行质保保函（不从合同款里扣留）：如「同时乙方向甲方开具安装结算
 # 金额5%，有效期至质保期满的银行质保保函」。条款里同时写了预留 / 扣留等字样时仍按质保金处理
-_GUARANTEE_RE = re.compile(r"保函")
-_RETAINED_RE = re.compile(r"预留|扣留|留存|暂扣|扣除|扣减|暂留|保留|返还|退还|无息")
+# 正向确认：须写明「乙方（向甲方）开具 / 提供 / 出具 / 提交……保函」
+_GUARANTEE_ISSUE_RE = re.compile(r"乙方[^。；;]{0,15}?(?:开具|提供|出具|提交)[^。；;]{0,40}?保函")
+# 否定保函（「不采用银行保函」「无需提供保函」）
+_GUARANTEE_NEGATED_RE = re.compile(r"(?:不采用|不提供|不出具|不需|无需|免于|不以)[^。；;]{0,10}?保函")
+# 保函只是付款前提（「待乙方提交银行保函后支付」）：合同款里仍有待付的质保金
+_PAY_AFTER_GUARANTEE_RE = re.compile(r"保函[^。；;]{0,8}?(?:后|方可|才)[^。；;]{0,6}?(?:支付|付款|付清|返还)")
+# 现金质保金的写法：条款里出现「质保金」字样，或预留 / 扣留 / 返还等
+_RETAINED_RE = re.compile(r"质保金|保修金|预留|扣留|留存|暂扣|扣除|扣减|暂留|保留|返还|退还|无息")
 
 
 def retention_is_guarantee(fields: dict) -> bool:
-    """合同的「质保金」只是乙方开具的银行质保保函，合同款里没有扣留质保金。"""
-    clause = _str_value(fields, "retention_clause_text") or ""
-    return bool(_GUARANTEE_RE.search(clause)) and not _RETAINED_RE.search(clause)
+    """
+    合同的「质保金」只是乙方另开的银行质保保函，合同款里没有扣留质保金：须正向写明乙方开具保函，
+    且没有否定保函、没有「保函后付款」、没有任何现金质保金写法；拿不准就按质保金问律师
+    （#43 复审：不能只凭出现「保函」二字跳过律师确认）。
+    """
+    clause = re.sub(r"\s+", "", _str_value(fields, "retention_clause_text") or "")
+    return (
+        bool(_GUARANTEE_ISSUE_RE.search(clause))
+        and not _GUARANTEE_NEGATED_RE.search(clause)
+        and not _PAY_AFTER_GUARANTEE_RE.search(clause)
+        and not _RETAINED_RE.search(clause)
+    )
 
 
 def payable_ratio_field(fields: dict) -> dict:
@@ -1209,6 +1294,7 @@ _DERIVERS: list[tuple[str, Callable[[dict], dict | None], bool]] = [
     ("interest_term", interest_term_field, True),
     ("breach_clause_sentence", breach_clause_sentence_field, False),
     ("interest_rate_basis", interest_basis_field, False),
+    ("penalty_cap", penalty_cap_field, True),
     ("penalty_daily_text", penalty_daily_text_field, True),
     ("penalty_start_date", penalty_start_date_field, True),
     ("penalty_until_date", penalty_until_date_field, True),

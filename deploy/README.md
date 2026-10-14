@@ -54,7 +54,7 @@ chmod 600 backend/.env
 vi backend/.env
 ```
 
-必填 `DEEPSEEK_API_KEY`、`DASHSCOPE_API_KEY`；建议设置 `ADMIN_TOKEN`（长随机串，只有管理员知道，用于在「原告信息表」页面上传/回退表格；只想让对接律师上传，就只把口令告诉这位律师。每次上传 / 恢复会记下操作人的登录账号，在历史版本里可见）：
+必填 `DEEPSEEK_API_KEY`、`DASHSCOPE_API_KEY`；可选 `DASHSCOPE_API_KEY_BACKUP`（付费备用 key：主 key 免费额度用完、被拒 401 / 403 时自动改用，日志会打印「主 key 被拒，改用付费备用 key」）；建议设置 `ADMIN_TOKEN`（长随机串，只有管理员知道，用于在「原告信息表」页面上传/回退表格；只想让对接律师上传，就只把口令告诉这位律师。每次上传 / 恢复会记下操作人的登录账号，在历史版本里可见）：
 
 ```bash
 openssl rand -base64 24    # 生成一个口令
