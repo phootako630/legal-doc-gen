@@ -18,7 +18,7 @@
 - `defendant_legal_rep` / `defendant_address`：律师一律用企查查等工商登记信息，**不要取审批表「买方单位地址」**；材料里没有工商登记信息就填 null
 - `contacts`：只取审批表「联系人」「联系电话」栏，不取「甲方收款联系人」。每人输出 `{"name": {...}, "phone": {...}}`
 - `contract_sign_date`：合同盖章页的签署日期（不是封面的「合同订立时间」）；合同是扫描件暂未识别时，取审批表「签约时间」
-- `contract_title` / `contract_no`：合同封面；合同编号审批表上也有
+- `contract_title` / `contract_no`：合同封面；封面标题分行时按顺序连成全称，项目名不能丢，不取正文首页的简短标题；合同编号审批表上也有
 - `elevator_qty_by_approval`：审批表「签约台数」/「实际履行台数」；`elevator_qty_by_contract`：合同约定的台数；验收报告台数由系统按设备代码计数
 - `total_amount`：审批表「合同总额」处；或合同前部「合同总额」「合同金额」等表述
 - `paid_amount`：审批表「已付款」处；`unpaid_amount`：审批表「未付款金额」处
