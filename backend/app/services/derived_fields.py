@@ -1048,7 +1048,14 @@ def _jurisdiction(fields: dict) -> tuple[str, str | None, str]:
     if _DEFENDANT_SEAT_RE.search(dispute):
         return ("defendant", *_defendant_seat_court(fields, "约定被告所在地法院"))
     if _SIGN_PLACE_RE.search(dispute) and not _SITE_RE.search(dispute):
-        return "sign_place", None, "约定合同签订地法院，请律师确定具体法院"
+        # 签订地取合同盖章页「合同签订地」栏（新案卷核对：律师按它写法院），推断结果待核实
+        place = _str_value(fields, "contract_sign_place")
+        district = derive_court_district(place)
+        if district:
+            return "sign_place", district, f"按合同签订地「{place}」推定，待核实管辖"
+        if place:
+            return "sign_place", None, f"合同签订地「{place}」未写明区县，请律师确定管辖法院"
+        return "sign_place", None, "约定合同签订地法院，合同签订地未识别，请律师确定管辖法院"
     if _SITE_RE.search(dispute) or not dispute:
         return _site_jurisdiction(fields, delivery=bool(_DELIVERY_RE.search(dispute)))
     return ("general", *_defendant_seat_court(fields, "未约定具体地点"))
@@ -1175,6 +1182,9 @@ def jurisdiction_text_field(fields: dict) -> dict:
             f"{_GENERAL_JURISDICTION_BASIS}{_seat_ref_note(fields)}，"
             f"故原告向{court}人民法院提起诉讼。"
         )
+    elif mode == "sign_place":
+        place = _str_value(fields, "contract_sign_place") or _MISSING
+        text = f"合同签订地为{place}，故原告向{court}人民法院提起诉讼。"
     elif mode == "defendant":
         text = f"{_seat_ref_note(fields)}故原告向{court}人民法院提起诉讼。"
     else:

@@ -582,3 +582,28 @@ def test_cash_retention_with_guarantee_wording_still_asks_lawyer(clause):
     finally:
         nodes.interrupt = orig
     assert asked and asked[0]["pending"]["field_keys"] == ["payable_ratio"]
+
+
+# 约定合同签订地法院：按合同盖章页「合同签订地」推断法院（新案卷核对，买卖合同）
+_SIGN_DISPUTE = "因本合同或本合同相关事项发生的纠纷，应向本合同签订地有管辖权人民法院依法裁决。"
+
+
+@pytest.mark.parametrize(
+    ("place", "court", "text"),
+    [
+        (
+            "河北省保定市莲池区朝阳南大街1号",
+            "保定市莲池区",
+            "合同签订地为河北省保定市莲池区朝阳南大街1号，故原告向保定市莲池区人民法院提起诉讼。",
+        ),
+        # 签订地没写区县：法院留待补充
+        ("某某项目部", None, "合同签订地为某某项目部，故原告向【待补充】人民法院提起诉讼。"),
+        # 没抽到签订地
+        (None, None, "合同签订地为【待补充】，故原告向【待补充】人民法院提起诉讼。"),
+    ],
+)
+def test_sign_place_jurisdiction(place, court, text):
+    fields = apply_derived_fields(_f(dispute_clause_text=_SIGN_DISPUTE, contract_sign_place=place))
+    assert fields["court_district"]["value"] == court
+    assert fields["jurisdiction_text"]["value"] == text
+    assert "待核实" in fields["jurisdiction_text"]["src"] or court is None
