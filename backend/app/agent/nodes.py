@@ -75,6 +75,7 @@ _ALL_CLAUSE_KEYS = [
     "retention_clause_text",
     "arbitration_institution",
     "defendant_address_ref",  # 合同盖章页甲方地址：被告所在地管辖时推断法院用（新案卷核对）
+    "contract_sign_place",  # 合同盖章页「合同签订地」：约定签订地法院时推断法院用
 ]
 # 以合同为准的字段：律师取合同盖章页/封面/协议书（签约日期、合同名称、合同台数、安装地址）。
 # OCR 合同后若取得这些值，覆盖此前从审批表/验收报告推测的值。
