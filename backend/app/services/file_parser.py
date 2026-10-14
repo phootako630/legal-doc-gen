@@ -1,6 +1,7 @@
 # 文件解析调度：根据文件类型选择 PyMuPDF / python-docx / PaddleOCR
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from fastapi import UploadFile
@@ -18,9 +19,25 @@ _TYPE_KEYWORDS: dict[str, str] = {
 }
 
 
-def _identify_type(filename: str) -> str:
+# 文件名认不出时看正文开头（标题所在处）：实务中审批表常以流程名命名
+# （「AH2204383某某公司安装诉讼流程.pdf」），正文标题才是「KA大客户收款不良合同诉讼审批表」。
+# 顺序有意义：审批表正文里也有「合同」二字，须先判审批表。
+_CONTENT_KEYWORDS: list[tuple[str, str]] = [
+    ("审批表", "审批表"),
+    ("检验报告", "验收报告"),
+    ("验收报告", "验收报告"),
+    ("合同", "合同"),
+]
+_CONTENT_HEAD_CHARS = 300  # 只看开头：正文后文提到「验收报告」「合同」不代表文件类型
+
+
+def _identify_type(filename: str, text: str = "") -> str:
     for keyword, doc_type in _TYPE_KEYWORDS.items():
         if keyword in filename:
+            return doc_type
+    head = re.sub(r"\s+", "", text)[:_CONTENT_HEAD_CHARS]
+    for keyword, doc_type in _CONTENT_KEYWORDS:
+        if keyword in head:
             return doc_type
     return "未知"
 
@@ -71,6 +88,8 @@ async def _parse_pdf(
         raise ValueError(
             f"文件《{filename}》内容为空，无法提取有效文本（可能为空白页或图像质量过低）"
         )
+    if identified_type == "未知":
+        identified_type = _identify_type(filename, text)
 
     return {
         "filename": filename,
@@ -92,6 +111,8 @@ def _parse_docx(filename: str, content: bytes, identified_type: str) -> dict[str
 
     if not text.strip():
         raise ValueError(f"文件《{filename}》内容为空，无法提取有效文本")
+    if identified_type == "未知":
+        identified_type = _identify_type(filename, text)
 
     return {
         "filename": filename,
