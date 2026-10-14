@@ -348,7 +348,15 @@ def elevator_qty_field(fields: dict) -> dict | None:
         )
     elif approval is not None and approval != acceptance:
         src += f"（审批表 {approval} 台）"
-    return {"value": acceptance, "src": src, "channel": "text"}
+    node = {"value": acceptance, "src": src, "channel": "text"}
+    # 验收台数来自扫描报告 OCR 计数时，沿用 OCR 通道并提示核实（审核页与起诉状都标待核实）
+    base = fields.get("elevator_qty_by_acceptance")
+    if isinstance(base, dict) and (
+        base.get("channel") == "ocr" or "OCR" in str(base.get("src") or "")
+    ):
+        node["channel"] = "ocr"
+        node["src"] = f"{src}（{base.get('src') or '扫描验收报告'}；OCR识别，请核实）"
+    return node
 
 
 def handover_text_field(fields: dict) -> dict:
@@ -491,7 +499,8 @@ def interest_basis_field(fields: dict) -> dict:
 
 
 # 违约金 / 利息上限：「逾期付款违约金最高不超过安装费总额的10%」→「，最高不超过安装费总额的10%」
-_CAP_RE = re.compile(r"最高(?:不得?超过|为)[^。；;，,]{1,40}")
+# 逗号断句，但金额里的千分位逗号（「10,000元」「10，000元」）不算断句
+_CAP_RE = re.compile(r"最高(?:不得?超过|为)(?:[^。；;，,]|(?<=\d)[,，](?=\d{3})){1,40}")
 
 
 def penalty_cap_field(fields: dict) -> dict:
@@ -513,7 +522,11 @@ def penalty_cap_field(fields: dict) -> dict:
     ):
         return none
     for key in ("breach_clause_text", "breach_interest_rate_text"):
-        m = _CAP_RE.search(re.sub(r"\s+", "", _str_value(fields, key) or ""))
+        text = re.sub(r"\s+", "", _str_value(fields, key) or "")
+        m = _CAP_RE.search(text)
+        if m and m.group(0)[-1].isdigit() and text[m.end() : m.end() + 1] in (",", "，"):
+            # 数字后紧跟逗号又不像千分位（「1,5」）：分不清上限写到哪，宁缺勿造
+            return {"value": None, "src": "合同约定了上限，但写法无法完整识别，请律师填写"}
         if m:
             return {
                 "value": f"，{m.group(0)}",

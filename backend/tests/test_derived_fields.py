@@ -512,3 +512,38 @@ def test_penalty_cap_rendered_in_claim():
     # 无上限时括号照旧闭合，不留占位符或【待补充】
     plain = render_complaint(_f(unpaid_amount="1000"))
     assert "计至实际付清之日止）" in plain and "penalty_cap" not in plain
+
+
+@pytest.mark.parametrize(
+    ("clause", "cap"),
+    [
+        # 金额千分位逗号不截断（半角 / 全角）
+        ("甲方逾期付款的，按每日万分之五支付违约金，最高不超过人民币10,000元。", "，最高不超过人民币10,000元"),
+        ("甲方逾期付款的，按每日万分之五支付违约金，最高不超过人民币10，000元，另行", "，最高不超过人民币10，000元"),
+        # 普通逗号仍断句
+        ("按每日万分之五支付违约金，最高不超过合同总价的5%，并赔偿损失", "，最高不超过合同总价的5%"),
+        # 分不清上限写到哪：不输出截断金额，留【待补充】
+        ("按每日万分之五支付违约金，最高不超过1,5", None),
+    ],
+)
+def test_penalty_cap_thousands_separator(clause, cap):
+    fields = apply_derived_fields(
+        _f(breach_clause_text=clause, breach_interest_rate_text="每日万分之五的标准")
+    )
+    assert fields["penalty_cap"]["value"] == cap
+
+
+def test_elevator_qty_keeps_ocr_warning_from_scanned_reports():
+    from app.services.complaint_renderer import render_complaint
+
+    fields = _f(elevator_qty_by_approval="2", elevator_qty_by_contract="2")
+    fields["elevator_qty_by_acceptance"] = {
+        "value": 2,
+        "src": "《验收报告.pdf》等：扫描报告按首页计数 2 份，共 2 台（OCR识别，请核实）",
+        "channel": "ocr",
+    }
+    out = apply_derived_fields(fields)
+    assert out["elevator_qty"]["channel"] == "ocr"
+    assert "OCR" in out["elevator_qty"]["src"]
+    # 起诉状里验收台数带待核实标记，不是直接写「2台电梯」
+    assert "⚠️ 待核实：2台电梯均于" in render_complaint(fields)

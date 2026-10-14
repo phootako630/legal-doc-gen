@@ -11,6 +11,7 @@ def _report_page(no: str, approved: str, place: str = "某某市某某路88号1�
     # 模拟 OCR 把检验报告首页表格识别成 markdown 表格的样子
     return (
         f"报告编号：TJ-E2022{no}\n电梯监督检验报告\n"
+        "| 设备品种 | 曳引驱动乘客电梯 | 型号 | HGE-1050 |\n"
         f"| 产品编号 | 20G1{no} | 制造日期 | 2022年06月28日 |\n"
         f"| 安装地点 | {place} | 使用登记证编号 | / |\n"
         "| 检验日期 | 2022年12月01日 | 下次检验日期 | 2023年12月 |\n"
@@ -82,13 +83,69 @@ def test_report_ocr_fills_date_address_and_qty(monkeypatch):
     assert out["files"][0]["text"]
 
 
-def test_report_ocr_skipped_when_report_already_read(monkeypatch):
-    fields = {
-        "acceptance_latest_date": {"value": "2022年12月26日", "src": "《验收报告.pdf》第1页"},
-        "elevator_qty_by_acceptance": {"value": 3, "src": "代码计数"},
-    }
-    out, ocr = _run(monkeypatch, fields)
+def test_report_ocr_skipped_when_no_unread_scanned_report(monkeypatch):
+    ocr = AsyncMock()
+    monkeypatch.setattr(nodes_mod, "ocr_page", ocr)
+    report = _scanned_report(3)
+    report["text"] = "已 OCR 过的文本"
+    out = asyncio.run(nodes_mod.report_ocr_node({"extracted_fields": {}, "files": [report]}))
     assert out == {} and ocr.await_count == 0
+
+
+def _text_report(approved: str) -> dict:
+    # 文本层报告：1 台（设备代码计数），批准日期由初抽从文本取得
+    return {
+        "filename": "文本报告.pdf",
+        "identified_type": "验收报告",
+        "is_scanned": False,
+        "text": f"设备代码：31104301202100001\n批 准：某某 日期：{approved}",
+        "pages": [],
+        "page_count": 1,
+    }
+
+
+def test_mixed_text_and_scanned_reports_aggregate_all(monkeypatch):
+    # 文本报告 2025-05-01 比扫描报告都晚：日期保留文本报告的；台数 = 文本 1 + 扫描 3
+    fields = {
+        "acceptance_latest_date": {"value": "2025年5月1日", "src": "《文本报告.pdf》批准日期"},
+        "elevator_qty_by_acceptance": {"value": 1, "src": "代码计数"},
+    }
+
+    async def fake(_pdf, n):
+        return _report_page(f"0{n}", "2024年5月1日")
+
+    monkeypatch.setattr(nodes_mod, "ocr_page", AsyncMock(side_effect=fake))
+    state = {"extracted_fields": fields, "files": [_text_report("2025年5月1日"), _scanned_report(3)]}
+    f = asyncio.run(nodes_mod.report_ocr_node(state))["extracted_fields"]
+    assert f["acceptance_latest_date"]["value"] == "2025年5月1日"
+    assert f["elevator_qty_by_acceptance"]["value"] == 4
+    assert "文本报告 1 台 + 扫描报告按首页计数 3 份" in f["elevator_qty_by_acceptance"]["src"]
+
+
+def test_scanned_report_later_than_text_report_wins(monkeypatch):
+    fields = {"acceptance_latest_date": {"value": "2024年5月1日", "src": "《文本报告.pdf》"}}
+
+    async def fake(_pdf, n):
+        return _report_page(f"0{n}", "2025年5月1日")
+
+    monkeypatch.setattr(nodes_mod, "ocr_page", AsyncMock(side_effect=fake))
+    state = {"extracted_fields": fields, "files": [_text_report("2024年5月1日"), _scanned_report(2)]}
+    f = asyncio.run(nodes_mod.report_ocr_node(state))["extracted_fields"]
+    assert f["acceptance_latest_date"]["value"] == "2025年5月1日"
+
+
+def test_budget_exhausted_marks_incomplete(monkeypatch):
+    monkeypatch.setattr(nodes_mod, "AGENT_MAX_REPORT_OCR_PAGES", 2)
+
+    async def fake(_pdf, n):
+        return _report_page(f"0{n}", "2022年12月20日")
+
+    monkeypatch.setattr(nodes_mod, "ocr_page", AsyncMock(side_effect=fake))
+    state = {"extracted_fields": {}, "files": [_scanned_report(5)]}
+    f = asyncio.run(nodes_mod.report_ocr_node(state))["extracted_fields"]
+    assert f["elevator_qty_by_acceptance"]["value"] == 2
+    assert "可能不全" in f["elevator_qty_by_acceptance"]["src"]
+    assert "可能不全" in f["acceptance_latest_date"]["src"]
 
 
 def test_count_first_pages_survives_cropped_report_number_and_html():
