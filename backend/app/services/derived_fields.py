@@ -490,6 +490,39 @@ def interest_basis_field(fields: dict) -> dict:
     }
 
 
+# 违约金 / 利息上限：「逾期付款违约金最高不超过安装费总额的10%」→「，最高不超过安装费总额的10%」
+_CAP_RE = re.compile(r"最高(?:不得?超过|为)[^。；;，,]{1,40}")
+
+
+def penalty_cap_field(fields: dict) -> dict:
+    """
+    诉请括号「……计至实际付清之日止」后补写合同约定的上限（新案卷核对：律师诉状写
+    「按每日万分之二的利率计算至实际付清之日止，最高不超过安装费总额的10%」）。
+    只在按合同约定费率计付时写；一次性 / 按日固定金额、LPR 常规话术不写；律师已把上限写进
+    计算标准时不重复。
+    """
+    none = {"value": "", "src": "合同违约条款未约定上限，或不按合同费率计算"}
+    basis = _node(fields, "interest_rate_basis")
+    basis_value = str(basis.get("value") or "")
+    if (
+        is_lump_sum_penalty(fields)
+        or is_daily_amount_penalty(fields)
+        or not basis_value
+        or basis_value == LPR_INTEREST_BASIS
+        or "最高" in basis_value
+    ):
+        return none
+    for key in ("breach_clause_text", "breach_interest_rate_text"):
+        m = _CAP_RE.search(re.sub(r"\s+", "", _str_value(fields, key) or ""))
+        if m:
+            return {
+                "value": f"，{m.group(0)}",
+                "src": "按合同违约条款约定的上限，待核实",
+                "channel": "text",
+            }
+    return none
+
+
 # 违约金金额：「人民币5000元」「5,000.00元」「1.5万元」；比例：「合同总价的10%」「欠款的5%」
 _PENALTY_YUAN_RE = re.compile(r"([0-9][0-9,，]*(?:\.\d+)?)\s*(万)?\s*元")
 _PENALTY_RATIO_RE = re.compile(
@@ -999,22 +1032,40 @@ def _jurisdiction(fields: dict) -> tuple[str, str | None, str]:
             "约定原告所在地法院，按原告住址推定，待核实",
         )
     if _DEFENDANT_SEAT_RE.search(dispute):
-        addr = _str_value(fields, "defendant_address")
-        return (
-            "defendant",
-            derive_court_district(addr),
-            "约定被告所在地法院，按被告住址推定，待核实",
-        )
+        return ("defendant", *_defendant_seat_court(fields, "约定被告所在地法院"))
     if _SIGN_PLACE_RE.search(dispute) and not _SITE_RE.search(dispute):
         return "sign_place", None, "约定合同签订地法院，请律师确定具体法院"
     if _SITE_RE.search(dispute) or not dispute:
         return _site_jurisdiction(fields, delivery=bool(_DELIVERY_RE.search(dispute)))
+    return ("general", *_defendant_seat_court(fields, "未约定具体地点"))
+
+
+def _defendant_seat_court(fields: dict, basis: str) -> tuple[str | None, str]:
+    """
+    被告住所地法院：先按被告住址（工商登记）推定；还没查工商时，按审批表买方地址 / 合同甲方地址
+    （`defendant_address_ref`，不写进起诉状）推断并标待核实（新案卷核对）。
+    """
     addr = _str_value(fields, "defendant_address")
-    return (
-        "general",
-        derive_court_district(addr),
-        "未约定具体地点，按被告住所地推定，待核实",
-    )
+    district = derive_court_district(addr)
+    if district:
+        return district, f"{basis}，按被告住址推定，待核实"
+    ref = _str_value(fields, "defendant_address_ref")
+    district = derive_court_district(ref)
+    if district:
+        return district, f"{basis}，被告住址（工商登记）未填，系统按「{ref}」推断，待核实"
+    return None, f"{basis}，按被告住址推定，请律师确定管辖法院"
+
+
+def _seat_ref_note(fields: dict) -> str:
+    """法院按被告参考地址推断时，管辖句里直接写明依据；律师改过法院或已填被告住址则不加。"""
+    if _lawyer_edited(fields.get("court_district")):
+        return ""
+    if derive_court_district(_str_value(fields, "defendant_address")):
+        return ""
+    ref = _str_value(fields, "defendant_address_ref")
+    if not derive_court_district(ref):
+        return ""
+    return f"【系统按被告地址「{ref}」推断，待核实】"
 
 
 def _site_place(fields: dict, delivery: bool) -> tuple[str | None, str]:
@@ -1106,7 +1157,12 @@ def jurisdiction_text_field(fields: dict) -> dict:
             f"{_inferred_court_note(fields, place)}，故原告向{court}人民法院提起诉讼。"
         )
     elif mode == "general":
-        text = f"{_GENERAL_JURISDICTION_BASIS}，故原告向{court}人民法院提起诉讼。"
+        text = (
+            f"{_GENERAL_JURISDICTION_BASIS}{_seat_ref_note(fields)}，"
+            f"故原告向{court}人民法院提起诉讼。"
+        )
+    elif mode == "defendant":
+        text = f"{_seat_ref_note(fields)}故原告向{court}人民法院提起诉讼。"
     else:
         text = f"故原告向{court}人民法院提起诉讼。"
     return {
@@ -1209,6 +1265,7 @@ _DERIVERS: list[tuple[str, Callable[[dict], dict | None], bool]] = [
     ("interest_term", interest_term_field, True),
     ("breach_clause_sentence", breach_clause_sentence_field, False),
     ("interest_rate_basis", interest_basis_field, False),
+    ("penalty_cap", penalty_cap_field, True),
     ("penalty_daily_text", penalty_daily_text_field, True),
     ("penalty_start_date", penalty_start_date_field, True),
     ("penalty_until_date", penalty_until_date_field, True),

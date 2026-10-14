@@ -452,3 +452,63 @@ def test_retention_node_skips_guarantee_only():
     state = {"extracted_fields": _f(retention_ratio="5%", retention_clause_text=_GUARANTEE_CLAUSE)}
     # 不进 interrupt（在图外调用 interrupt 会抛错）：直接返回、不改字段
     assert asyncio.run(retention_node(state)) == {}
+
+
+# 约定被告所在地法院、工商登记住址还没查：按审批表买方地址推断法院并在管辖句写明（新案卷核对）
+def test_defendant_seat_court_from_reference_address_real_shape():
+    fields = apply_derived_fields(
+        _f(
+            dispute_clause_text="协商不成，任何一方可依法向甲方所在地的人民法院起诉",
+            defendant_address_ref="湖南省邵阳市邵东市某某街道某路1号",
+        )
+    )
+    assert fields["court_district"]["value"] == "邵东市"
+    assert "待核实" in fields["court_district"]["src"]
+    text = fields["jurisdiction_text"]["value"]
+    assert "【系统按被告地址「湖南省邵阳市邵东市某某街道某路1号」推断，待核实】" in text
+    assert text.endswith("故原告向邵东市人民法院提起诉讼。")
+
+
+def test_defendant_seat_court_prefers_registered_address():
+    fields = apply_derived_fields(
+        _f(
+            dispute_clause_text="向甲方所在地的人民法院起诉",
+            defendant_address="江苏省南京市鼓楼区某路1号",
+            defendant_address_ref="湖南省邵阳市邵东市某某街道某路1号",
+        )
+    )
+    assert fields["court_district"]["value"] == "南京市鼓楼区"
+    assert "推断" not in fields["jurisdiction_text"]["value"]
+
+
+@pytest.mark.parametrize(
+    ("clause", "rate", "cap"),
+    [
+        (
+            "甲方未按规定的时间和金额支付安装费的，按未付款金额每天万分之二的比例向乙方支付"
+            "逾期付款违约金。甲方逾期付款违约金最高不超过安装费总额的 10%。",
+            "每日万分之二的标准",
+            "，最高不超过安装费总额的10%",
+        ),
+        ("甲方逾期付款的，按每日万分之五支付违约金", "每日万分之五的标准", ""),
+    ],
+)
+def test_penalty_cap(clause, rate, cap):
+    fields = apply_derived_fields(
+        _f(breach_clause_text=clause, breach_interest_rate_text=rate)
+    )
+    assert fields["penalty_cap"]["value"] == cap
+
+
+def test_penalty_cap_rendered_in_claim():
+    from app.services.complaint_renderer import render_complaint
+
+    clause = "甲方逾期付款违约金按每天万分之二计，最高不超过安装费总额的10%"
+    text = render_complaint(
+        _f(breach_clause_text=clause, breach_interest_rate_text="每日万分之二的标准", unpaid_amount="1000")
+    )
+    # 上限照合同写在括号末尾（来源待核实，前面带核实标记）
+    assert "计至实际付清之日止⚠️ 待核实：，最高不超过安装费总额的10%）" in text
+    # 无上限时括号照旧闭合，不留占位符或【待补充】
+    plain = render_complaint(_f(unpaid_amount="1000"))
+    assert "计至实际付清之日止）" in plain and "penalty_cap" not in plain

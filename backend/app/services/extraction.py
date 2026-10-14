@@ -101,6 +101,11 @@ _REGISTRY_ONLY_NOTE = "按律师规则：被告住址、法定代表人用工商
 _SUMMARY_MARK = "AI 归纳，待核实"
 
 
+def _has_value(fields: dict, key: str) -> bool:
+    node = fields.get(key)
+    return isinstance(node, dict) and node.get("value") not in (None, "")
+
+
 def apply_rule_guards(fields: dict) -> None:
     """
     抽取后按律师规则把关（确定性代码，不依赖模型是否照做）：
@@ -114,7 +119,16 @@ def apply_rule_guards(fields: dict) -> None:
             and node.get("value") not in (None, "")
             and "审批表" in str(node.get("src") or "")
         ):
+            # 审批表地址不写进起诉状，但留作推断被告所在地法院的参考（新案卷核对）
+            if key == "defendant_address" and not _has_value(fields, "defendant_address_ref"):
+                fields["defendant_address_ref"] = dict(node)
             fields[key] = {"value": None, "src": _REGISTRY_ONLY_NOTE}
+    # 验收日期取不到报告批准日期、退回审批表「政府验收时间」时：不是同一个日期口径，标待核实
+    node = fields.get("acceptance_latest_date")
+    if isinstance(node, dict) and node.get("value"):
+        src = str(node.get("src") or "")
+        if "政府验收时间" in src and "待核实" not in src:
+            node["src"] = f"{src}（审批表政府验收时间，非报告批准日期，待核实）"
     node = fields.get("payment_clause_summary")
     if isinstance(node, dict) and node.get("value"):
         src = str(node.get("src") or "")

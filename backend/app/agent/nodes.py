@@ -12,8 +12,13 @@ import json
 from langgraph.types import interrupt
 
 from app.agent.state import GraphState
-from app.config import AGENT_MAX_OCR_PAGES, OCR_MAX_CONCURRENCY
+from app.config import (
+    AGENT_MAX_OCR_PAGES,
+    AGENT_MAX_REPORT_OCR_PAGES,
+    OCR_MAX_CONCURRENCY,
+)
 from app.services import file_store, llm_progress, run_log
+from app.services.acceptance_report import first_install_address, latest_approved_date
 from app.services.complaint_renderer import fill_status
 from app.services.doc_search import locate_clause_bodies
 from app.services.equipment_list import count_vge_units
@@ -38,6 +43,7 @@ from app.services.prompt_loader import load_prompt
 from app.services.validators import (
     ValidationCheck,
     check_to_dict,
+    parse_date,
     parse_qty,
     run_all_checks,
 )
@@ -62,6 +68,7 @@ _ALL_CLAUSE_KEYS = [
     "retention_ratio",
     "retention_clause_text",
     "arbitration_institution",
+    "defendant_address_ref",  # 合同盖章页甲方地址：被告所在地管辖时推断法院用（新案卷核对）
 ]
 # 以合同为准的字段：律师取合同盖章页/封面/协议书（签约日期、合同名称、合同台数、安装地址）。
 # OCR 合同后若取得这些值，覆盖此前从审批表/验收报告推测的值。
@@ -396,6 +403,95 @@ async def ocr_augment_node(state: GraphState) -> dict:
     # 有新 OCR 文本：重新逐页锚定，令条款字段拿到真实页码 + channel=ocr
     enrich_provenance(fields, files)
     return {"extracted_fields": fields, "files": files}
+
+
+def _acceptance_from_approval(fields: dict) -> bool:
+    """验收日期缺失，或只是从审批表「政府验收时间」兜底来的（不是报告批准日期）。"""
+    node = fields.get("acceptance_latest_date")
+    src = str(node.get("src") or "") if isinstance(node, dict) else ""
+    return _is_missing(fields, "acceptance_latest_date") or "政府验收时间" in src
+
+
+async def report_ocr_node(state: GraphState) -> dict:
+    """
+    扫描验收报告按需 OCR（新案卷核对：报告是手机拍照，没有文本层）：验收日期还缺或只是审批表
+    兜底、或验收口径台数还没数出来时，逐页 OCR 扫描报告（上限 AGENT_MAX_REPORT_OCR_PAGES），
+    再用确定性代码取批准日期（多份取最晚）、安装地点（取第一份），并按设备代码 / 报告编号数台数。
+    """
+    fields = state.get("extracted_fields", {})
+    need_date = _acceptance_from_approval(fields)
+    need_qty = _is_missing(fields, "elevator_qty_by_acceptance")
+    if not (need_date or need_qty):
+        return {}
+    files = copy.deepcopy(state.get("files", []))
+    reports = [
+        f
+        for f in files
+        if f.get("is_scanned")
+        and f.get("identified_type") == "验收报告"
+        and f.get("file_id")
+    ]
+    if not reports:
+        return {}
+    fields = copy.deepcopy(fields)
+    budget = AGENT_MAX_REPORT_OCR_PAGES
+    did_ocr = False
+    all_pages: list[tuple[str, list[dict]]] = []
+    for f in reports:
+        pdf = file_store.get(f.get("file_id"))
+        if pdf is None or budget <= 0:
+            continue
+        total = min(f.get("page_count") or pdf_page_count(pdf), budget)
+        pages: list[dict] = []
+        for start in range(1, total + 1, OCR_MAX_CONCURRENCY):
+            batch = list(range(start, min(start + OCR_MAX_CONCURRENCY, total + 1)))
+            got = await _ocr_batch(pdf, batch)
+            budget -= len(batch)
+            if not got:
+                break  # 整批失败 → OCR 不可用，优雅降级
+            pages.extend(got)
+        if not pages:
+            continue
+        did_ocr = True
+        f["pages"] = pages
+        f["text"] = "\n\n".join(p["text"] for p in pages if p["text"])
+        all_pages.append((f.get("filename", "验收报告"), pages))
+    if not did_ocr:
+        return {}
+
+    if need_date:
+        best = None
+        for filename, pages in all_pages:
+            found = latest_approved_date(pages)
+            if found and (best is None or _date_key(found[0]) > _date_key(best[1][0])):
+                best = (filename, found)
+        if best:
+            filename, (value, page) = best
+            fields["acceptance_latest_date"] = {
+                "value": value,
+                "src": f"《{filename}》第{page}页批准日期（多份取最晚；OCR识别，请核实）",
+                "page": page,
+                "channel": "ocr",
+            }
+    if _is_missing(fields, "install_address"):
+        for filename, pages in all_pages:
+            found = first_install_address(pages)
+            if found:
+                value, page = found
+                fields["install_address"] = {
+                    "value": value,
+                    "src": f"《{filename}》第{page}页安装地点（OCR识别，请核实）",
+                    "page": page,
+                    "channel": "ocr",
+                }
+                break
+    # 验收口径台数：按 OCR 文本里的设备代码 / 报告编号计数（数不出来保留原值）
+    apply_acceptance_count(fields, files)
+    return {"extracted_fields": fields, "files": files}
+
+
+def _date_key(value: str) -> tuple[int, int, int]:
+    return parse_date(value) or (0, 0, 0)
 
 
 def _str_value(fields: dict, key: str) -> str | None:
