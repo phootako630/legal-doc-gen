@@ -18,7 +18,11 @@ from app.config import (
     OCR_MAX_CONCURRENCY,
 )
 from app.services import file_store, llm_progress, run_log
-from app.services.acceptance_report import first_install_address, latest_approved_date
+from app.services.acceptance_report import (
+    count_report_first_pages,
+    first_install_address,
+    latest_approved_date,
+)
 from app.services.complaint_renderer import fill_status
 from app.services.doc_search import locate_clause_bodies
 from app.services.equipment_list import count_vge_units
@@ -485,8 +489,18 @@ async def report_ocr_node(state: GraphState) -> dict:
                     "channel": "ocr",
                 }
                 break
-    # 验收口径台数：按 OCR 文本里的设备代码 / 报告编号计数（数不出来保留原值）
-    apply_acceptance_count(fields, files)
+    # 验收口径台数：扫描报告按首页（「设备品种」栏）计数——手机拍照常把报告编号裁掉，
+    # 按编号去重会少数；数不出首页时再按设备代码 / 报告编号计数（数不出来保留原值）
+    first_pages = sum(count_report_first_pages(pages) for _, pages in all_pages)
+    if first_pages:
+        names = "、".join(f"《{name}》" for name, _ in all_pages)
+        fields["elevator_qty_by_acceptance"] = {
+            "value": first_pages,
+            "src": f"{names}按报告首页计数：共 {first_pages} 份（OCR识别，请核实）",
+            "channel": "ocr",
+        }
+    else:
+        apply_acceptance_count(fields, files)
     return {"extracted_fields": fields, "files": files}
 
 

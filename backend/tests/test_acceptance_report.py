@@ -78,7 +78,7 @@ def test_report_ocr_fills_date_address_and_qty(monkeypatch):
     assert f["acceptance_latest_date"]["value"] == "2022年12月26日"
     assert "第2页批准日期" in f["acceptance_latest_date"]["src"]
     assert f["install_address"]["value"] == "某某市某某路88号1栋"
-    assert f["elevator_qty_by_acceptance"]["value"] == 3  # 按报告编号计数
+    assert f["elevator_qty_by_acceptance"]["value"] == 3  # 按报告首页计数
     assert out["files"][0]["text"]
 
 
@@ -89,3 +89,18 @@ def test_report_ocr_skipped_when_report_already_read(monkeypatch):
     }
     out, ocr = _run(monkeypatch, fields)
     assert out == {} and ocr.await_count == 0
+
+
+def test_count_first_pages_survives_cropped_report_number_and_html():
+    from app.services.acceptance_report import count_report_first_pages
+
+    pages = [
+        # 报告编号被裁掉、OCR 输出成 HTML 表格：仍按首页「设备品种」栏计数
+        {"page": 1, "text": "<table><tr><td>设备品种</td><td>曳引驱动乘客电梯</td></tr>"
+         "<tr><td>安装地点</td><td>某某市某路1号</td></tr></table>"},
+        {"page": 2, "text": "| **设备品种** | 曳引驱动乘客电梯 |\n| **产品编号** | 20G1001 |"},
+        # 报告后续页没有「设备品种」，不算一份
+        {"page": 3, "text": "检验项目及其内容 | 检验结果 | 检验结论"},
+    ]
+    assert count_report_first_pages(pages) == 2
+    assert first_install_address(pages) == ("某某市某路1号", 1)
