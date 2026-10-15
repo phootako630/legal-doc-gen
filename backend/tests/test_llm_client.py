@@ -3,6 +3,7 @@
 # 用 AsyncMock 替换 _get_client()，不触网、不消耗 API 配额。
 # 用 asyncio.run 驱动协程，避免为单测引入 pytest-asyncio 依赖。
 import asyncio
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -289,3 +290,24 @@ def test_total_deadline_without_fallback_is_timeout_error(monkeypatch):
     _patch_client(monkeypatch, AsyncMock(side_effect=hang))
     with pytest.raises(RuntimeError, match="超时"):
         _run_chat()
+
+
+def test_total_deadline_shared_across_retries(monkeypatch):
+    # 首次快到时限才返回坏 JSON、重试又挂起：重试只能用剩余时间，不能再等一整个时限
+    monkeypatch.setattr(llm_client, "LLM_TOTAL_TIMEOUT", 0.2)
+    calls = 0
+
+    async def slow_then_hang(**kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            await asyncio.sleep(0.15)
+            return _resp("不是 JSON")
+        await asyncio.sleep(10)
+
+    _patch_client(monkeypatch, AsyncMock(side_effect=slow_then_hang))
+    _patch_fallback(monkeypatch, {"key-a": AsyncMock(return_value=_resp('{"a": 1}'))})
+    started = time.monotonic()
+    assert _run_chat(json_mode=True) == {"a": 1}
+    assert calls == 2
+    assert time.monotonic() - started < 0.3  # 改前约 0.35 秒（0.15 + 0.2）

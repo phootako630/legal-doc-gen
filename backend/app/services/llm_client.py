@@ -180,11 +180,16 @@ async def _complete(
 
     last_exc: Exception | None = None
     last_content: str = ""  # 保留最近一次原始返回，用于 JSON 解析失败时的调试信息
+    # 总时限覆盖对同一服务商的全部尝试：空返回 / 坏 JSON 后的重试只用剩余时间，不重新计 180 秒
+    deadline = time.monotonic() + LLM_TOTAL_TIMEOUT
 
     for attempt in range(2):  # 最多尝试 2 次
         try:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("总时限已用完")
             response = await asyncio.wait_for(
-                client.chat.completions.create(**kwargs), timeout=LLM_TOTAL_TIMEOUT
+                client.chat.completions.create(**kwargs), timeout=remaining
             )
             choice = response.choices[0]
             content: str = choice.message.content or ""
