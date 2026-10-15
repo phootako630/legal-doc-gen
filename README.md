@@ -1,113 +1,122 @@
-# 起诉状助手 · 安装合同纠纷起诉状自动化系统（v2）
+# Complaint Assistant · Elevator Installation-Contract Dispute Automation (v2)
 
-**中文** | [English](./README.en.md)
+**English** | [中文](./README.zh-CN.md)
 
-面向律师团队的 Web 应用：律师上传案件材料（审批表、安装 / 买卖合同、电梯监督检验报告等），agent 自动完成材料清点、字段抽取、交叉校验，并按律师确认过的填写规则推出原告、台数、违约金、管辖法院等内容；律师审核确认后，一键生成带黄色复核高亮的民事起诉状（约定仲裁时为仲裁申请书）Word 文档。
+A web app for legal teams. Lawyers upload case materials: approval forms, installation or sales contracts, and elevator supervision inspection reports. An agent then does several things:
 
-> **v1 → v2**：v1 是固定流水线（`upload → 清点 → 抽取 → 校验 → 生成`，控制流写死）。v2 将核心处理改为 **agentic**：由带工具的 LangGraph agent 驱动控制流，按需 OCR 扫描页，用确定性代码自校验，在关键分歧点暂停问律师（human-in-the-loop）。
+- checks the materials in, extracts fields, and cross-validates them;
+- applies the lawyer-confirmed drafting rules to derive the plaintiff, elevator counts, penalties and the competent court.
+
+After the lawyer reviews and confirms, the app generates a civil complaint as a Word document in one click, with the filled-in text highlighted in yellow for a final check. If the contract specifies arbitration, it generates an arbitration application instead.
+
+> **v1 → v2**: v1 was a fixed pipeline (`upload → checklist → extract → validate → generate`) with hard-wired control flow. v2 makes the core **agentic**. A tool-equipped LangGraph agent drives the control flow, OCRs only the scanned pages it needs, self-checks with deterministic code, and pauses at key disagreements to ask the lawyer (human-in-the-loop).
 >
-> **当前状态**：已部署上线供律师试用（UAT），用于验证 AI 抽取准确率和律师使用体验。站点有中文登录页，账号由管理员创建，走 HTTPS。案件状态存在本机 SQLite 里，服务重启后可以接着审核，超过 7 天自动清除。
+> **Current status**: deployed for lawyer trials (UAT), to validate AI extraction accuracy and the lawyer experience. The site has a Chinese login page, admin-created accounts and HTTPS. Case state is stored in a local SQLite database, so review can resume after a restart, and it is purged automatically after 7 days.
 
 ---
 
-## 核心原则
+## Core principles
 
-- **AI 不做最终判断**：agent 只抽取、校验、提议，由律师确认和修改。材料缺失、字段冲突、台数对不上、质保金比例等关键分歧点，agent 暂停问律师。
-- **校验用代码，不用 LLM**：金额勾稽、台数三源比对、格式校验，以及律师规则里的推算（违约金金额、起算日、法院名称等），一律由确定性 Python 代码完成。LLM 只负责把数字和条款原文抽出来。
-- **出处可追溯**：每个字段值都标注来源文件，以及逐页锚定得出的**已验证真实页码**，不用 LLM 自己报的页码。
-- **宁缺勿造**：无法确定的字段标为缺失，绝不编造。回原文比对没命中的值标「待核实」，审核页和起诉状里都会提醒律师。
-- **模板渲染，不自由生成**：起诉状由结构化字段加律师模板确定性填槽，LLM 不写全文。
+- **AI never makes the final call.** The agent only extracts, validates and proposes; the lawyer confirms and edits. It pauses to ask at key disagreements:
+  - missing materials;
+  - conflicting fields;
+  - mismatched elevator counts;
+  - the retention-money ratio.
+- **Validation is code, not LLM.** Deterministic Python handles amount reconciliation, the three-source quantity comparison, format checks, and the calculations in the lawyer rules (penalty amount, start date, court name, etc.). The LLM only pulls out the numbers and the clause text.
+- **Traceable provenance.** Every field value is tagged with its source file and a **verified page number** found by per-page anchoring, never one the LLM reports itself.
+- **A gap beats a fabrication.** Uncertain fields are marked missing and never invented. A value that does not anchor back to the source is flagged "to verify", both on the review page and in the complaint.
+- **Template rendering, not free generation.** The complaint is filled deterministically from structured fields into the lawyers' template. The LLM never writes the full text.
 
 ---
 
-## 主要功能
+## Features
 
-| 功能 | 说明 |
+| Feature | Details |
 |---|---|
-| 材料解析 | 可解析 PDF、Word、扫描件 PDF。扫描件不整份 OCR，agent 只读需要的页（付款 / 违约 / 争议条款、签章页、设备清单、验收报告） |
-| 字段抽取与锚定 | 审批表结构字段直取，合同条款原文保留。抽取值回原文逐页命中，没命中的标待核实 |
-| 交叉校验 | 金额勾稽（总额 = 已付 + 未付）、签约 / 合同 / 验收三源台数、信用代码校验位、日期 |
-| 律师填写规则 | 两份《起诉状规则确认单》落成代码（`services/derived_fields.py`），覆盖以下内容：<br>• 原告拼接（总公司 + 分公司 / 独立公司）<br>• 买卖 / 安装措辞<br>• 台数口径（含 VGE 家用电梯）<br>• 违约金与逾期利息（按费率、一次性金额、按日固定金额、上限）<br>• 已付 / 欠款比例<br>• 管辖法院与管辖句<br>• 仲裁申请书切换 |
-| 断点问律师 | 材料缺失、字段冲突、台数不一致、合同有质保金（选「支付至 X% 合同款」）时暂停，律师选定后继续 |
-| 审核页 | 中文字段表，显示状态、来源、页码，按可信度排序，所有字段可编辑。可对单个字段提交问题反馈 |
-| 起诉状导出 | 预览页标出「N 处待补充」。Word 导出保留黄色高亮，方便律师最后复核 |
-| 原告信息表 | 全所共用的原告信用代码 / 负责人 / 住址底表。所有人可查看、下载 Excel；凭管理员口令上传新版或回退历史版本 |
-| 登录 | 管理员在服务器上建账号（无注册入口），7 天免登录，律师可自行改密码，连续输错密码会锁定 |
-| 运维 | 运行日志只记字段名、耗时、token 和账号名，不记案件内容。可按账号统计使用量、查看律师反馈。GitHub Actions 审批后自动部署，部署失败自动回滚 |
+| Material parsing | Text PDFs, Word files and scanned PDFs. Scans are never OCR'd whole: the agent reads only the pages it needs (payment / breach / dispute clauses, signature page, equipment list, acceptance reports). |
+| Extraction & anchoring | Structured fields are read straight from the approval form, and contract clauses are kept verbatim. Each value is matched back to the source page by page; values with no match are flagged "to verify". |
+| Cross-validation | Amount reconciliation (total = paid + unpaid), elevator counts across signing / contract / acceptance, credit-code check digit, dates. |
+| Lawyer drafting rules | Two rounds of lawyer-confirmed rule sheets, implemented as code in `services/derived_fields.py`. They cover:<br>• plaintiff naming (HQ + branch, or an independent subsidiary)<br>• sales vs. installation wording<br>• elevator-count basis (including VGE home elevators)<br>• penalty vs. late-payment interest (rate-based, lump-sum, fixed daily amount, caps)<br>• paid / unpaid ratios<br>• competent court and jurisdiction sentence<br>• switching to an arbitration application |
+| Lawyer breakpoints | Pauses on missing materials, field conflicts, count mismatches, and contracts with retention money (the lawyer picks "paid up to X% of the contract price"). It resumes once the lawyer decides. |
+| Review page | A Chinese field table with status, source and page, sorted by confidence. Every field is editable, and each field has a button for submitting feedback on it. |
+| Complaint export | The preview shows how many blanks still need filling. The Word export keeps the yellow highlights for a final check. |
+| Plaintiff info table | A firm-wide table of plaintiff credit codes, legal representatives and addresses. Anyone can view or download it as Excel; uploading a new version or restoring an old one needs the admin token. |
+| Login | Accounts are created by an admin on the server (there is no sign-up). Sessions last 7 days, lawyers can change their own password, and repeated wrong passwords lock the login. |
+| Operations | The run log records field keys, timings, tokens and account names, never case content. Usage can be reported per account, and lawyer feedback can be listed. GitHub Actions deploys after approval and rolls back automatically on failure. |
 
 ---
 
-## 技术栈
+## Tech stack
 
 | | |
 |---|---|
-| 前端 | React 19 + Vite + TypeScript（strict）+ Tailwind CSS + shadcn/ui + react-hook-form/zod + docx-js |
-| 后端 | FastAPI（Python 3.10+）+ PyMuPDF（PDF）+ python-docx（Word） |
-| Agent 编排 | LangGraph（状态图 + `interrupt` 断点 + SQLite checkpoint；只用图和检查点，不引入 LangChain 本体） |
-| OCR | Qwen 多模态（阿里云 DashScope 国际站，默认 `qwen3.8-flash`；可配付费备用 key） |
-| LLM | DeepSeek API（`deepseek-flash`，通过 OpenAI SDK 调用，启用结构化输出） |
-| 部署 | Docker Compose（backend + nginx）、Let's Encrypt HTTPS、GitHub Actions 审批后自动部署 |
+| Frontend | React 19 + Vite + TypeScript (strict) + Tailwind CSS + shadcn/ui + react-hook-form/zod + docx-js |
+| Backend | FastAPI (Python 3.10+) + PyMuPDF (PDF) + python-docx (Word) |
+| Agent orchestration | LangGraph (state graph + `interrupt` breakpoints + SQLite checkpoint; graph and checkpoints only, no full LangChain) |
+| OCR | Qwen multimodal via Alibaba Cloud DashScope (international), default `qwen3.8-flash`, with an optional paid backup key |
+| LLM | DeepSeek API (`deepseek-flash`, via the OpenAI SDK with structured output) |
+| Deployment | Docker Compose (backend + nginx), Let's Encrypt HTTPS, GitHub Actions auto-deploy after approval |
 
 ---
 
-## 材料形态与来源可靠性分级
+## Material types and source reliability tiers
 
-一个典型案件通常含三类材料，形态和可靠性差异很大，agent 区别对待：
+A typical case has three material types that differ greatly in form and reliability, so the agent treats them differently:
 
-| 材料 | 形态 | 可靠性 | agent 策略 |
+| Material | Form | Reliability | Agent strategy |
 |---|---|---|---|
-| **审批表** | 可解析文本、键值表单 | ⭐⭐⭐ 最高 | **主数据源**：合同类型、合同分公司、被告名称、合同号、台数、金额、联系人等直接取。被告住址和法定代表人不取审批表，改用工商登记信息 |
-| **验收 / 监检报告** | 可解析文本 + 盖章图；也常是手机拍照的扫描件 | ⭐⭐ 中高 | **交叉校验源**：信用代码、安装地点、批准日期（取最晚一批）、台数（按报告首页计数）。扫描报告按需 OCR |
-| **安装 / 买卖合同** | 常为纯扫描件（需 OCR） | ⭐ 有噪声 | **条款文本源**：付款、违约、质保金、争议解决条款，以及签章页、设备清单。只读相关页，找到即停 |
+| **Approval form** | Parseable text, key–value form | ⭐⭐⭐ highest | **Primary source**: contract type, contracting branch, defendant name, contract no., counts, amounts and contacts are read directly. The defendant's address and legal representative come from the business registry, not from this form. |
+| **Acceptance / inspection reports** | Parseable text + stamp image; often phone-photo scans | ⭐⭐ medium-high | **Cross-check source**: credit code, installation site, approval date (latest batch), elevator count (one per report front page). Scanned reports are OCR'd on demand. |
+| **Installation / sales contract** | Often a pure scan (needs OCR) | ⭐ noisy | **Clause source**: payment, breach, retention-money and dispute clauses, plus the signature page and equipment list. Only relevant pages are read, and reading stops once the clause is found. |
 
 ---
 
-## 系统架构
+## System architecture
 
 ```mermaid
 flowchart TB
-    subgraph Browser["浏览器 · React SPA（登录页 + 单页 Stepper）"]
-        LG["登录 / 改密码"]
-        S1["Step 1 上传"] --> S2["Step 2 AI 处理中"] --> S3["Step 3 审核确认"] --> S4["Step 4 预览下载"]
-        S4 --> DOCX["html-doc-generator（docx-js）<br/>浏览器端生成 Word，保留黄色高亮"]
-        BR["原告信息表页面"]
+    subgraph Browser["Browser · React SPA (login page + single-page stepper)"]
+        LG["Login / change password"]
+        S1["Step 1 Upload"] --> S2["Step 2 AI processing"] --> S3["Step 3 Review"] --> S4["Step 4 Preview & download"]
+        S4 --> DOCX["html-doc-generator (docx-js)<br/>Word generated in the browser, highlights kept"]
+        BR["Plaintiff info table page"]
     end
 
-    subgraph Server["服务器（Docker Compose）"]
-        NG["nginx：静态页 + HTTPS + /api 反代"]
+    subgraph Server["Server (Docker Compose)"]
+        NG["nginx: static files + HTTPS + /api reverse proxy"]
 
-        subgraph Backend["FastAPI 后端（不对外，登录校验中间件）"]
+        subgraph Backend["FastAPI backend (not exposed, login middleware)"]
             RAU["/api/auth/*"]
             RU["POST /api/upload"]
-            RA["POST /api/analyze（幂等，可带断点）"]
-            RR["POST /api/resume（断点恢复）"]
-            RG["POST /api/generate（模板渲染）"]
-            RB["/api/branches/*（原告信息表）"]
+            RA["POST /api/analyze (idempotent, may pause)"]
+            RR["POST /api/resume (resume breakpoint)"]
+            RG["POST /api/generate (template render)"]
+            RB["/api/branches/* (plaintiff info table)"]
             RF["POST /api/feedback"]
 
-            subgraph Agent["LangGraph 状态图"]
-                N1["intake 清点"] --> N2["extract 抽取"] --> N3["ocr_augment 扫描合同按需 OCR"]
-                N3 --> N4["report_ocr 扫描报告 OCR"] --> N5["contract_scan 设备清单 / VGE"]
-                N5 --> N6["qty_check 台数断点"] --> N7["retention 质保金断点"] --> N8["validate 校验（冲突断点）"]
+            subgraph Agent["LangGraph state graph"]
+                N1["intake"] --> N2["extract"] --> N3["ocr_augment: on-demand contract OCR"]
+                N3 --> N4["report_ocr: scanned reports"] --> N5["contract_scan: equipment list / VGE"]
+                N5 --> N6["qty_check: count breakpoint"] --> N7["retention: retention breakpoint"] --> N8["validate (conflict breakpoint)"]
             end
 
-            subgraph Tools["services/ 纯函数工具（框架无关）"]
+            subgraph Tools["services/ pure-function tools (framework-agnostic)"]
                 FP["file_parser / file_store"]
                 OCR["ocr_engine"]
                 ANC["anchoring / provenance / doc_search"]
                 VAL["validators / confidence"]
-                DER["derived_fields 律师规则"]
-                REND["complaint_renderer 模板填槽"]
+                DER["derived_fields: lawyer rules"]
+                REND["complaint_renderer: template fill"]
                 BT["branch_table / branch_registry"]
             end
 
-            DB[("data/ 卷：checkpoints.sqlite · uploads/<br/>auth.sqlite · branch_info.json · run_log.jsonl")]
+            DB[("data/ volume: checkpoints.sqlite · uploads/<br/>auth.sqlite · branch_info.json · run_log.jsonl")]
         end
     end
 
-    subgraph External["外部服务"]
+    subgraph External["External services"]
         DS["DeepSeek API"]
-        QW["阿里云 DashScope · Qwen OCR"]
+        QW["Alibaba DashScope · Qwen OCR"]
     end
 
     Browser -->|HTTPS| NG --> Backend
@@ -124,152 +133,152 @@ flowchart TB
 
 ---
 
-## 数据流（agent 会话 + human-in-the-loop）
+## Data flow (agent session + human-in-the-loop)
 
 ```mermaid
 sequenceDiagram
-    actor 律师
-    participant FE as 前端 SPA
+    actor Lawyer
+    participant FE as Frontend SPA
     participant BE as FastAPI + LangGraph
-    participant CODE as 确定性代码（校验 / 律师规则）
+    participant CODE as Deterministic code (checks / lawyer rules)
     participant LLM as DeepSeek / Qwen OCR
 
-    律师->>FE: 登录，拖拽上传 PDF / Word
+    Lawyer->>FE: Log in, drop PDF / Word files
     FE->>BE: POST /api/upload
-    Note over BE: PyMuPDF / python-docx 逐页提取；<br/>扫描件只标记 is_scanned，原始文件落盘备 OCR
-    BE-->>FE: files[]（text / pages / 类型 / 是否扫描件）
+    Note over BE: PyMuPDF / python-docx per-page extraction;<br/>scans only flagged is_scanned, raw file stored for OCR
+    BE-->>FE: files[] (text / pages / type / scanned?)
 
-    FE->>BE: POST /api/analyze（Idempotency-Key）
-    BE->>LLM: intake 清点（材料齐全？）
-    alt 材料不足
-        BE-->>FE: pending = missing（提示补料）
-    else 材料齐全
-        BE->>LLM: extract 抽取（结构化 JSON）
-        BE->>LLM: 缺条款 / 签章页 / 报告 → 只 OCR 需要的页
-        BE->>CODE: 逐页锚定 → 真实页码；律师规则推导派生字段
-        opt 台数不一致 / 合同有质保金 / 字段冲突
-            BE-->>FE: pending = confirm / conflict（interrupt 暂停）
-            律师->>FE: 选定台数 / 支付比例 / 取值
-            FE->>BE: POST /api/resume（decisions，可多轮）
+    FE->>BE: POST /api/analyze (Idempotency-Key)
+    BE->>LLM: intake (materials complete?)
+    alt Materials missing
+        BE-->>FE: pending = missing (ask for materials)
+    else Materials complete
+        BE->>LLM: extract (structured JSON)
+        BE->>LLM: missing clauses / signature page / reports → OCR only needed pages
+        BE->>CODE: per-page anchoring → real page numbers; lawyer rules derive fields
+        opt Count mismatch / retention money / field conflict
+            BE-->>FE: pending = confirm / conflict (interrupt)
+            Lawyer->>FE: choose count / payable ratio / value
+            FE->>BE: POST /api/resume (decisions, may repeat)
         end
-        BE->>CODE: validate 金额勾稽 / 台数三源 / 信用代码 / 日期
-        BE-->>FE: CaseState（字段 + 校验 + 就绪度，pending=null）
+        BE->>CODE: validate amounts / three-source counts / credit code / dates
+        BE-->>FE: CaseState (fields + checks + readiness, pending=null)
     end
 
-    律师->>FE: 审核、编辑、提交反馈，点击生成
-    FE->>BE: POST /api/generate（最终字段）
-    BE->>CODE: complaint_renderer 模板填槽（非 LLM）
-    BE-->>FE: complaint_text（填空处带高亮标记）
-    FE-->>律师: 预览 + 下载 Word
+    Lawyer->>FE: Review, edit, send feedback, click generate
+    FE->>BE: POST /api/generate (final fields)
+    BE->>CODE: complaint_renderer template fill (no LLM)
+    BE-->>FE: complaint_text (filled slots marked for highlight)
+    FE-->>Lawyer: Preview + Word download
 ```
 
 ---
 
-## 确定性校验与可信度分层
+## Deterministic validation and layered confidence
 
-- **校验（代码，非 LLM）**：`validators.py` 做以下检查，其结论是审核页「冲突」态的唯一权威来源。
-  - 金额勾稽（按分容差）
-  - 台数三源一致：有验收报告台数时以报告为准，只提醒不暂停
-  - 信用代码 18 位校验位
-  - 日期合法性
-- **可信度分层**：
-  - 硬信号定状态（正常 / 缺失 / 冲突 / 待核实）。
-  - 软信号给 `confidence`（0–100），只用于审核页排序和默认展开，计算方式为 `来源通道×40 + 锚定质量×30 + 自一致×20 + 模型自评×10`。
-- **起诉状就绪度**：按模板实际填空统计「有值且不冲突」的占比，与预览页「N 处待补充」口径一致。只有达到 100% 才显示绿色。
+- **Validation (code, not LLM)**: `validators.py` runs the checks below. Their results are the only authority for the "conflict" status on the review page.
+  - Amount reconciliation, with a one-cent tolerance.
+  - Three-source elevator count. When the acceptance reports give a count, that count wins, and a mismatch is flagged for the lawyer without pausing.
+  - 18-digit credit-code check digit.
+  - Date validity.
+- **Layered confidence**:
+  - Hard signals set the status: normal / missing / conflict / to verify.
+  - Soft signals give a `confidence` score from 0 to 100, used only to sort the review page and decide which fields start expanded. It is computed as `channel×40 + anchoring×30 + self-consistency×20 + model self-rating×10`.
+- **Complaint readiness**: the share of template blanks that have a value and no conflict. It uses the same count as the preview's "N blanks left", and turns green only at 100%.
 
 ---
 
-## 项目结构
+## Project structure
 
 ```
 legal-doc-gen/
-├── CLAUDE.md                        # AI 编码助手项目指令（详细规范与律师规则）
-├── README.md / README.en.md         # 本文件（中 / 英）
-├── prompts/                         # LLM Prompt 与起诉状模板
-│   ├── prompt-a-checklist.md        # 材料清点
-│   ├── prompt-a-extract.md          # 字段抽取（结构化）
-│   ├── prompt-a-clauses.md          # 扫描合同条款抽取
-│   ├── prompt-a-validate.md         # 仅生成高亮说明文本（不做一致性判断）
-│   └── complaint-template.md        # 起诉状模板（占位符）
+├── CLAUDE.md                        # Instructions for AI coding assistants (full spec + lawyer rules)
+├── README.md / README.zh-CN.md      # This file (English / Chinese)
+├── prompts/                         # LLM prompts and the complaint template
+│   ├── prompt-a-checklist.md        # Material check-in
+│   ├── prompt-a-extract.md          # Field extraction (structured)
+│   ├── prompt-a-clauses.md          # Clause extraction from scanned contracts
+│   ├── prompt-a-validate.md         # Highlight text only (no consistency judgments)
+│   └── complaint-template.md        # Complaint template (placeholders)
 │
-├── frontend/                        # React 前端
+├── frontend/                        # React frontend
 │   └── src/
 │       ├── components/{auth,upload,processing,review,preview,branches,layout,ui}/
 │       ├── hooks/{useAuth,useComplaintFlow,useAdminToken}.ts
 │       └── lib/{api,auth-api,branch-api,buildReviewFields,field-map,html-doc-generator,types}.ts
 │
-├── backend/                         # Python FastAPI 后端
+├── backend/                         # Python FastAPI backend
 │   ├── app/
 │   │   ├── main.py  config.py
 │   │   ├── routers/{auth,files,analyze,resume,generate,branches,feedback,extract}.py
-│   │   ├── agent/{graph,state,nodes,runner,checkpoint}.py    # LangGraph 状态图 + SQLite checkpoint
-│   │   └── services/                                         # 框架无关纯函数工具
+│   │   ├── agent/{graph,state,nodes,runner,checkpoint}.py    # LangGraph graph + SQLite checkpoint
+│   │   └── services/                                         # Framework-agnostic pure-function tools
 │   │       ├── file_parser  file_store  ocr_engine  llm_client  prompt_loader
 │   │       ├── extraction  anchoring  provenance  doc_search  validators  confidence
 │   │       ├── derived_fields  acceptance_report  equipment_list  complaint_renderer
-│   │       ├── branch_table  branch_registry  company_lookup（预留）
+│   │       ├── branch_table  branch_registry  company_lookup (placeholder)
 │   │       └── auth_store  login_guard  run_log  progress_table
-│   ├── scripts/{manage_users,list_feedback,usage_report}.py  # 账号管理 / 查看反馈 / 使用统计
-│   └── tests/                                                # pytest（虚构数据）
+│   ├── scripts/{manage_users,list_feedback,usage_report}.py  # Accounts / feedback / usage report
+│   └── tests/                                                # pytest (synthetic data)
 │
-├── deploy/                          # nginx 配置、cert.sh、deploy.sh、中文部署指南
+├── deploy/                          # nginx config, cert.sh, deploy.sh, deployment guide (Chinese)
 ├── docker-compose.yml
 └── .github/workflows/{ci,deploy}.yml
 ```
 
-`routers/extract.py` 中的 `POST /api/extract` 是 v1 遗留接口。前端仍用其中的 `GET /api/extract/progress` 显示分析进度。
+`POST /api/extract` in `routers/extract.py` is a v1 leftover. The frontend still uses `GET /api/extract/progress` from the same router for the progress display.
 
 ---
 
-## 本地开发
+## Local development
 
 ```bash
-# 1. 启动后端
+# 1. Start the backend
 cd backend
 pip install -r requirements.txt
-cp .env.example .env       # 填入 DEEPSEEK_API_KEY 和 DASHSCOPE_API_KEY
+cp .env.example .env       # fill in DEEPSEEK_API_KEY and DASHSCOPE_API_KEY
 uvicorn app.main:app --reload --port 8000
 
-# 2. 启动前端
+# 2. Start the frontend
 cd frontend
 pnpm install
-pnpm dev                   # http://localhost:5173，/api/* 代理转发到 :8000
+pnpm dev                   # http://localhost:5173, /api/* proxied to :8000
 ```
 
-本地开发默认不开登录（`AUTH_ENABLED=0`），案件数据存在 `backend/data/`。
+Login is off by default in local development (`AUTH_ENABLED=0`). Case data is stored under `backend/data/`.
 
-检查与测试：
+Checks and tests:
 
 ```bash
 cd backend && ruff check . && python -m pytest
 cd frontend && pnpm lint && pnpm build
 ```
 
-## 部署（UAT / 生产）
+## Deployment (UAT / production)
 
-- 部署方式：`docker compose up -d --build` 一键启动 nginx、HTTPS、登录和案件数据卷。
-- 自动部署：合入 master 且 CI 通过后，由管理员在 GitHub 上批准，再自动部署到服务器，失败自动回滚。
-- 完整步骤：账号管理、证书、备份、查看反馈与使用统计，见 [deploy/README.md](./deploy/README.md)。
+- **How**: `docker compose up -d --build` starts everything in one go: nginx, HTTPS, login and the case-data volume.
+- **Auto-deploy**: after a merge to master passes CI and an admin approves it on GitHub, the server is updated automatically. A failed deploy rolls back.
+- **Full steps**: accounts, certificates, backups, and how to read feedback and usage reports are in [deploy/README.md](./deploy/README.md), which is in Chinese.
 
-> 安全约定：API Key 只放服务器的 `backend/.env`，不进 git。真实案卷不提交到仓库，测试一律用虚构数据。
+> Security conventions: API keys live only in the server's `backend/.env`, never in git. Real case files are never committed; all tests use synthetic data.
 
 ---
 
-## 迁移进度（v1 流水线 → v2 agentic）
+## Migration progress (v1 pipeline → v2 agentic)
 
-| 步骤 | 内容 | 状态 |
+| Step | Content | Status |
 |---|---|---|
-| 1–2 | 工具层（validators / confidence / anchoring）+ 单测 | ✅ |
-| 3 | 交叉校验移出 LLM，改确定性代码 | ✅ |
-| 4 | 起诉状改模板填槽渲染（去掉 LLM 自由生成） | ✅ |
-| 5 | agent 编排（LangGraph + interrupt，前后端） | ✅ |
-| 6a | 字段出处可追溯（逐页锚定得真实页码） | ✅ |
-| 6b | 按需 OCR（扫描合同 / 扫描验收报告逐页读，命中即停） | ✅ |
-| 7 | 企业信息联网查询：接口已预留，查询 API 尚未接入，目前由律师在审核页补录工商信息 | 🚧 |
-| — | 上线：登录、SQLite 持久化与过期清除、Docker + HTTPS、自动部署 | ✅ |
+| 1–2 | Tool layer (validators / confidence / anchoring) + unit tests | ✅ |
+| 3 | Cross-validation moved out of the LLM into deterministic code | ✅ |
+| 4 | Complaint rendered by template fill (no LLM free generation) | ✅ |
+| 5 | Agent orchestration (LangGraph + interrupt, frontend and backend) | ✅ |
+| 6a | Traceable provenance (real page numbers via per-page anchoring) | ✅ |
+| 6b | On-demand OCR (scanned contracts and reports read page by page, stopping once found) | ✅ |
+| 7 | Online company lookup: interface in place, lookup API not yet connected. Lawyers currently enter registry details on the review page. | 🚧 |
+| — | Go-live: login, SQLite persistence with expiry, Docker + HTTPS, auto-deploy | ✅ |
 
 ---
 
-## 不包含（后续迭代预留）
+## Out of scope (future iterations)
 
-账号权限分级（目前所有账号权限相同，原告信息表更新另凭管理员口令）、批量案件处理、向量检索、LangChain 本体等，详见 [CLAUDE.md](./CLAUDE.md)。
+Permission levels (all accounts currently have the same rights; updating the plaintiff table separately needs the admin token), batch processing, vector search, full LangChain, etc. See [CLAUDE.md](./CLAUDE.md).
