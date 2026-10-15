@@ -16,7 +16,7 @@ from typing import Any, Callable
 
 from app import config
 from app.agent import nodes
-from app.services import ocr_engine
+from app.services import llm_client, ocr_engine
 
 MODES = ("replay", "live")
 
@@ -33,6 +33,7 @@ class CacheStats:
     llm_calls: int = 0  # 真实调用（未命中或 live 模式）
     ocr_hits: int = 0
     ocr_calls: int = 0
+    llm_fallback: int = 0  # DeepSeek 不可用、由备用模型回答的次数（这些结果不录进缓存）
     misses: list[str] = field(default_factory=list)  # 严格回放时未命中的请求类型
 
     def as_dict(self) -> dict[str, Any]:
@@ -41,6 +42,7 @@ class CacheStats:
             "llm_calls": self.llm_calls,
             "ocr_hits": self.ocr_hits,
             "ocr_calls": self.ocr_calls,
+            "llm_fallback": self.llm_fallback,
             "misses": list(self.misses),
         }
 
@@ -111,6 +113,11 @@ class ReplayCache:
                 self._miss("LLM")
             result = await real(messages, json_mode=json_mode)
             self.stats.llm_calls += 1
+            served = llm_client.last_served_model()
+            if served and served != config.DEEPSEEK_MODEL:
+                # 备用模型的结果不能当成 DeepSeek 的录下来，否则之后的回放会混入另一个模型的输出
+                self.stats.llm_fallback += 1
+                return result
             self._write(path, json.dumps({"result": result}, ensure_ascii=False))
             return result
 

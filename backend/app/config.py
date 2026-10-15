@@ -15,7 +15,10 @@ LLM_TEMPERATURE = 0.1
 # 8192 时曾出现思维链耗尽全部配额、正文为空（finish_reason=length）——
 # 必须留出足够余量，实测 16384 可被 API 接受
 LLM_MAX_TOKENS = 16384
-LLM_TIMEOUT = 120  # 秒
+LLM_TIMEOUT = 120  # 秒——SDK 的读取超时：两次收到数据之间的最长间隔
+# 单次调用的总时限。DeepSeek 排队时会持续回空行保活，读取超时因此永远不触发（2026-10 宕机时实测
+# 一次调用挂了 10 分钟以上）。正常抽取最长约 100 秒，超过总时限即按不可用处理、改用备用模型
+LLM_TOTAL_TIMEOUT = 180  # 秒
 
 # ── OCR ──────────────────────────────────────────────────────────────────────
 # 当前实现：Qwen 多模态模型经 DashScope 云端 API 识别（无需本地模型）
@@ -46,6 +49,17 @@ if DASHSCOPE_API_KEY_BACKUP:
         f"[CONFIG] DASHSCOPE_API_KEY_BACKUP loaded: {_b[:8]}...{_b[-4:]} (len={len(_b)})",
         flush=True,
     )
+
+# ── LLM 备用模型 ─────────────────────────────────────────────────────────────
+# DeepSeek 服务不可用（超时 / 连不上 / 5xx / 限流 429 / 余额不足 402）时改用通义千问，
+# 走 DashScope 的 OpenAI 兼容接口，key 与 OCR 共用（主 key 被拒再用备用 key）。
+# 设 LLM_FALLBACK_MODEL= （空）关闭；key 无效（401）属配置错误，不切换。
+LLM_FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "qwen3.8-flash")
+LLM_FALLBACK_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+# 默认关闭思考：抽取是照原文取值，实测关闭后 1–5 秒返回；需要时 .env 设 1 打开
+LLM_FALLBACK_ENABLE_THINKING = os.getenv("LLM_FALLBACK_ENABLE_THINKING", "0") == "1"
+# DeepSeek 出错后这段时间内直接用备用模型，不再让每次调用都先等 DeepSeek 超时（单次最长 120 秒）
+LLM_FALLBACK_COOLDOWN_S = 600
 
 OCR_TIMEOUT = 300  # 秒——整份文件（所有页并发处理）的总超时，不是单页超时
 OCR_PAGE_TIMEOUT = 60  # 秒——单页请求的超时（原先误用整份文件的超时给单页，太宽松）

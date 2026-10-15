@@ -114,6 +114,7 @@ def main() -> None:
         "mode": args.mode,
         "strict": args.strict,
         "llm_model": config.DEEPSEEK_MODEL,
+        "llm_fallback_model": config.LLM_FALLBACK_MODEL,
         "ocr_model": config.QWEN_OCR_MODEL,
         "cases": [os.path.basename(d) for d in dirs],
     }
