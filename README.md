@@ -145,7 +145,7 @@ sequenceDiagram
 
     Lawyer->>FE: Log in, drop PDF / Word files
     FE->>BE: POST /api/upload
-    Note over BE: PyMuPDF / python-docx per-page extraction;<br/>scans only flagged is_scanned, raw file stored for OCR
+    Note over BE: PyMuPDF / python-docx per-page extraction,<br/>scans only flagged is_scanned, raw file stored for OCR
     BE-->>FE: files[] (text / pages / type / scanned?)
 
     FE->>BE: POST /api/analyze (Idempotency-Key)
@@ -155,7 +155,7 @@ sequenceDiagram
     else Materials complete
         BE->>LLM: extract (structured JSON)
         BE->>LLM: missing clauses / signature page / reports → OCR only needed pages
-        BE->>CODE: per-page anchoring → real page numbers; lawyer rules derive fields
+        BE->>CODE: per-page anchoring → real page numbers, lawyer rules derive fields
         opt Count mismatch / retention money / field conflict
             BE-->>FE: pending = confirm / conflict (interrupt)
             Lawyer->>FE: choose count / payable ratio / value
