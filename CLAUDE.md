@@ -383,7 +383,7 @@ legal-doc-app/
 │   │   │   ├── anchoring.py         # 值回原文命中/定位
 │   │   │   ├── auth_store.py        # 账号与会话（SQLite，scrypt 哈希；令牌只存摘要）
 │   │   │   ├── login_guard.py       # 登录输错锁定
-│   │   │   ├── run_log.py           # 运行日志（JSONL：节点耗时/断点/LLM token/OCR 页数/律师改动；只记 key 不记取值）
+│   │   │   ├── run_log.py           # 运行日志（JSONL：节点耗时/断点/LLM token/OCR 页数/律师改动/登录账号名；只记 key 不记取值；`scripts/usage_report.py` 按账号统计）
 │   │   │   └── company_lookup.py    # 联网企业信息查询
 │   │   └── config.py
 │   ├── data/                        # 原告信息表当前版 + 历史版（管理员页面上传，不进 git）

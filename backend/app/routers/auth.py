@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app import config
-from app.services import auth_store
+from app.services import auth_store, run_log
 from app.services.login_guard import guard
 
 router = APIRouter()
@@ -53,6 +53,8 @@ async def auth_middleware(request: Request, call_next):
     token = request.cookies.get(COOKIE_NAME)
     if token:
         request.state.user = await asyncio.to_thread(auth_store.session_user, token)
+    # 运行日志带上账号名（本请求及其启动的后台分析）
+    run_log.set_user(request.state.user)
     path = request.url.path
     if path.startswith("/api/") and path not in _PUBLIC_PATHS and request.state.user is None:
         return JSONResponse(

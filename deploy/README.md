@@ -149,7 +149,7 @@ docker compose exec backend python scripts/manage_users.py disable lawyer01  # �
 | `checkpoints.sqlite` | agent 会话（字段、律师决定）与律师反馈 |
 | `uploads/` | 上传的扫描件（按需 OCR 用） |
 | `branch_info.json`、`branch_history/` | 原告信息表（管理员维护，**需要备份**） |
-| `run_log.jsonl` | 运行日志：只记字段名、耗时、token 数，不含案件内容 |
+| `run_log.jsonl` | 运行日志：只记字段名、耗时、token 数、登录账号名，不含案件内容 |
 | `auth.sqlite` | 登录账号与会话（密码只存哈希），不随案件过期清除 |
 
 - 案件会话与扫描件超过 `CASE_RETENTION_DAYS`（默认 7 天）自动清除，反馈随会话一并清除。
@@ -167,6 +167,14 @@ docker compose exec backend python scripts/list_feedback.py --run <会话ID>
 ```
 
 - 查看运行日志：`docker compose exec backend tail -n 50 data/run_log.jsonl`
+- 按账号统计使用情况（哪位律师哪天分析了几个案件、生成几份文书、用了多少 token / OCR 页；不含案件内容）：
+
+```bash
+docker compose exec backend python scripts/usage_report.py            # 最近 30 天
+docker compose exec backend python scripts/usage_report.py --days 7   # 最近 7 天；--days 0 看全部
+```
+
+  本功能上线前的旧记录没有账号名，归在「（未登录 / 旧记录）」下。运行日志不随案件过期清除，会一直累积（很小，每个案件几 KB）。
 
 ---
 
