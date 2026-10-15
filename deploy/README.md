@@ -176,6 +176,39 @@ docker compose exec backend python scripts/usage_report.py --days 7   # 最近 7
 
   本功能上线前的旧记录没有账号名，归在「（未登录 / 旧记录）」下。运行日志不随案件过期清除，会一直累积（很小，每个案件几 KB）。
 
+### 6.1 案件 eval（开发用）
+
+用律师已写好诉状的真实案卷跑系统，按标准字段逐项打分，看改规则 / 换模型后哪些案件变好、哪些变坏。真实案卷含当事人信息，**只放服务器私有目录，不进仓库**。脚本与 `expected.json` 写法见 `backend/scripts/eval_cases.py` 文件头。
+
+一次性准备（容器里的 app 用户 uid 为 10001，目录须归它所有）：
+
+```bash
+sudo mkdir -p /srv/eval-cases
+sudo chown 10001:10001 /srv/eval-cases && sudo chmod 700 /srv/eval-cases
+```
+
+放入案件（每个案件一个目录：`materials/` 放上传材料，`expected.json` 写标准字段，`cache/` 是录制的 OCR / LLM 结果，可一并带上）：
+
+```bash
+# 本机：scp eval-cases.tar.gz <用户>@<服务器>:/tmp/
+sudo tar -xzf /tmp/eval-cases.tar.gz -C /srv/eval-cases
+sudo chown -R 10001:10001 /srv/eval-cases && rm /tmp/eval-cases.tar.gz
+```
+
+运行（在仓库目录；用当前部署的代码，`--rm` 跑完即删临时容器）：
+
+```bash
+EVAL="docker compose run --rm -v /srv/eval-cases:/srv/eval-cases backend python scripts/eval_cases.py /srv/eval-cases"
+$EVAL --strict          # 改规则后：只用缓存，不调用 OCR / LLM，几秒出结果、零费用
+$EVAL                   # 缓存没有的才调用接口（新加案件时）
+$EVAL --mode live       # 换模型、改提示词后：全部重新调用，重建缓存（每案约 3–4 分钟）
+$EVAL --case 安装案2     # 只跑一个案件
+sudo sh -c 'cat "$(ls -d /srv/eval-cases/_runs/*/ | tail -1)report.md"'   # 看最新报告
+```
+
+- 报告里有真实案件的取值，文件 0600；发给开发时只在私聊里发，不贴到 GitHub。
+- eval 用临时目录存会话与扫描件，不写线上 `data/`，也不记运行日志；原告信息表读线上那份。
+
 ---
 
 ## 7. 上线前自检
