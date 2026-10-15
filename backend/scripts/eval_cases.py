@@ -1,0 +1,126 @@
+"""案件 eval：用真实案卷跑系统，按律师诉状整理的标准字段逐项打分，并与上次运行对比。
+
+真实案卷含当事人信息，只放在服务器的私有目录（如 /srv/eval-cases），绝不进仓库。
+
+用法（在 backend/ 目录下；Docker 部署时见 deploy/README.md「案件 eval」）：
+    python scripts/eval_cases.py /srv/eval-cases                 # 回放：有缓存用缓存，没有才调用接口
+    python scripts/eval_cases.py /srv/eval-cases --strict        # 严格回放：不调用任何接口（改规则后用）
+    python scripts/eval_cases.py /srv/eval-cases --mode live     # 全部重新调用 OCR / LLM（换模型、改提示词后用）
+    python scripts/eval_cases.py /srv/eval-cases --case 安装案2   # 只跑某个案件（可重复）
+
+目录结构：
+    /srv/eval-cases/
+      安装案2/
+        materials/            上传给系统的材料（审批表、合同、验收报告…），文件名保持原样
+        expected.json         标准字段（见下）
+        cache/                录制的 OCR / LLM 返回（自动生成）
+      _runs/20261015-0930/    每次运行的 report.md、results.json、各案件 complaint.txt / fields.json
+
+expected.json：
+    {
+      "title": "安装案 2（AH2009976 安装）",
+      "decisions": {"payable_ratio": "100%"},          断点时代替律师作答：{字段: 取值}
+      "fields": {
+        "total_amount": 1488996,                         数字 → 按金额比（到分）
+        "contract_sign_date": "2020年7月30日",           完整日期 → 按日期比
+        "plaintiff_name_final": "日立电梯（中国）有限公司湖南分公司",   其他 → 去空白、全半角后全等
+        "jurisdiction_text": {"value": "邵东市人民法院", "match": "contains"},  包含即可
+        "defendant_legal_rep": null,                     null → 应留空（如工商信息系统取不到）
+        "interest_term": {"pending": "确认单（五）第 11 题"}  待律师确认：列出但不计分
+      }
+    }
+"""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import os
+import sys
+import tempfile
+from datetime import datetime
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# 必须在导入 app 之前设置：config 在导入时读取环境变量。
+# 会话 checkpoint 与扫描件暂存放临时目录，不碰线上 data/；运行日志关闭（不混进线上统计）。
+# 原告信息表仍读线上那份（BRANCH_INFO_PATH），与律师实际使用的一致。
+_TMP = tempfile.mkdtemp(prefix="case-eval-")
+os.environ["CHECKPOINT_DB_PATH"] = os.path.join(_TMP, "checkpoints.sqlite")
+os.environ["UPLOAD_DIR"] = os.path.join(_TMP, "uploads")
+os.environ["RUN_LOG_ENABLED"] = "0"
+
+from app import config  # noqa: E402
+from app.agent.graph import reset_graph  # noqa: E402
+from scripts.case_eval.cache import MODES  # noqa: E402
+from scripts.case_eval.report import accuracy, find_previous, write_report  # noqa: E402
+from scripts.case_eval.runner import run_case  # noqa: E402
+
+
+def _case_dirs(root: str, only: list[str]) -> list[str]:
+    names = sorted(
+        n for n in os.listdir(root)
+        if not n.startswith(("_", ".")) and os.path.isfile(os.path.join(root, n, "expected.json"))
+    )
+    if only:
+        unknown = [n for n in only if n not in names]
+        if unknown:
+            raise SystemExit(f"找不到案件：{'、'.join(unknown)}（需有 expected.json）")
+        names = [n for n in names if n in only]
+    if not names:
+        raise SystemExit(f"{root} 下没有案件（每个案件目录需有 expected.json 和 materials/）")
+    return [os.path.join(root, n) for n in names]
+
+
+async def _run_all(dirs: list[str], mode: str, strict: bool) -> list[dict]:
+    try:
+        return await _run_cases(dirs, mode, strict)
+    finally:
+        await reset_graph()  # 关掉 checkpoint 的 SQLite 连接线程，否则进程结束不了
+
+
+async def _run_cases(dirs: list[str], mode: str, strict: bool) -> list[dict]:
+    cases = []
+    for d in dirs:
+        print(f"[eval] {os.path.basename(d)} …", flush=True)
+        result = await run_case(d, mode=mode, strict=strict)
+        s = result.get("summary") or {}
+        print(
+            f"[eval] {os.path.basename(d)}："
+            + (f"出错 {result['error']}" if result.get("error") else f"准确率 {accuracy(s)}")
+            + f"，{result['duration_s']} 秒",
+            flush=True,
+        )
+        cases.append(result)
+    return cases
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="用真实案卷跑系统并按标准字段打分")
+    parser.add_argument("root", help="案卷根目录，如 /srv/eval-cases")
+    parser.add_argument("--case", action="append", default=[], help="只跑这个案件（目录名，可重复）")
+    parser.add_argument("--mode", choices=MODES, default="replay")
+    parser.add_argument("--strict", action="store_true", help="严格回放：缓存未命中即报错，不调用接口")
+    parser.add_argument("--out", help="报告目录，默认 <root>/_runs")
+    args = parser.parse_args()
+    if args.strict and args.mode != "replay":
+        raise SystemExit("--strict 只用于 replay 模式")
+
+    dirs = _case_dirs(args.root, args.case)
+    runs_dir = args.out or os.path.join(args.root, "_runs")
+    run_name = datetime.now().strftime("%Y%m%d-%H%M%S")
+    cases = asyncio.run(_run_all(dirs, args.mode, args.strict))
+    meta = {
+        "run": run_name,
+        "mode": args.mode,
+        "strict": args.strict,
+        "llm_model": config.DEEPSEEK_MODEL,
+        "ocr_model": config.QWEN_OCR_MODEL,
+        "cases": [os.path.basename(d) for d in dirs],
+    }
+    prev = find_previous(runs_dir, run_name)
+    path = write_report(os.path.join(runs_dir, run_name), meta, cases, prev)
+    print(f"[eval] 报告：{path}", flush=True)
+
+
+if __name__ == "__main__":
+    main()

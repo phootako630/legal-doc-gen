@@ -386,6 +386,7 @@ legal-doc-app/
 │   │   │   ├── run_log.py           # 运行日志（JSONL：节点耗时/断点/LLM token/OCR 页数/律师改动/登录账号名；只记 key 不记取值；`scripts/usage_report.py` 按账号统计）
 │   │   │   └── company_lookup.py    # 联网企业信息查询
 │   │   └── config.py
+│   ├── scripts/                     # 运维脚本（账号管理、反馈查看）+ 案件 eval（eval_cases.py、case_eval/）
 │   ├── data/                        # 原告信息表当前版 + 历史版（管理员页面上传，不进 git）
 │   ├── requirements.txt
 │   └── .env.example                 # DEEPSEEK_API_KEY, DASHSCOPE_API_KEY
@@ -897,6 +898,13 @@ pnpm dev                   # 默认 http://localhost:5173
 - `skills/case-review`：律师发来新案卷时解压、盘点材料、看扫描页，用系统跑一遍并与律师诉状逐句对比
 - `skills/lawyer-questionnaire`：把要问律师的问题生成为 Word 确认单（律师在中国大陆，确认单一律用 Word），并说明如何读取回复
 - 真实案卷只放会话临时目录（scratchpad），**绝不提交到仓库**，测试一律用虚构数据
+
+### 案件 eval（`backend/scripts/eval_cases.py`）
+
+- 用律师已写好诉状的真实案卷跑系统（与网页同一条链路，不经浏览器），按 `expected.json` 的标准字段逐项打分：正确 / 错误 / 缺失 / 待定（待律师确认，不计分）；按字段比，不逐句比诉状（律师措辞本就不统一）
+- OCR / LLM 返回按请求内容哈希录制到案件的 `cache/`：改规则后 `--strict` 只回放、零费用；换模型或改提示词后 `--mode live` 重建
+- 每次运行写 `_runs/<时间>/report.md`，并与上次逐字段对比；落实律师答复、改抽取规则后跑一遍，看有没有改坏别的案件
+- 真实案卷与标准字段放服务器 `/srv/eval-cases`（见 `deploy/README.md`「案件 eval」），不进仓库；新案卷核对完（`case-review`）就补一份 `expected.json` 加进去
 
 ---
 
