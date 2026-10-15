@@ -61,7 +61,7 @@ UI 组件：    shadcn/ui
 Agent 编排：   LangGraph（状态图 + interrupt 断点 + checkpoint；仅用图与检查点，不引入整个 LangChain 生态）
 文件解析：     PyMuPDF（fitz）提取 PDF 文本；python-docx 提取 Word 文本
 OCR：          Qwen 多模态云端 API（阿里云 DashScope，默认 qwen3.8-flash；免费额度 key + 付费备用 key）；备用 RapidOCR（本地 ONNX，代码注释保留）
-LLM 调用：     OpenAI SDK（兼容 DeepSeek API），启用 function calling / 结构化输出
+LLM 调用：     OpenAI SDK（兼容 DeepSeek API），启用 function calling / 结构化输出；DeepSeek 不可用时改用通义 qwen3.8-flash（DashScope 兼容接口）
 模板渲染：     docxtpl（可选，后端渲染）或前端 docx-js（默认，见 API 设计）
 企业信息查询： 联网工具（企查查/天眼查/公示系统 API，按信用代码补全法人全称）
 运行方式：     uvicorn，单进程，本地运行
@@ -423,7 +423,7 @@ legal-doc-app/
 ### Error Handling
 
 - **依赖导入与异常处理**：必需依赖应在依赖文件中明确声明；缺失或版本不兼容时明确报错并修复依赖配置。不得仅为使代码运行而堆叠 `try/except ImportError`、尝试多个替代库，或在导入失败时静默跳过功能。只有明确设计为可选依赖或兼容层时，才允许导入降级，并须说明触发条件、行为差异及验证方式。按文件格式选择不同解析库不属于导入降级。
-- LLM API：timeout 120s，失败重试 1 次，返回中文错误信息
+- LLM API：读取超时 120s、单次调用总时限 180s（DeepSeek 排队时回空行保活，读取超时不会触发），失败重试 1 次（关闭 SDK 自带重试，否则一次超时要等 6 分钟），返回中文错误信息；DeepSeek 超时（含总时限）/ 连不上 / 5xx / 429 / 402 时不再重试 DeepSeek，直接改用备用模型 `LLM_FALLBACK_MODEL`（默认 qwen3.8-flash，DashScope key 与 OCR 共用），之后 10 分钟内都走备用模型；key 无效（401）属配置错误，不切换
 - OCR：timeout 120s，失败返回 `{ error: "OCR 处理失败：具体原因" }`
 - 文件解析：不支持格式返回明确错误，不静默失败
 - JSON 解析：优先用结构化输出；仍需兜底去除 markdown 代码块标记后重试
@@ -811,7 +811,12 @@ LLM_TEMPERATURE = 0.1
 # DeepSeek Flash 是推理模型：思维链（reasoning_content）也计入 max_tokens。
 # 8192 时曾出现思维链耗尽全部配额、正文为空（finish_reason=length），故上调到 16384。
 LLM_MAX_TOKENS = 16384
-LLM_TIMEOUT = 120  # 秒
+LLM_TIMEOUT = 120  # 秒（读取超时）
+LLM_TOTAL_TIMEOUT = 180  # 秒（单次调用总时限，超过按不可用处理）
+
+# DeepSeek 不可用时的备用模型（DashScope OpenAI 兼容接口，key 与 OCR 共用）；设为空关闭
+LLM_FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "qwen3.8-flash")
+LLM_FALLBACK_COOLDOWN_S = 600  # DeepSeek 出错后 10 分钟内直接用备用模型
 
 # Qwen-VL-OCR（阿里云 DashScope）
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")

@@ -100,3 +100,16 @@ def test_acceptance_date_from_approval_marked_uncertain():
     }
     apply_rule_guards(fields)
     assert "待核实" in fields["acceptance_latest_date"]["src"]
+
+
+def test_report_numbers_with_parentheses_are_counted():
+    # 检验机构编号带括号（「WJ-TJ(3110)-2023-01211」）：之前不认括号，20 份报告一份都数不出来
+    from app.services.extraction import count_acceptance_units
+
+    text = "\n".join(
+        f"电梯监督检验报告\n报告编号：XX-TJ(3110)-2023-{n:05d}\n设备品种" for n in range(1, 4)
+    ) + "\n报告编号：XX-TJ（3110）-2024-00001\n"
+    counted = count_acceptance_units(
+        [{"identified_type": "验收报告", "filename": "报告.pdf", "text": text}]
+    )
+    assert counted is not None and counted[0] == 4

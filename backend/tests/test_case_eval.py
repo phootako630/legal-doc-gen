@@ -80,6 +80,22 @@ def test_chat_cache_records_then_replays(tmp_path):
     assert asyncio.run(live.wrap_chat(real)(msgs, json_mode=True)) == {"answer": 2}  # live 不读缓存
 
 
+def test_fallback_answers_are_not_recorded(tmp_path):
+    # DeepSeek 宕机时由备用模型回答：结果照常返回，但不录进 DeepSeek 的回放缓存
+    from app.services import llm_client
+
+    async def served_by_backup(messages, json_mode=False):
+        llm_client._served_model.set("qwen-test")
+        return "备用回答"
+
+    rec = ReplayCache(str(tmp_path), mode="replay")
+    msgs = [{"role": "user", "content": "x"}]
+    assert asyncio.run(rec.wrap_chat(served_by_backup)(msgs)) == "备用回答"
+    assert rec.stats.llm_fallback == 1
+    with pytest.raises(CacheMiss):
+        asyncio.run(ReplayCache(str(tmp_path), mode="replay", strict=True).wrap_chat(served_by_backup)(msgs))
+
+
 def test_ocr_cache_skips_empty_results(tmp_path):
     results = iter(["", "第一页文字"])
     rec = ReplayCache(str(tmp_path), mode="replay")

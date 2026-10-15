@@ -72,6 +72,9 @@ def render_markdown(meta: dict[str, Any], cases: list[dict[str, Any]], changes: 
         f"模式：{meta['mode']}{'（严格回放）' if meta.get('strict') else ''} · "
         f"LLM：{meta['llm_model']} · OCR：{meta['ocr_model']}"
     )
+    fallback = sum((c.get("stats") or {}).get("llm_fallback", 0) for c in cases)
+    if fallback:
+        lines[-1] += f" · DeepSeek 不可用，{fallback} 次调用由备用模型 {meta.get('llm_fallback_model') or ''} 回答"
     lines.append("")
     total = {CORRECT: 0, WRONG: 0, MISSING: 0, PENDING: 0}
     lines += [
@@ -115,6 +118,8 @@ def render_markdown(meta: dict[str, Any], cases: list[dict[str, Any]], changes: 
             lines += [f"运行出错：{c['error']}", ""]
             continue
         st = c.get("stats") or {}
+        if st.get("llm_fallback"):
+            lines += [f"DeepSeek 不可用，{st['llm_fallback']} 次 LLM 调用由备用模型回答（未录入缓存，结果不代表 DeepSeek）。", ""]
         if st.get("misses"):
             lines += [f"缓存未命中 {len(st['misses'])} 次（{'、'.join(sorted(set(st['misses'])))}）。", ""]
         for p in c.get("pauses") or []:

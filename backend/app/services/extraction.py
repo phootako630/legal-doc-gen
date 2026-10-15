@@ -58,7 +58,8 @@ def mark_ocr_fields(data: Any, scanned_filenames: set[str]) -> None:
 
 # 验收报告里的设备代码（每台电梯唯一）与报告编号（每台一份报告）
 _EQUIPMENT_CODE_RE = re.compile(r"设备代码\s*[:：]?\s*([0-9A-Za-z]{10,})")
-_REPORT_NO_RE = re.compile(r"报告编号\s*[:：]\s*([0-9A-Za-z\-]{6,})")
+# 编号里可能带括号，如「WJ-TJ(3110)-2023-01211」（检验机构代号）；不认括号会一份都数不出来
+_REPORT_NO_RE = re.compile(r"报告编号\s*[:：]\s*([0-9A-Za-z\-()（）]{6,})")
 
 
 def count_acceptance_units(files: list[dict]) -> tuple[int, str] | None:
