@@ -2,21 +2,47 @@
 
 [中文](./README.md) | **English**
 
-A web app for legal teams: lawyers upload case materials (approval forms, installation contracts, acceptance/inspection reports), an agent automatically runs material check-in, field extraction, and cross-validation, and after the lawyer reviews and confirms, generates a civil complaint as a Word document with one click.
+A web app for legal teams. Lawyers upload case materials: approval forms, installation or sales contracts, and elevator supervision inspection reports. An agent then does several things:
 
-> **v1 → v2**: v1 was a fixed pipeline (`upload → checklist → extract → validate → generate`, hard-wired control flow). v2 makes the core **agentic** — a tool-equipped LangGraph agent drives control flow, reads materials on demand, self-checks with deterministic code, and pauses at key disagreements to ask the lawyer (human-in-the-loop).
+- checks the materials in, extracts fields, and cross-validates them;
+- applies the lawyer-confirmed drafting rules to derive the plaintiff, elevator counts, penalties and the competent court.
+
+After the lawyer reviews and confirms, the app generates a civil complaint as a Word document in one click, with the filled-in text highlighted in yellow for a final check. If the contract specifies arbitration, it generates an arbitration application instead.
+
+> **v1 → v2**: v1 was a fixed pipeline (`upload → checklist → extract → validate → generate`) with hard-wired control flow. v2 makes the core **agentic**. A tool-equipped LangGraph agent drives the control flow, OCRs only the scanned pages it needs, self-checks with deterministic code, and pauses at key disagreements to ask the lawyer (human-in-the-loop).
 >
-> v2 scope: validate AI extraction accuracy and lawyer UX. No database, no auth, cases are not persisted (agent state lives only within a single session), local run only.
+> **Current status**: deployed for lawyer trials (UAT), to validate AI extraction accuracy and the lawyer experience. The site has a Chinese login page, admin-created accounts and HTTPS. Case state is stored in a local SQLite database, so review can resume after a restart, and it is purged automatically after 7 days.
 
 ---
 
 ## Core principles
 
-- **AI never makes the final call** — the agent only extracts, validates, and proposes; the lawyer confirms and edits. It pauses at key disagreements to ask.
-- **Validation is code, not LLM** — amount reconciliation, three-source quantity comparison, and format checks are all done by deterministic Python; the LLM only "pulls out the numbers".
-- **Traceable provenance** — every field value is tagged with its source file plus a **verified real page number** (derived by per-page anchoring, not self-reported by the LLM).
-- **Prefer a gap over a fabrication** — uncertain fields are marked missing, never invented; a value that fails to anchor back to the source is down-weighted and flagged "to verify".
-- **Template rendering, not free generation** — the complaint is rendered deterministically from structured fields + a template; the LLM does not write the full text.
+- **AI never makes the final call.** The agent only extracts, validates and proposes; the lawyer confirms and edits. It pauses to ask at key disagreements:
+  - missing materials;
+  - conflicting fields;
+  - mismatched elevator counts;
+  - the retention-money ratio.
+- **Validation is code, not LLM.** Deterministic Python handles amount reconciliation, the three-source quantity comparison, format checks, and the calculations in the lawyer rules (penalty amount, start date, court name, etc.). The LLM only pulls out the numbers and the clause text.
+- **Traceable provenance.** Every field value is tagged with its source file and a **verified page number** found by per-page anchoring, never one the LLM reports itself.
+- **A gap beats a fabrication.** Uncertain fields are marked missing and never invented. A value that does not anchor back to the source is flagged "to verify", both on the review page and in the complaint.
+- **Template rendering, not free generation.** The complaint is filled deterministically from structured fields into the lawyers' template. The LLM never writes the full text.
+
+---
+
+## Features
+
+| Feature | Details |
+|---|---|
+| Material parsing | Text PDFs, Word files and scanned PDFs. Scans are never OCR'd whole: the agent reads only the pages it needs (payment / breach / dispute clauses, signature page, equipment list, acceptance reports). |
+| Extraction & anchoring | Structured fields are read straight from the approval form, and contract clauses are kept verbatim. Each value is matched back to the source page by page; values with no match are flagged "to verify". |
+| Cross-validation | Amount reconciliation (total = paid + unpaid), elevator counts across signing / contract / acceptance, credit-code check digit, dates. |
+| Lawyer drafting rules | Two rounds of lawyer-confirmed rule sheets, implemented as code in `services/derived_fields.py`. They cover:<br>• plaintiff naming (HQ + branch, or an independent subsidiary)<br>• sales vs. installation wording<br>• elevator-count basis (including VGE home elevators)<br>• penalty vs. late-payment interest (rate-based, lump-sum, fixed daily amount, caps)<br>• paid / unpaid ratios<br>• competent court and jurisdiction sentence<br>• switching to an arbitration application |
+| Lawyer breakpoints | Pauses on missing materials, field conflicts, count mismatches, and contracts with retention money (the lawyer picks "paid up to X% of the contract price"). It resumes once the lawyer decides. |
+| Review page | A Chinese field table with status, source and page, sorted by confidence. Every field is editable, and each field has a button for submitting feedback on it. |
+| Complaint export | The preview shows how many blanks still need filling. The Word export keeps the yellow highlights for a final check. |
+| Plaintiff info table | A firm-wide table of plaintiff credit codes, legal representatives and addresses. Anyone can view or download it as Excel; uploading a new version or restoring an old one needs the admin token. |
+| Login | Accounts are created by an admin on the server (there is no sign-up). Sessions last 7 days, lawyers can change their own password, and repeated wrong passwords lock the login. |
+| Operations | The run log records field keys, timings, tokens and account names, never case content. Usage can be reported per account, and lawyer feedback can be listed. GitHub Actions deploys after approval and rolls back automatically on failure. |
 
 ---
 
@@ -26,77 +52,82 @@ A web app for legal teams: lawyers upload case materials (approval forms, instal
 |---|---|
 | Frontend | React 19 + Vite + TypeScript (strict) + Tailwind CSS + shadcn/ui + react-hook-form/zod + docx-js |
 | Backend | FastAPI (Python 3.10+) + PyMuPDF (PDF) + python-docx (Word) |
-| Agent orchestration | LangGraph (state graph + `interrupt` breakpoints + in-memory checkpoint; graph & checkpoints only, no full LangChain) |
-| OCR | Qwen-VL-OCR (Alibaba Cloud DashScope API) for scanned documents |
+| Agent orchestration | LangGraph (state graph + `interrupt` breakpoints + SQLite checkpoint; graph and checkpoints only, no full LangChain) |
+| OCR | Qwen multimodal via Alibaba Cloud DashScope (international), default `qwen3.8-flash`, with an optional paid backup key |
 | LLM | DeepSeek API (`deepseek-flash`, via the OpenAI SDK with structured output) |
+| Deployment | Docker Compose (backend + nginx), Let's Encrypt HTTPS, GitHub Actions auto-deploy after approval |
 
 ---
 
-## Material types & source reliability tiers
+## Material types and source reliability tiers
 
-A typical case has three material types that differ greatly in form and reliability; the agent treats them differently:
+A typical case has three material types that differ greatly in form and reliability, so the agent treats them differently:
 
 | Material | Form | Reliability | Agent strategy |
 |---|---|---|---|
-| **Approval form** | Parseable text, key-value form | ⭐⭐⭐ Highest | **Primary source**: defendant name/address, contract no., quantities, amounts, most fields taken directly |
-| **Acceptance/inspection report** | Parseable text + stamp images | ⭐⭐ Medium-high | **Cross-check source**: USCC code, install site, acceptance date, quantity (number of reports) |
-| **Installation contract** | Often pure scan (needs OCR) | ⭐ Noisy | **Clause-text source**: payment / penalty-interest / dispute-resolution clauses. OCR only the relevant pages on demand |
+| **Approval form** | Parseable text, key–value form | ⭐⭐⭐ highest | **Primary source**: contract type, contracting branch, defendant name, contract no., counts, amounts and contacts are read directly. The defendant's address and legal representative come from the business registry, not from this form. |
+| **Acceptance / inspection reports** | Parseable text + stamp image; often phone-photo scans | ⭐⭐ medium-high | **Cross-check source**: credit code, installation site, approval date (latest batch), elevator count (one per report front page). Scanned reports are OCR'd on demand. |
+| **Installation / sales contract** | Often a pure scan (needs OCR) | ⭐ noisy | **Clause source**: payment, breach, retention-money and dispute clauses, plus the signature page and equipment list. Only relevant pages are read, and reading stops once the clause is found. |
 
 ---
 
-## Architecture
+## System architecture
 
 ```mermaid
 flowchart TB
-    subgraph Browser["Browser · React SPA (single-page Stepper)"]
-        S1["Step 1 Upload"] --> S2["Step 2 Processing"] --> S3["Step 3 Review"] --> S4["Step 4 Preview & download"]
-        S4 --> DOCX["html-doc-generator (docx-js)<br/>template-filled Word in the browser"]
+    subgraph Browser["Browser · React SPA (login page + single-page stepper)"]
+        LG["Login / change password"]
+        S1["Step 1 Upload"] --> S2["Step 2 AI processing"] --> S3["Step 3 Review"] --> S4["Step 4 Preview & download"]
+        S4 --> DOCX["html-doc-generator (docx-js)<br/>Word generated in the browser, highlights kept"]
+        BR["Plaintiff info table page"]
     end
 
-    subgraph Backend["FastAPI backend (local uvicorn, no DB)"]
-        RU["POST /api/upload"]
-        RA["POST /api/analyze (start agent, may pause)"]
-        RR["POST /api/resume (resume at breakpoint)"]
-        RG["POST /api/generate (template render)"]
+    subgraph Server["Server (Docker Compose)"]
+        NG["nginx: static files + HTTPS + /api reverse proxy"]
 
-        subgraph Agent["LangGraph state graph"]
-            N1["intake"] --> N2["extract"] --> N3["validate<br/>(interrupt on conflict)"]
+        subgraph Backend["FastAPI backend (not exposed, login middleware)"]
+            RAU["/api/auth/*"]
+            RU["POST /api/upload"]
+            RA["POST /api/analyze (idempotent, may pause)"]
+            RR["POST /api/resume (resume breakpoint)"]
+            RG["POST /api/generate (template render)"]
+            RB["/api/branches/* (plaintiff info table)"]
+            RF["POST /api/feedback"]
+
+            subgraph Agent["LangGraph state graph"]
+                N1["intake"] --> N2["extract"] --> N3["ocr_augment: on-demand contract OCR"]
+                N3 --> N4["report_ocr: scanned reports"] --> N5["contract_scan: equipment list / VGE"]
+                N5 --> N6["qty_check: count breakpoint"] --> N7["retention: retention breakpoint"] --> N8["validate (conflict breakpoint)"]
+            end
+
+            subgraph Tools["services/ pure-function tools (framework-agnostic)"]
+                FP["file_parser / file_store"]
+                OCR["ocr_engine"]
+                ANC["anchoring / provenance / doc_search"]
+                VAL["validators / confidence"]
+                DER["derived_fields: lawyer rules"]
+                REND["complaint_renderer: template fill"]
+                BT["branch_table / branch_registry"]
+            end
+
+            DB[("data/ volume: checkpoints.sqlite · uploads/<br/>auth.sqlite · branch_info.json · run_log.jsonl")]
         end
-
-        subgraph Tools["services/ pure-function tools (framework-agnostic)"]
-            FP["file_parser: parse + per-page text"]
-            OCR["ocr_engine: Qwen-VL-OCR"]
-            VAL["validators: deterministic checks"]
-            CONF["confidence: layered scoring"]
-            ANC["anchoring: value-to-source match"]
-            PROV["provenance: per-page location"]
-            REND["complaint_renderer: template fill"]
-        end
-
-        RU --> FP
-        RA --> Agent
-        RR --> Agent
-        N2 --> ANC & PROV
-        N2 -->|missing clauses · on demand| OCR
-        N3 --> VAL & CONF
-        RG --> REND
     end
 
     subgraph External["External services"]
         DS["DeepSeek API"]
-        QW["DashScope · Qwen-VL-OCR"]
+        QW["Alibaba DashScope · Qwen OCR"]
     end
 
-    S1 -->|multipart/form-data| RU
-    RU -->|files + text + pages| S2
-    S2 -->|analyze| RA
-    RA -->|CaseState (with pending)| S3
-    S3 -->|resume decisions| RR
-    RR -->|CaseState| S3
-    S3 -->|validated_state| RG
-    RG -->|complaint_text| S4
-
-    N2 -.-> DS
+    Browser -->|HTTPS| NG --> Backend
+    RA & RR --> Agent
+    RU --> FP
+    RG --> REND
+    RB --> BT
+    N2 & N8 --> ANC & VAL & DER
+    N3 & N4 --> OCR
+    Agent -.checkpoint.-> DB
+    N1 & N2 -.-> DS
     OCR -.-> QW
 ```
 
@@ -109,47 +140,51 @@ sequenceDiagram
     actor Lawyer
     participant FE as Frontend SPA
     participant BE as FastAPI + LangGraph
-    participant CODE as Deterministic checks (code)
-    participant LLM as DeepSeek API
+    participant CODE as Deterministic code (checks / lawyer rules)
+    participant LLM as DeepSeek / Qwen OCR
 
-    Lawyer->>FE: Drag-and-drop PDF / Word
+    Lawyer->>FE: Log in, drop PDF / Word files
     FE->>BE: POST /api/upload
-    Note over BE: PyMuPDF / python-docx extract;<br/>keep per-page text; mark is_scanned
-    BE-->>FE: files[] (text / pages / type / is_scanned)
+    Note over BE: PyMuPDF / python-docx per-page extraction;<br/>scans only flagged is_scanned, raw file stored for OCR
+    BE-->>FE: files[] (text / pages / type / scanned?)
 
-    FE->>BE: POST /api/analyze
+    FE->>BE: POST /api/analyze (Idempotency-Key)
     BE->>LLM: intake (materials complete?)
-    alt Materials insufficient
-        BE-->>FE: CaseState.pending = missing (stop, prompt for more)
+    alt Materials missing
+        BE-->>FE: pending = missing (ask for materials)
     else Materials complete
         BE->>LLM: extract (structured JSON)
-        BE->>BE: anchor values per page -> real page + confidence
-        BE->>CODE: validate (amount reconcile / 3-source qty / USCC / date)
-        alt Conflict
-            BE-->>FE: CaseState.pending = conflict (interrupt)
-            Lawyer->>FE: resolve each field
-            FE->>BE: POST /api/resume (decisions)
-            BE->>CODE: re-check after applying (multi-round)
+        BE->>LLM: missing clauses / signature page / reports → OCR only needed pages
+        BE->>CODE: per-page anchoring → real page numbers; lawyer rules derive fields
+        opt Count mismatch / retention money / field conflict
+            BE-->>FE: pending = confirm / conflict (interrupt)
+            Lawyer->>FE: choose count / payable ratio / value
+            FE->>BE: POST /api/resume (decisions, may repeat)
         end
-        BE->>LLM: produce highlight prose from deterministic verdicts
+        BE->>CODE: validate amounts / three-source counts / credit code / dates
         BE-->>FE: CaseState (fields + checks + readiness, pending=null)
     end
 
-    FE->>Lawyer: Field table (source / page / status / readiness)
-    Lawyer->>FE: Edit / confirm, then generate
-    FE->>BE: POST /api/generate (validated_state)
-    BE->>BE: complaint_renderer template fill (no LLM)
-    BE-->>FE: complaint_text
-    FE-->>Lawyer: docx-js builds Word for download
+    Lawyer->>FE: Review, edit, send feedback, click generate
+    FE->>BE: POST /api/generate (final fields)
+    BE->>CODE: complaint_renderer template fill (no LLM)
+    BE-->>FE: complaint_text (filled slots marked for highlight)
+    FE-->>Lawyer: Preview + Word download
 ```
 
 ---
 
-## Deterministic validation & confidence layering
+## Deterministic validation and layered confidence
 
-- **Validation (code, not LLM)**: `validators.py` does amount reconciliation (`total == paid + unpaid`), three-source quantity consistency (signed/contract/acceptance), 18-digit USCC check digit, and date validity. Its verdicts are the sole authority for the "conflict" status on the review page.
-- **Confidence layering**: hard signals set the status (`FieldStatus`: normal / missing / conflict / to-verify); soft signals set `confidence` (0–100, only for UI ordering/default-expansion). `confidence = channel×40 + anchor quality×30 + self-consistency×20 + model self-rating×10`.
-- **Traceable provenance**: `anchoring.py` matches the extracted value back to the source text page by page; `provenance.py` returns the **verified real page number** from the hit. A miss never fabricates a page — it only lowers confidence and flags "to verify".
+- **Validation (code, not LLM)**: `validators.py` runs the checks below. Their results are the only authority for the "conflict" status on the review page.
+  - Amount reconciliation, with a one-cent tolerance.
+  - Three-source elevator count. When the acceptance reports give a count, that count wins, and a mismatch is flagged for the lawyer without pausing.
+  - 18-digit credit-code check digit.
+  - Date validity.
+- **Layered confidence**:
+  - Hard signals set the status: normal / missing / conflict / to verify.
+  - Soft signals give a `confidence` score from 0 to 100, used only to sort the review page and decide which fields start expanded. It is computed as `channel×40 + anchoring×30 + self-consistency×20 + model self-rating×10`.
+- **Complaint readiness**: the share of template blanks that have a value and no conflict. It uses the same count as the preview's "N blanks left", and turns green only at 100%.
 
 ---
 
@@ -157,32 +192,41 @@ sequenceDiagram
 
 ```
 legal-doc-gen/
-├── CLAUDE.md                        # AI coding-assistant project instructions (detailed spec)
-├── README.md / README.en.md         # This file (zh / en)
-├── prompts/                         # LLM prompt templates
+├── CLAUDE.md                        # Instructions for AI coding assistants (full spec + lawyer rules)
+├── README.md / README.en.md         # This file (Chinese / English)
+├── prompts/                         # LLM prompts and the complaint template
 │   ├── prompt-a-checklist.md        # Material check-in
 │   ├── prompt-a-extract.md          # Field extraction (structured)
-│   ├── prompt-a-validate.md         # Highlight prose only (no consistency judgment)
+│   ├── prompt-a-clauses.md          # Clause extraction from scanned contracts
+│   ├── prompt-a-validate.md         # Highlight text only (no consistency judgments)
 │   └── complaint-template.md        # Complaint template (placeholders)
 │
 ├── frontend/                        # React frontend
 │   └── src/
-│       ├── components/{upload,processing,review,preview,layout,ui}/
-│       ├── hooks/useComplaintFlow.ts        # analyze/resume flow state
-│       └── lib/{api,buildReviewFields,field-map,html-doc-generator,types}.ts
+│       ├── components/{auth,upload,processing,review,preview,branches,layout,ui}/
+│       ├── hooks/{useAuth,useComplaintFlow,useAdminToken}.ts
+│       └── lib/{api,auth-api,branch-api,buildReviewFields,field-map,html-doc-generator,types}.ts
 │
-└── backend/                         # Python FastAPI backend
-    └── app/
-        ├── main.py
-        ├── routers/{files,analyze,resume,generate,extract}.py   # extract is v1 legacy
-        ├── agent/{graph,state,nodes}.py                          # LangGraph state graph
-        ├── services/                                             # framework-agnostic pure tools
-        │   ├── file_parser.py  ocr_engine.py  llm_client.py  prompt_loader.py
-        │   ├── validators.py   confidence.py  anchoring.py   provenance.py
-        │   ├── extraction.py   complaint_renderer.py
-        │   └── llm_progress.py upload_progress.py
-        └── config.py
+├── backend/                         # Python FastAPI backend
+│   ├── app/
+│   │   ├── main.py  config.py
+│   │   ├── routers/{auth,files,analyze,resume,generate,branches,feedback,extract}.py
+│   │   ├── agent/{graph,state,nodes,runner,checkpoint}.py    # LangGraph graph + SQLite checkpoint
+│   │   └── services/                                         # Framework-agnostic pure-function tools
+│   │       ├── file_parser  file_store  ocr_engine  llm_client  prompt_loader
+│   │       ├── extraction  anchoring  provenance  doc_search  validators  confidence
+│   │       ├── derived_fields  acceptance_report  equipment_list  complaint_renderer
+│   │       ├── branch_table  branch_registry  company_lookup (placeholder)
+│   │       └── auth_store  login_guard  run_log  progress_table
+│   ├── scripts/{manage_users,list_feedback,usage_report}.py  # Accounts / feedback / usage report
+│   └── tests/                                                # pytest (synthetic data)
+│
+├── deploy/                          # nginx config, cert.sh, deploy.sh, deployment guide (Chinese)
+├── docker-compose.yml
+└── .github/workflows/{ci,deploy}.yml
 ```
+
+`POST /api/extract` in `routers/extract.py` is a v1 leftover. The frontend still uses `GET /api/extract/progress` from the same router for the progress display.
 
 ---
 
@@ -201,11 +245,22 @@ pnpm install
 pnpm dev                   # http://localhost:5173, /api/* proxied to :8000
 ```
 
-Backend tests: `cd backend && python -m pytest`
+Login is off by default in local development (`AUTH_ENABLED=0`). Case data is stored under `backend/data/`.
+
+Checks and tests:
+
+```bash
+cd backend && ruff check . && python -m pytest
+cd frontend && pnpm lint && pnpm build
+```
 
 ## Deployment (UAT / production)
 
-`docker compose up -d --build` starts everything (login page + HTTPS + a case-data volume). Full guide (Chinese): [deploy/README.md](./deploy/README.md).
+- **How**: `docker compose up -d --build` starts everything in one go: nginx, HTTPS, login and the case-data volume.
+- **Auto-deploy**: after a merge to master passes CI and an admin approves it on GitHub, the server is updated automatically. A failed deploy rolls back.
+- **Full steps**: accounts, certificates, backups, and how to read feedback and usage reports are in [deploy/README.md](./deploy/README.md), which is in Chinese.
+
+> Security conventions: API keys live only in the server's `backend/.env`, never in git. Real case files are never committed; all tests use synthetic data.
 
 ---
 
@@ -214,15 +269,16 @@ Backend tests: `cd backend && python -m pytest`
 | Step | Content | Status |
 |---|---|---|
 | 1–2 | Tool layer (validators / confidence / anchoring) + unit tests | ✅ |
-| 3 | Move cross-validation out of the LLM into deterministic code | ✅ |
-| 4 | Render the complaint via template fill (drop LLM free-gen) | ✅ |
-| 5 | Agent orchestration (LangGraph + interrupt, backend & frontend) | ✅ |
-| 6a | Field provenance (verified page numbers via per-page anchoring) | ✅ |
-| 6b | On-demand OCR (page-by-page `ocr_page` + `search_in_docs` on scanned contracts when clauses are missing, early-stop) | ✅ |
-| 7 | Entity verification (branch name → full legal name): HITL lawyer lookup-and-enter, online lookup API reserved | ✅ |
+| 3 | Cross-validation moved out of the LLM into deterministic code | ✅ |
+| 4 | Complaint rendered by template fill (no LLM free generation) | ✅ |
+| 5 | Agent orchestration (LangGraph + interrupt, frontend and backend) | ✅ |
+| 6a | Traceable provenance (real page numbers via per-page anchoring) | ✅ |
+| 6b | On-demand OCR (scanned contracts and reports read page by page, stopping once found) | ✅ |
+| 7 | Online company lookup: interface in place, lookup API not yet connected. Lawyers currently enter registry details on the review page. | 🚧 |
+| — | Go-live: login, SQLite persistence with expiry, Docker + HTTPS, auto-deploy | ✅ |
 
 ---
 
-## Not included in v2 (reserved for later)
+## Out of scope (future iterations)
 
-Role-based permissions (all accounts currently have the same access), batch case processing, vector retrieval, full LangChain, etc. — see [CLAUDE.md](./CLAUDE.md).
+Permission levels (all accounts currently have the same rights; updating the plaintiff table separately needs the admin token), batch processing, vector search, full LangChain, etc. See [CLAUDE.md](./CLAUDE.md).
