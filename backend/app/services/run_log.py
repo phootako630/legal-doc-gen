@@ -16,6 +16,9 @@ from app.config import RUN_LOG_ENABLED, RUN_LOG_PATH
 
 # 当前协程所属的 run_id；runner 入口设置，节点/LLM 调用无需逐层传参
 _run_id: ContextVar[str | None] = ContextVar("run_id", default=None)
+# 当前请求的登录账号；登录中间件设置，请求内启动的后台分析任务（create_task 复制上下文）一并继承。
+# 只记账号名，用于统计谁在什么时候用了几次，不涉及案件内容
+_user: ContextVar[str | None] = ContextVar("user", default=None)
 _lock = threading.Lock()
 # 每个 run 最近一次交给律师的字段值（仅内存，用来在 generate 时算律师改动），上限防泄漏
 _last_fields: dict[str, dict[str, Any]] = {}
@@ -24,6 +27,10 @@ _LAST_FIELDS_CAP = 50
 
 def set_run_id(run_id: str | None) -> None:
     _run_id.set(run_id)
+
+
+def set_user(user: str | None) -> None:
+    _user.set(user)
 
 
 def log_event(event: str, run_id: str | None = None, **data: Any) -> None:
@@ -36,6 +43,9 @@ def log_event(event: str, run_id: str | None = None, **data: Any) -> None:
         "event": event,
         **data,
     }
+    user = _user.get()
+    if user is not None:
+        record["user"] = user
     try:
         line = json.dumps(record, ensure_ascii=False, default=str)
         with _lock:
