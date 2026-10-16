@@ -16,7 +16,7 @@ MATCHES = ("text", "contains", "amount", "date", "absent")
 # 结论
 CORRECT = "正确"
 WRONG = "错误"
-MISSING = "缺失"  # 应有值，系统留空（起诉状里是【待补充】）
+MISSING = "缺失"  # 应有值，系统留空或值里带【待补充】（起诉状里是【待补充】）
 PENDING = "待定"  # 标准值待律师确认，不计分
 
 _FULL_DATE_RE = re.compile(r"^\s*\d{4}\s*[年\-/.]\s*\d{1,2}\s*[月\-/.]\s*\d{1,2}\s*[日号]?\s*$")
@@ -50,8 +50,14 @@ def _norm_text(raw: Any) -> str:
     return re.sub(r"\s+", "", text)
 
 
+# 派生值里拼着【待补充】（如「【待补充】人民法院」）：起诉状里同样是待补充，算缺失而不是取错
+_TO_FILL = "【待补充】"
+
+
 def _blank(raw: Any) -> bool:
-    return raw is None or (isinstance(raw, str) and not raw.strip())
+    if raw is None:
+        return True
+    return isinstance(raw, str) and (not raw.strip() or _TO_FILL in raw)
 
 
 def parse_spec(spec: Any) -> dict[str, Any]:

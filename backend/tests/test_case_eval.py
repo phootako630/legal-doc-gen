@@ -35,6 +35,8 @@ def _node(value, src="《审批表》"):
         (None, "张三", WRONG),
         ("苏州市吴江区", None, MISSING),
         ("苏州市吴江区", "", MISSING),
+        ("昆山市人民法院", "【待补充】人民法院", MISSING),  # 拼着待补充的派生值算缺失，不算取错
+        (None, "【待补充】", CORRECT),
         ({"pending": "确认单第 1 题"}, "随便", PENDING),
     ],
 )
