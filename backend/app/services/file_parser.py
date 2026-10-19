@@ -33,7 +33,6 @@ _TYPE_KEYWORDS: dict[str, str] = {
 # 顺序有意义：审批表正文里也有「合同」二字，须先判审批表。
 _CONTENT_KEYWORDS: list[tuple[str, str]] = [
     ("审批表", "审批表"),
-    ("补充协议", "补充协议"),
     ("检验报告", "验收报告"),
     ("验收报告", "验收报告"),
     ("合同", "合同"),
@@ -41,10 +40,27 @@ _CONTENT_KEYWORDS: list[tuple[str, str]] = [
 _CONTENT_HEAD_CHARS = 300  # 只看开头：正文后文提到「验收报告」「合同」不代表文件类型
 
 
+def _title_lines(text: str) -> str:
+    """
+    标题区：开头最多 3 个非空短行，遇到「甲方：」这类当事人行或「第一条」就停。补充协议只按标题
+    判断——主合同正文写「未尽事宜，双方另行签订补充协议」不能把整份合同当成补充协议（#53 复审）。
+    """
+    title = []
+    for line in (ln.strip() for ln in text.splitlines()):
+        if not line:
+            continue
+        if len(title) >= 3 or len(line) > 40 or re.search(r"[:：]|^第[一二三四五六七八九十\d]+[条章]", line):
+            break
+        title.append(line)
+    return "".join(title)
+
+
 def _identify_type(filename: str, text: str = "") -> str:
     for keyword, doc_type in _TYPE_KEYWORDS.items():
         if keyword in filename:
             return doc_type
+    if "补充协议" in _title_lines(text):
+        return "补充协议"
     head = re.sub(r"\s+", "", text)[:_CONTENT_HEAD_CHARS]
     for keyword, doc_type in _CONTENT_KEYWORDS:
         if keyword in head:

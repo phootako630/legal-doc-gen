@@ -299,3 +299,54 @@ def test_daily_rate_with_various_delay_words_is_periodic(word):
     )
     assert fields["interest_rate_basis"]["value"] == "每日万分之二的标准"
     assert not fields.get("penalty_amount") or fields["penalty_amount"]["value"] in (None, "")
+
+
+# ── #53 复审 ─────────────────────────────────────────────────────────────────
+def test_unanchored_party_keeps_review_mark_in_complaint():
+    # 合同当事人原文未找到：派生名称仍要带待核实，起诉状里标黄
+    fields = _f(contract_type="安装合同", plaintiff_branch_raw="集团/甲分公司")
+    fields["contract_party_b"] = {"value": HQ + "乙分公司", "src": "《合同》盖章页（原文未找到，待核实）"}
+    fields["defendant_name"] = {"value": "某置业有限公司", "src": "《审批表》"}
+    fields["contract_party_a"] = {"value": "虚构买方有限公司", "src": "《合同》盖章页（原文未找到，待核实）"}
+    apply_derived_fields(fields)
+    assert "原文未找到" in fields["plaintiff_name_final"]["src"]
+    assert "原文未找到" in fields["defendant_name"]["src"]
+    text = render_complaint(fields, template="原告：{{plaintiff_name_final}}\n被告：{{defendant_name}}")
+    assert "原告：⚠️ 待核实：" in text and "被告：⚠️ 待核实：" in text
+
+
+def test_main_contract_mentioning_supplement_is_still_contract():
+    text = "电梯安装合同\n甲方：某公司\n乙方：某电梯公司\n第一条 本合同未尽事宜，双方另行签订补充协议。"
+    assert _identify_type("001.pdf", text) == "合同"
+    assert _identify_type("002.pdf", "某某项目\n电梯设备买卖合同补充协议\n甲方：某公司") == "补充协议"
+
+
+@pytest.mark.parametrize(
+    "clause",
+    [
+        "甲方未按时返还安装费质保金的，应按同期银行存款利率支付逾期返还期间的利息。",
+        "甲方逾期返还工程保修款的，按银行同期存款利率支付利息。",
+    ],
+)
+def test_retention_return_with_price_prefix_is_dropped(clause):
+    fields = {
+        "breach_clause_text": {"value": clause, "src": "《合同》"},
+        "breach_interest_rate_text": {"value": "同期银行存款利率", "src": "《合同》"},
+    }
+    apply_rule_guards(fields)
+    assert fields["breach_interest_rate_text"]["value"] is None
+
+
+@pytest.mark.parametrize(
+    ("handover", "expected"),
+    [
+        ("设备移交甲方后，由甲方委托物业公司负责日常保养", "已全部移交被告"),
+        ("本合同电梯无需移交物业，由甲方自行管理", "已全部移交被告"),
+        ("验收合格后乙方将电梯交付给甲方指定的物业公司", "已全部移交物业"),
+    ],
+)
+def test_handover_recipient_not_just_mention_of_property(handover, expected):
+    fields = apply_derived_fields(
+        _f(payment_clause_text="验收合格后支付全部价款", handover_clause_text=handover)
+    )
+    assert fields["handover_text"]["value"] == expected

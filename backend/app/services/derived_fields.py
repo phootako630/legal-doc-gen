@@ -157,9 +157,20 @@ def _plausible_plaintiff(name: str) -> bool:
     )
 
 
-def _ocr_note(fields: dict, key: str) -> str:
+def _source_risk_note(fields: dict, key: str, label: str) -> str:
+    """
+    把上游字段的风险标记带到派生值上：原文未找到 / OCR 识别 / 其他待核实。
+    派生的原告、被告名称直接写进起诉状，不能因为换了一个 src 就丢掉这些提示（宁缺勿造）。
+    """
     src = str(_node(fields, key).get("src") or "")
-    return "（合同为扫描件，OCR识别，请核实）" if "OCR" in src else ""
+    notes = []
+    if "原文未找到" in src:
+        notes.append(f"{label}原文未找到，待核实")
+    if "OCR" in src or "扫描" in src:
+        notes.append("合同为扫描件，OCR识别，请核实")
+    if not notes and "待核实" in src:
+        notes.append(f"{label}待核实")
+    return f"（{'；'.join(notes)}）" if notes else ""
 
 
 def plaintiff_name_field(fields: dict) -> dict | None:
@@ -184,7 +195,11 @@ def plaintiff_name_field(fields: dict) -> dict | None:
         src = "按律师规则：以合同盖章页乙方为准"
         if derived and derived[0] != party_b:
             src += f"（审批表「合同分公司」推出「{derived[0]}」，仅作参考）"
-        return {"value": party_b, "src": src + _ocr_note(fields, "contract_party_b"), "channel": "text"}
+        return {
+            "value": party_b,
+            "src": src + _source_risk_note(fields, "contract_party_b", "合同乙方"),
+            "channel": "text",
+        }
 
     if derived is None:
         if not party_b:
@@ -192,7 +207,8 @@ def plaintiff_name_field(fields: dict) -> dict | None:
         # 审批表「合同分公司」未填（独立工程公司签约时常见）：以合同盖章页乙方为准（第三轮第 12 题）
         return {
             "value": party_b,
-            "src": "按律师规则：审批表「合同分公司」未识别，取自合同盖章页乙方 / 安装方名称",
+            "src": "按律师规则：审批表「合同分公司」未识别，取自合同盖章页乙方 / 安装方名称"
+            + _source_risk_note(fields, "contract_party_b", "合同乙方"),
             "channel": "text",
         }
     name, uncertain = derived
@@ -209,7 +225,8 @@ def plaintiff_name_field(fields: dict) -> dict | None:
     if party_b and party_b != name:
         return {
             "value": party_b,
-            "src": f"按律师规则：以合同盖章页乙方名称为准；与审批表推出的「{name}」不一致，待核实",
+            "src": f"按律师规则：以合同盖章页乙方名称为准；与审批表推出的「{name}」不一致，待核实"
+            + _source_risk_note(fields, "contract_party_b", "合同乙方"),
             "channel": "text",
         }
     if party_b:
@@ -247,7 +264,7 @@ def defendant_name_field(fields: dict) -> dict | None:
             src += f"；与审批表「{approval_c}」不一致，待核实"
     return {
         "value": party_a,
-        "src": src + _ocr_note(fields, "contract_party_a"),
+        "src": src + _source_risk_note(fields, "contract_party_a", "合同甲方"),
         "channel": "text",
         "approval_value": approval,
         "approval_src": approval_src,
@@ -428,6 +445,15 @@ def elevator_qty_field(fields: dict) -> dict | None:
     return node
 
 
+# 移交 / 交付的接收方是物业：「移交甲方指定的物业单位」「交付给物业公司」。接收方须在同一分句内
+# 紧跟动词（不跨逗号），「移交甲方后，由物业负责保养」的接收方是甲方；「不 / 无需移交物业」不算
+_HANDOVER_TO_PROPERTY_RE = re.compile(r"(?<![不无未])(?<!无需)(?<!无须)(?:移交|交付|交接)(?:给|予|至|于)?[^，,。；;、]{0,8}物业")
+
+
+def _handover_to_property(text: str) -> bool:
+    return bool(_HANDOVER_TO_PROPERTY_RE.search(text))
+
+
 def handover_text_field(fields: dict) -> dict:
     """
     「案涉电梯___，被告应按合同约定支付至…」：
@@ -436,7 +462,7 @@ def handover_text_field(fields: dict) -> dict:
     """
     clause = _str_value(fields, "payment_clause_text") or ""
     handover = _str_value(fields, "handover_clause_text") or ""
-    to_property = "物业" in handover or bool(re.search(r"移交[^。；;]{0,12}物业", clause))
+    to_property = any(_handover_to_property(t) for t in (handover, clause))
     target = "物业" if to_property else "被告"
     basis = "合同约定移交物业" if to_property else (
         "合同未约定移交物业" if handover or clause else "未识别到移交条款，按移交被告写，待核实"

@@ -121,7 +121,14 @@ def _has_value(fields: dict, key: str) -> bool:
 
 
 _RETENTION_RETURN_RE = re.compile(r"返还[^。；;]{0,6}(保修|质保)|(保修|质保)(款|金)[^。；;]{0,12}返还")
-_CONTRACT_PRICE_RE = re.compile(r"合同价款|合同款|工程款|安装费|货款|进度款")
+# 独立的「逾期支付合同价款」义务：动词是支付 / 付款，对象是价款。只出现价款名称不算——
+# 「未按时返还安装费质保金」里的「安装费」只是质保金的前缀（#53 复审）
+_PRICE = r"(?:合同价款|合同款|工程款|安装费|货款|进度款|价款)"
+_CONTRACT_PRICE_RE = re.compile(
+    rf"(?:逾期|未按[时期约]|迟延|延期|延迟|拖欠|未及时)(?:支付|付款|付清)[^。；;，,]{{0,8}}{_PRICE}"
+    rf"|(?:支付|付款)[^。；;，,]{{0,4}}{_PRICE}[^。；;，,]{{0,6}}(?:逾期|延期|迟延)"
+    rf"|(?:拖欠|欠付){_PRICE}"
+)
 
 
 def apply_rule_guards(fields: dict) -> None:
