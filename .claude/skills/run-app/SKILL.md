@@ -32,6 +32,7 @@ description: 启动起诉状系统（FastAPI 后端 + Vite 前端），用 Playw
    node $SKILL/scripts/drive.cjs "$SCRATCH/run-1" "$SCRATCH/case/诉讼审批表.pdf" "$SCRATCH/case/电梯安装合同.pdf" "$SCRATCH/case/电梯监督检验报告.pdf"
    ```
    - 遇到断点（律师确认弹窗）默认截图后停止；加 `--resume` 则按页面默认值提交并继续。
+   - 上传后先停在「材料确认」（`02b-materials.png`，看每份文件识别成了什么类型），脚本按识别结果直接确认开始分析。
    - 输出：`01-upload.png` … `06-preview-full.png`、`04-pending-N.png`、`analyze.json`（字段与校验结果）、`complaint.txt`（生成的诉状全文，已去掉填空标记）。
 
 3. **看截图**：用 Read 打开 png 逐张检查。空白页 = 没启动成功。把需要给用户看的截图用 SendUserFile 发出。

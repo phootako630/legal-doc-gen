@@ -4,14 +4,16 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Progress } from '@/components/ui/progress';
 import { FileDropzone } from './FileDropzone';
 import { FileList } from './FileList';
+import { MaterialReview } from './MaterialReview';
+import { UploadProgressPanel } from './UploadProgressPanel';
 import { BranchTableNotice } from '@/components/branches/BranchTableNotice';
 import { uploadFiles, fetchUploadProgress } from '@/lib/api';
 import { newRequestKey } from '@/lib/request-key';
-import type { UploadResponse, UploadProgress } from '@/lib/types';
-import { Globe, Loader2, TriangleAlert, ArrowRight, ScanText } from 'lucide-react';
+import { materialStatus, withDetectedTypes } from '@/lib/materials';
+import type { DocType, UploadResponse, UploadProgress } from '@/lib/types';
+import { Globe, Loader2, TriangleAlert, ArrowRight } from 'lucide-react';
 
 interface UploadStepProps {
   onDone: (result: UploadResponse, internetAllowed: boolean) => void;
@@ -72,18 +74,37 @@ export function UploadStep({ onDone, onOpenBranches }: UploadStepProps) {
       const progressId = newRequestKey();
       progressIdRef.current = progressId;
       const result = await uploadFiles(files, progressId);
-      // 即便 can_proceed 为 true，只要有文件解析失败（如 OCR 出错），也要先让律师看到，
-      // 否则失败会被无声吞掉——律师永远不知道某份文件其实没被处理
-      if (result.can_proceed && result.warnings.length === 0) {
-        onDone(result, internetAllowed);
-      } else {
-        setUploadResult(result);
-      }
+      // 上传后先停在材料确认：律师核对每份文件的类型（认错可改）、看到解析失败的文件，再开始分析
+      setUploadResult({ ...result, files: withDetectedTypes(result.files) });
     } catch (e) {
       setError(e instanceof Error ? e.message : '上传失败，请重试');
     } finally {
       setLoading(false);
     }
+  };
+
+  const changeType = (idx: number, type: DocType) =>
+    setUploadResult((r) =>
+      r
+        ? {
+            ...r,
+            files: r.files.map((f, i) => (i === idx ? { ...f, identified_type: type } : f)),
+          }
+        : r,
+    );
+
+  // 按律师确认后的类型重算材料是否齐全，再进入分析
+  const status = uploadResult ? materialStatus(uploadResult.files) : null;
+  const confirm = () => {
+    if (!uploadResult || !status) return;
+    onDone(
+      {
+        ...uploadResult,
+        can_proceed: status.canProceed,
+        missing_materials: status.missing,
+      },
+      internetAllowed,
+    );
   };
 
   return (
@@ -103,6 +124,8 @@ export function UploadStep({ onDone, onOpenBranches }: UploadStepProps) {
         <FileDropzone onFiles={handleNewFiles} />
 
         {files.length > 0 && <FileList files={files} onRemove={removeFile} />}
+
+        {uploadResult && <MaterialReview files={uploadResult.files} onChangeType={changeType} />}
 
         {/* 联网查询开关 */}
         <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-4 py-3.5">
@@ -124,43 +147,7 @@ export function UploadStep({ onDone, onOpenBranches }: UploadStepProps) {
           />
         </div>
 
-        {/* 上传处理进度：扫描件 OCR 显示真实页数进度条，普通解析显示不确定态 */}
-        {loading && (
-          <div className="flex flex-col gap-2.5 rounded-lg border border-border bg-muted/30 px-4 py-3.5">
-            <div className="flex items-center gap-2.5 text-sm">
-              {progress?.stage === 'OCR识别中' ? (
-                <ScanText className="h-4 w-4 shrink-0 text-primary" />
-              ) : (
-                <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" />
-              )}
-              <span className="font-medium">
-                {progress === null
-                  ? '正在上传文件…'
-                  : progress.stage === 'OCR识别中'
-                    ? `正在识别扫描件：${progress.filename ?? ''}`
-                    : `正在解析：${progress.filename ?? ''}`}
-              </span>
-              {progress !== null && progress.total_files > 1 && (
-                <span className="ml-auto text-xs text-muted-foreground tabular-nums">
-                  第 {progress.file_index}/{progress.total_files} 个文件
-                </span>
-              )}
-            </div>
-            {progress?.stage === 'OCR识别中' && progress.total_pages > 0 ? (
-              <>
-                <Progress
-                  value={Math.round((progress.done_pages / progress.total_pages) * 100)}
-                />
-                <p className="text-xs text-muted-foreground tabular-nums">
-                  已识别 {progress.done_pages}/{progress.total_pages} 页
-                  （扫描件逐页识别，页数较多时约需 1–2 分钟）
-                </p>
-              </>
-            ) : (
-              <Progress value={null} />
-            )}
-          </div>
-        )}
+        {loading && <UploadProgressPanel progress={progress} />}
 
         {/* 错误提示 */}
         {error && (
@@ -175,38 +162,12 @@ export function UploadStep({ onDone, onOpenBranches }: UploadStepProps) {
           <Alert variant="destructive" className="border-red-300 bg-red-50 text-red-900">
             <TriangleAlert className="h-4 w-4 text-red-600" />
             <AlertDescription>
-              <span className="font-semibold">以下文件处理失败，未被识别：</span>
+              <span className="font-semibold">以下文件处理失败，内容可能没有读到：</span>
               <ul className="mt-1 list-disc space-y-0.5 pl-5">
                 {uploadResult.warnings.map((w, i) => (
                   <li key={i}>{w}</li>
                 ))}
               </ul>
-              <button
-                type="button"
-                className="mt-1.5 font-medium underline underline-offset-2 hover:text-red-950"
-                onClick={() => onDone(uploadResult, internetAllowed)}
-              >
-                仍然继续
-              </button>
-            </AlertDescription>
-          </Alert>
-        )}
-
-        {/* 材料缺失警告（上传成功但材料不齐） */}
-        {uploadResult && !uploadResult.can_proceed && (
-          <Alert className="border-orange-200 bg-orange-50">
-            <TriangleAlert className="h-4 w-4 text-orange-500" />
-            <AlertDescription className="text-orange-800">
-              <span className="font-semibold">材料不完整：</span>
-              缺少{uploadResult.missing_materials.filter((m) => ['审批表', '合同'].includes(m)).join('、')}，
-              建议补充后再提交。
-              <button
-                type="button"
-                className="ml-2 font-medium underline underline-offset-2 hover:text-orange-900"
-                onClick={() => onDone(uploadResult, internetAllowed)}
-              >
-                仍然继续
-              </button>
             </AlertDescription>
           </Alert>
         )}
@@ -214,12 +175,10 @@ export function UploadStep({ onDone, onOpenBranches }: UploadStepProps) {
         {/* 提交 */}
         <div className="flex items-center justify-between border-t border-border pt-4">
           <p className="text-xs text-muted-foreground">
-            {files.length === 0
-              ? '尚未选择文件'
-              : `已选择 ${files.length} 个文件`}
+            {files.length === 0 ? '尚未选择文件' : `已选择 ${files.length} 个文件`}
           </p>
           <Button
-            onClick={handleSubmit}
+            onClick={uploadResult ? confirm : handleSubmit}
             disabled={loading || files.length === 0}
             className="min-w-32 gap-2"
           >
@@ -230,7 +189,11 @@ export function UploadStep({ onDone, onOpenBranches }: UploadStepProps) {
               </>
             ) : (
               <>
-                开始分析
+                {!uploadResult
+                  ? '上传并识别'
+                  : status?.canProceed
+                    ? '确认材料，开始分析'
+                    : '材料不全，仍然分析'}
                 <ArrowRight className="h-4 w-4" />
               </>
             )}

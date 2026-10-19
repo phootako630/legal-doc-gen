@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import UploadFile
 
 from app.config import SCANNED_PDF_TEXT_THRESHOLD
 from app.services import file_store
+
+# 文件类型取值（上传页律师可改；分析接口按此校验）
+DocType = Literal["审批表", "合同", "补充协议", "验收报告", "战略合同", "未知"]
 
 # 文件名关键词 → 文件类型（简单规则，后续可升级为 LLM 判断）
 # 顺序有意义（按插入顺序匹配）：《XX合同补充协议》《合同修改单》也含「合同」，须先判补充协议
@@ -21,6 +24,12 @@ _TYPE_KEYWORDS: dict[str, str] = {
     "审批": "审批表",
     # 律师反馈：审批表常以「诉讼流程」命名，扫描件读不到正文时只能靠文件名
     "诉讼流程": "审批表",
+    # 律师反馈（徐州苏宁）：主合同写「争议解决……按战略合同执行」，条款在另一份战略 / 框架合同里。
+    # 单独成一类：不当主合同取当事人、签约日期、台数，只在主合同引用时去里面找条款
+    "战略合同": "战略合同",
+    "战略合作": "战略合同",
+    "框架合同": "战略合同",
+    "框架协议": "战略合同",
     "合同": "合同",
     "验收": "验收报告",
     # 实务中验收材料多为《电梯监督检验报告》，与验收报告归为同一类（见 CLAUDE.md）
@@ -55,12 +64,15 @@ def _title_lines(text: str) -> str:
     return "".join(title)
 
 
-def _identify_type(filename: str, text: str = "") -> str:
+def _identify_type(filename: str, text: str = "") -> DocType:
     for keyword, doc_type in _TYPE_KEYWORDS.items():
         if keyword in filename:
             return doc_type
-    if "补充协议" in _title_lines(text):
+    title = _title_lines(text)
+    if "补充协议" in title:
         return "补充协议"
+    if re.search(r"战略合同|战略合作|框架合同|框架协议", title):
+        return "战略合同"
     head = re.sub(r"\s+", "", text)[:_CONTENT_HEAD_CHARS]
     for keyword, doc_type in _CONTENT_KEYWORDS:
         if keyword in head:

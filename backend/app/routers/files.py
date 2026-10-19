@@ -4,7 +4,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
 from app.services import upload_progress
-from app.services.file_parser import parse_file
+from app.services.file_parser import DocType, parse_file
 
 router = APIRouter()
 
@@ -16,7 +16,7 @@ class PageText(BaseModel):
 
 class ParsedFile(BaseModel):
     filename: str
-    identified_type: str  # '审批表' | '合同' | '验收报告' | '未知'
+    identified_type: DocType  # 系统识别的类型；上传页律师可改
     text: str
     is_scanned: bool
     page_count: int

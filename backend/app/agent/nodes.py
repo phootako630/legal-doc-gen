@@ -257,6 +257,17 @@ async def validate_node(state: GraphState) -> dict:
     }
 
 
+def _clause_ocr_targets(files: list[dict]) -> list[dict]:
+    """
+    按需 OCR 找条款的扫描件：主合同在前，战略 / 框架合同排在后面（主合同找不全条款时才读到它）。
+    战略合同从前与主合同同归「合同」、按上传顺序读，单独成类后仍保留这条兜底路径。
+    """
+    scanned = [f for f in files if f.get("is_scanned") and f.get("file_id")]
+    return [f for f in scanned if f.get("identified_type") == "合同"] + [
+        f for f in scanned if f.get("identified_type") == "战略合同"
+    ]
+
+
 def _is_missing(fields: dict, key: str) -> bool:
     """字段是否缺失（value 为 None 或空串）。"""
     node = fields.get(key)
@@ -337,26 +348,14 @@ async def ocr_augment_node(state: GraphState) -> dict:
     if not missing and not need_signature and not need_warranty:
         return {}
 
-    contracts = [
-        f
-        for f in state.get("files", [])
-        if f.get("is_scanned")
-        and f.get("identified_type") == "合同"
-        and f.get("file_id")
-    ]
+    contracts = _clause_ocr_targets(state.get("files", []))
     if not contracts:
         return {}
 
     fields = copy.deepcopy(fields)
     files = copy.deepcopy(state.get("files", []))
     # 对深拷贝后的同名文件对象操作（保证返回的 files 带上 OCR 结果）
-    contracts = [
-        f
-        for f in files
-        if f.get("is_scanned")
-        and f.get("identified_type") == "合同"
-        and f.get("file_id")
-    ]
+    contracts = _clause_ocr_targets(files)
 
     budget = AGENT_MAX_OCR_PAGES
     did_ocr = False
