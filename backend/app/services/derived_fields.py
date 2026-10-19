@@ -25,6 +25,7 @@ from datetime import date, datetime, timedelta, timezone
 from app.config import PLAINTIFF_HQ_NAME, PLAINTIFF_HQ_REP_TITLE, PLAINTIFF_PHONE
 from app.services.branch_registry import lookup_plaintiff, resolve_plaintiff_name
 from app.services.branch_table import normalize_name
+from app.services.payment_nodes import PaymentStage, match_cumulative, owed_stages, parse_payment_stages
 from app.services.validators import parse_amount, parse_date, parse_qty
 
 # 逾期付款利息的常规话术（诉状中"按照……计至实际付清之日止"）
@@ -1525,8 +1526,60 @@ def retention_is_guarantee(fields: dict) -> bool:
     )
 
 
-def payable_ratio_field(fields: dict) -> dict:
-    """「被告应按合同约定支付至__合同款」：无质保金 100%；有质保金由 retention 断点问律师。"""
+# 「支付至」比例由付款节点匹配得出时的来源前缀：retention 断点据此不再问律师
+PAYABLE_FROM_STAGES = "按律师规则：付款节点"
+
+
+def _payment_progress(fields: dict) -> tuple[list[PaymentStage], float, float] | None:
+    """付款节点 + 已付比例 + 「已付 + 欠款」比例（%）；节点解析不出或金额缺失时返回 None。"""
+    total, paid, unpaid = _amount_parts(fields)
+    stages = parse_payment_stages(_str_value(fields, "payment_clause_text"))
+    if not stages or not total or paid is None or unpaid is None:
+        return None
+    return stages, paid / total * 100, (paid + unpaid) / total * 100
+
+
+def _stage_label(fields: dict, no: str) -> str:
+    """节点编号 → 起诉状写法：多级编号写「第7.6条」；一级编号挂在条款位置后（「第二十八章第1项」）。"""
+    if "." in no or "．" in no:
+        return f"第{no}条"
+    loc = _str_value(fields, "payment_clause_location") or ""
+    loc = re.sub(r"[（(].*$", "", loc).strip()
+    return f"{loc}第{no}项" if loc.startswith("第") else f"第{no}项"
+
+
+def payable_ratio_unmatched_note(fields: dict) -> str | None:
+    """「已付 + 欠款」占比与付款节点都对不上时给律师的提示（校验面板与出处共用）；对得上或无从判断返回 None。"""
+    progress = _payment_progress(fields)
+    if progress is None:
+        return None
+    stages, _, due = progress
+    if match_cumulative(stages, due):
+        return None
+    cums = "、".join(f"{s.end:g}%" for s in stages)
+    return (
+        f"已付 + 欠款占合同总价 {_plain_number(due)}%，与付款条款各节点的累计比例（{cums}）都对不上："
+        "可能调过价、实际台数与合同不同或质保金到期时间不统一，请律师手动核对"
+    )
+
+
+def payable_ratio_field(fields: dict) -> dict | None:
+    """
+    「被告应按合同约定支付至__合同款」（确认单（五）第 3 题、律师反馈）：
+    先用「已付 + 欠款」占合同总价的比例匹配付款条款的累计节点，对上即取该比例；
+    都对不上交律师核对（留空）。付款条款解析不出时按质保金：无质保金 100%，有质保金由 retention 断点问律师。
+    """
+    progress = _payment_progress(fields)
+    if progress is not None:
+        stages, _, due = progress
+        hit = match_cumulative(stages, due)
+        if hit:
+            label = _stage_label(fields, hit.no) if hit.no else "付款条款"
+            return {
+                "value": f"{hit.end:g}%",
+                "src": f"{PAYABLE_FROM_STAGES}：已付 + 欠款占合同总价 {_plain_number(due)}%，与{label}付至 {hit.end:g}% 相符",
+            }
+        return {"value": None, "src": f"{payable_ratio_unmatched_note(fields)}，待核实"}
     ratio = parse_percent(_str_value(fields, "retention_ratio"))
     if ratio and retention_is_guarantee(fields):
         return {
@@ -1538,6 +1591,62 @@ def payable_ratio_field(fields: dict) -> dict:
     if ratio is None:
         return {"value": "100%", "src": "未识别到质保金约定，待核实"}
     return {"value": "100%", "src": f"合同质保金 {ratio:g}%，请确认支付比例，待核实"}
+
+
+def _owed_payment_stages(fields: dict) -> list[PaymentStage] | None:
+    """欠款对应的付款节点；「已付 + 欠款」与节点对不上时不引用（返回 None，退回归纳句）。"""
+    progress = _payment_progress(fields)
+    if progress is None:
+        return None
+    stages, paid, due = progress
+    if not match_cumulative(stages, due):
+        return None
+    return owed_stages(stages, paid, due) or None
+
+
+def payment_cite_location_field(fields: dict) -> dict | None:
+    """
+    「依据合同___约定」：只写欠款对应的付款节点，条款号写到该项（确认单（五）第 3 题，如「第7.6条、第7.8条」）。
+    匹配不上付款节点时沿用抽取的付款条款位置。
+    """
+    owed = _owed_payment_stages(fields)
+    labels = list(dict.fromkeys(_stage_label(fields, s.no) for s in owed if s.no)) if owed else []
+    # 一级编号共用条款位置前缀：「第二十八章第1项、第2项」，不重复写「第二十八章」
+    prefix = re.match(r"(.*)第[^第]+项$", labels[0]).group(1) if labels and labels[0].endswith("项") else ""
+    if prefix:
+        labels = [labels[0]] + [lb[len(prefix):] if lb.startswith(prefix) else lb for lb in labels[1:]]
+    if not labels:
+        # 匹配不上，或付款条款本身没有分项编号：沿用抽取的付款条款位置
+        node = _node(fields, "payment_clause_location")
+        return dict(node) if node.get("value") else None
+    return {
+        "value": "、".join(labels),
+        "src": "按律师规则：欠款对应的付款节点" + _source_risk_note(fields, "payment_clause_text", "付款条款"),
+    }
+
+
+_STAGE_TITLE_RE = re.compile(r"^[^，,。；;：:]{1,12}[：:]")
+
+
+def payment_cite_text_field(fields: dict) -> dict | None:
+    """
+    「依据合同第X条约定，___。」：欠款对应的付款节点照抄原文、加引号（确认单（五）第 3 题选 A）；
+    匹配不上付款节点时沿用 AI 归纳的付款条款（待核实）。
+    """
+    owed = _owed_payment_stages(fields)
+    if not owed:
+        for key in ("payment_clause_summary", "payment_clause_text"):  # 没有归纳时退回原文（确认单第 8 题）
+            node = _node(fields, key)
+            if node.get("value"):
+                return dict(node)
+        return None
+    # 去掉节点开头的小标题（「结算款及质保保函：」「验收款：」），其余照抄
+    texts = list(dict.fromkeys(_STAGE_TITLE_RE.sub("", s.text).rstrip("。.") for s in owed))
+    return {
+        "value": "“" + "；".join(texts) + "”",
+        "src": "按律师规则：照抄欠款对应的付款节点原文，待核实"
+        + _source_risk_note(fields, "payment_clause_text", "付款条款"),
+    }
 
 
 # ── 统一入口 ──────────────────────────────────────────────────────────────────
@@ -1576,6 +1685,8 @@ _DERIVERS: list[tuple[str, Callable[[dict], dict | None], bool]] = [
     ("jurisdiction_text", jurisdiction_text_field, False),
     ("addressee", addressee_field, False),
     ("payable_ratio", payable_ratio_field, False),
+    ("payment_cite_location", payment_cite_location_field, True),
+    ("payment_cite_text", payment_cite_text_field, True),
     # 依赖 payable_ratio（核对 总价 × 比例 是否等于 已付 + 欠款），放在它后面
     ("payable_amount", payable_amount_field, True),
 ]

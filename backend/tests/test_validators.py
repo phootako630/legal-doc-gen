@@ -177,5 +177,5 @@ def test_run_all_checks_on_extracted_fields():
     }
     checks = run_all_checks(fields)
     assert all(isinstance(c, ValidationCheck) for c in checks)
-    assert all(c.passed for c in checks)
+    assert all(c.passed for c in checks if c.applicable)
     assert not any(c.is_conflict for c in checks)

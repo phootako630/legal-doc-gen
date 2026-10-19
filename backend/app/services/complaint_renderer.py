@@ -133,6 +133,7 @@ def _format_arabic(num: float) -> str:
 _CLAUSE_TEXT_KEYS = {
     "payment_clause_text",
     "payment_clause_summary",
+    "payment_cite_text",
     "dispute_clause_text",
 }
 _TRAILING_PUNCT = "。；;，,.、 \n"

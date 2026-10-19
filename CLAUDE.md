@@ -279,7 +279,8 @@ value=null                    → ❌ 缺失
   - 被告住址 / 法定代表人：一律用工商登记信息（企查查、爱企查、启信宝），审批表地址不用（`extraction.apply_rule_guards` 清空）；审批表买方地址 / 合同盖章页甲方地址存为 `defendant_address_ref`，不写进起诉状，只在约定被告所在地（或未约定地点）管辖、工商住址还没填时推断法院，管辖句写明「【系统按被告地址「…」推断，待核实】」
   - 联系人：只取审批表「联系人」，不取「甲方收款联系人」
   - 验收日期：检验报告的批准 / 盖章日期，多份取最晚一批。报告是扫描件（常为手机拍照）时，还有没读过的扫描报告 `report_ocr` 节点就逐页 OCR（上限 `AGENT_MAX_REPORT_OCR_PAGES`），按全部报告汇总（文本报告与扫描报告的批准日期取最晚，台数 = 文本报告计数 + 扫描报告首页计数；预算用尽或有页失败时出处注明「可能不全」，扫描计数的 OCR 待核实提示带到起诉状台数），用代码取「批准」后的日期、第一份「安装地点」，并按报告首页（「设备品种」栏）数台数——照片常裁掉报告编号，按编号去重会少数（`services/acceptance_report.py`；OCR 输出的 markdown / HTML 表格先统一成纯文本）；仍读不到时退回审批表「政府验收时间」，标待核实
-  - 付款条款：原文（`payment_clause_text`）+ AI 归纳（`payment_clause_summary`，标「AI 归纳，待核实」），起诉状默认写归纳句
+  - 付款条款：原文（`payment_clause_text`）+ AI 归纳（`payment_clause_summary`，标「AI 归纳，待核实」）。起诉状只引用欠款对应的付款节点，条款号写到该项，照抄原文、加引号（确认单（五）第 3 题选 A）：`services/payment_nodes.py` 按编号拆节点，比例只认「支付……X%」（本期）与「支付至 / 付至……X%」（累计），保函百分比、「付到85%时」抵扣条件不计；「已付 + 欠款」占合同总价的比例对上某个累计节点时，引用已付比例到该比例之间的节点（`payment_cite_location`「第7.6条、第7.8条」，一级编号挂条款位置「第二十八章第1项、第2项」；`payment_cite_text`，去掉「验收款：」这类小标题，待核实）；节点拆不出、对不上时退回原条款位置 + AI 归纳句（没有归纳时写原文）
+  - 支付至比例（`payable_ratio`）：先用「已付 + 欠款」占合同总价的比例匹配付款节点累计比例（律师反馈：如付至 95%），对上即取该比例、`retention` 节点不再暂停；都对不上（如算出 85%、节点为 5%-10%-70%-95%-100%）留【待补充】，出处与校验面板（`payment_progress`，琥珀色）提醒律师：可能调过价、实际台数与合同不同或质保金到期时间不统一，请手动核对；节点拆不出时按质保金规则（见下）
   - 诉请金额 = 审批表「未付款金额」。质保金：合同有质保金时 `retention` 节点暂停，附质保金条款原文与审批表未付质保金，按分期比例给出选项（如 5% → 100% / 95%；满一年 2%、满二年 3% → 100% / 97% / 95%），律师选定「支付至 X% 合同款」；条款写的只是乙方另开银行质保保函（须正向写明「乙方……开具 / 提供……保函」，且无否定保函、无「保函后支付」、无「质保金」/ 预留 / 扣留 / 返还等现金质保写法，`derived_fields.retention_is_guarantee`；拿不准仍问律师）时不暂停，按支付至 100%（待核实）
   - 移交：合同约定移交（甲方指定的）物业 / 物业单位的写「已全部移交物业」，否则写「已全部移交被告」（确认单（五）第 6 题，`handover_clause_text` / 付款条款）；合同付款条件含「结算」才加「并办理结算」（`handover_text`）
   - 应付金额：「被告应按合同约定支付至X%合同款¥…元」写出金额 = 已付 + 欠款（`payable_amount`，确认单（五）第 5 题），支付至的比例 × 合同总价与之不等时标待核实
@@ -384,6 +385,7 @@ legal-doc-app/
 │   │   │   ├── branch_table.py      # 原告信息表：Excel 解析/校验/变更比对/存档回退
 │   │   │   ├── branch_registry.py   # 按原告名称查信息表（信用代码/负责人/住址）
 │   │   │   ├── equipment_list.py    # 合同设备清单中 VGE 家用电梯计数
+│   │   │   ├── payment_nodes.py     # 付款条款拆节点、累计比例、匹配「已付 + 欠款」
 │   │   │   ├── confidence.py        # ③ 可信度评分
 │   │   │   ├── anchoring.py         # 值回原文命中/定位
 │   │   │   ├── auth_store.py        # 账号与会话（SQLite，scrypt 哈希；令牌只存摘要）
@@ -575,7 +577,9 @@ export interface ExtractedFields {
   interest_rate_basis?: FieldValue;   // 派生：逾期利息计算标准
   court_district?: FieldValue;        // 派生：管辖法院辖区
   contract_type?: FieldValue;         // 审批表「合同类型」
-  payment_clause_summary?: FieldValue; // AI 归纳的付款条款（写入起诉状）
+  payment_clause_summary?: FieldValue; // AI 归纳的付款条款
+  payment_cite_location?: FieldValue; // 派生：欠款对应的付款节点条款号
+  payment_cite_text?: FieldValue;     // 派生：欠款对应的付款节点原文（写入起诉状）
   retention_ratio?: FieldValue;       // 质保金比例
   payable_ratio?: FieldValue;         // 派生：应付至合同款比例
   jurisdiction_text?: FieldValue;     // 派生：管辖段落
@@ -716,7 +720,9 @@ export const fieldNameMap: Record<string, string> = {
   interest_rate_basis: '逾期利息计算标准',
   court_district: '管辖法院（辖区）',
   contract_type: '合同类型',
-  payment_clause_summary: '付款条款（归纳，写入起诉状）',
+  payment_clause_summary: '付款条款（AI 归纳）',
+  payment_cite_location: '引用的付款节点（写入起诉状）',
+  payment_cite_text: '付款节点原文（写入起诉状）',
   retention_ratio: '质保金比例',
   payable_ratio: '应付至合同款比例',
   jurisdiction_text: '管辖段落',
@@ -789,6 +795,8 @@ export const reviewFieldKeys: string[] = [
   'retention_unpaid_amount',
   'payable_ratio',
   'handover_text',
+  'payment_cite_location',
+  'payment_cite_text',
   'payment_clause_location',
   'payment_clause_summary',
   'payment_clause_text',
