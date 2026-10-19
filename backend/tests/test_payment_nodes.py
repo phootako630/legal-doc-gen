@@ -138,6 +138,10 @@ def test_guarantee_under_retention_heading_is_not_a_payment():
     # 同一节点里保函之外还有真实付款义务时照常解析
     real = "1、支付合同总价的95%；2、乙方提交合同总价5%的银行保函后15日内甲方支付合同总价的5%。"
     assert [s.end for s in parse_payment_stages(real)] == [95, 100]
+    # 余款在前、保函只是付款前提的写法也照常解析
+    remainder = "1、验收后甲方向乙方支付至合同总价的95%；2、余款5%在甲方收到乙方银行质保保函后支付。"
+    assert [s.end for s in parse_payment_stages(remainder)] == [95, 100]
+    assert apply_derived_fields(_case(remainder, 1000000, 700000, 250000))["payable_ratio"]["value"] == "95%"
 
 
 def test_matched_ratio_keeps_source_risk_in_complaint():

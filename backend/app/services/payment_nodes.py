@@ -54,6 +54,8 @@ def _segments(text: str) -> list[tuple[str, str]]:
     return out
 
 
+# 百分比后紧跟「（的）……保函」：比例说的是保函金额
+_GUARANTEE_PCT_RE = re.compile(r"(?:的)?[^，,；;。在后]{0,10}?保函")
 # 违约金 / 利息的百分比（「逾期支付的，按欠款的0.05%支付违约金」）不是付款节点
 _PENALTY_RE = re.compile(r"违约|利息|滞纳|罚")
 
@@ -66,9 +68,12 @@ def _ratio(piece: str) -> tuple[str, float] | None:
     if m:
         return "cum", float(m.group(1))
     m = _STAGE_RE.search(piece)
-    # 「质保金：乙方向甲方开具合同总价5%的银行质保保函」是开保函，不是支付价款（#54 评审）
-    if not m and "保函" not in piece:
+    if not m:
         m = _REMAINDER_RE.search(piece)
+        # 「质保金：乙方向甲方开具合同总价5%的银行质保保函」：百分比修饰的是保函，不是支付价款；
+        # 「余款5%在甲方收到银行质保保函后支付」里保函只是付款前提，照常计入（#54 评审）
+        if m and _GUARANTEE_PCT_RE.match(piece, m.end()):
+            m = None
     if m:
         return "stage", float(m.group(1))
     return None
