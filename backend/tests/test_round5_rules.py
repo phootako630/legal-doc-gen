@@ -247,3 +247,55 @@ def test_sign_place_same_or_cover_only_still_inferred():
         _f(dispute_clause_text=_SIGN_DISPUTE, contract_sign_place_cover="河北省保定市莲池区某路1号")
     )
     assert fields["court_district"]["value"] == "保定市莲池区"
+
+
+def test_warranty_from_certificate_and_handover_still_computed(monkeypatch):
+    # 「自获得检验合格证并正式移交甲方之日起算」：律师认可按最晚验收日推算并标黄核实
+    monkeypatch.setattr(derived_fields, "_today", lambda: date(2026, 1, 1))
+    fields = _retention_fields()
+    fields["warranty_period"] = {
+        "value": "24个月",
+        "src": "《合同》第9.4款（自获得《电梯检验合格证》并正式移交甲方之日起算）",
+    }
+    node = apply_derived_fields(fields)["warranty_expiry_sentence"]
+    assert node["value"] == "，质保期已于2024年12月26日到期"
+    assert "按验收日推算" in node["src"]
+
+
+def test_retention_return_interest_is_not_payment_breach_clause():
+    fields = {
+        "breach_clause_text": {
+            "value": "甲方无约定或法定理由未按时返还保修款的，乙方有权要求甲方支付逾期付款期间的存款利息。",
+            "src": "《合同》附件1第4.3条",
+        },
+        "breach_interest_rate_text": {"value": "按银行同期存款利率计算的存款利息", "src": "《合同》"},
+        "breach_interest_clause_location": {"value": "附件1第4.3条", "src": "《合同》"},
+    }
+    apply_rule_guards(fields)
+    assert fields["breach_interest_rate_text"]["value"] is None
+    assert apply_derived_fields(fields)["interest_term"]["value"] == "逾期付款利息"
+
+
+def test_payment_breach_clause_mentioning_retention_is_kept():
+    fields = {
+        "breach_clause_text": {
+            "value": "甲方逾期支付工程款或逾期返还质保金的，每日按万分之五支付违约金。",
+            "src": "《合同》第10条",
+        }
+    }
+    apply_rule_guards(fields)
+    assert fields["breach_clause_text"]["value"]
+
+
+@pytest.mark.parametrize("word", ["逾期", "延期", "迟延"])
+def test_daily_rate_with_various_delay_words_is_periodic(word):
+    # 「每延期一日按……万分之二」是按日计付的违约金，不是一次性金额（湖南庆合买卖合同第 10.1 条）
+    fields = apply_derived_fields(
+        _f(
+            breach_clause_text=f"甲方没有按期支付合同价款的，每{word}一日按应付而未付款项的万分之二向乙方支付违约金。",
+            breach_interest_rate_text="每日万分之二的标准",
+            unpaid_amount=263892.1,
+        )
+    )
+    assert fields["interest_rate_basis"]["value"] == "每日万分之二的标准"
+    assert not fields.get("penalty_amount") or fields["penalty_amount"]["value"] in (None, "")

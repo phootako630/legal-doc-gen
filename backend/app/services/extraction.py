@@ -120,6 +120,10 @@ def _has_value(fields: dict, key: str) -> bool:
     return isinstance(node, dict) and node.get("value") not in (None, "")
 
 
+_RETENTION_RETURN_RE = re.compile(r"返还[^。；;]{0,6}(保修|质保)|(保修|质保)(款|金)[^。；;]{0,12}返还")
+_CONTRACT_PRICE_RE = re.compile(r"合同价款|合同款|工程款|安装费|货款|进度款")
+
+
 def apply_rule_guards(fields: dict) -> None:
     """
     抽取后按律师规则把关（确定性代码，不依赖模型是否照做）：
@@ -137,6 +141,12 @@ def apply_rule_guards(fields: dict) -> None:
             if key == "defendant_address" and not _has_value(fields, "defendant_address_ref"):
                 fields["defendant_address_ref"] = dict(node)
             fields[key] = {"value": None, "src": _REGISTRY_ONLY_NOTE}
+    # 甲方逾期付款违约条款只算逾期支付合同价款的：逾期返还保修款 / 质保金的利息条款不算
+    # （南京裕骁一案曾把保修协议「未按时返还保修款……支付存款利息」当成逾期付款利率）
+    clause = str((fields.get("breach_clause_text") or {}).get("value") or "")
+    if _RETENTION_RETURN_RE.search(clause) and not _CONTRACT_PRICE_RE.search(clause):
+        for key in ("breach_clause_text", "breach_interest_rate_text", "breach_interest_clause_location"):
+            fields[key] = {"value": None, "src": "按律师规则：该条款是逾期返还保修款 / 质保金的约定，不是逾期支付合同价款的违约条款"}
     # 合同当事人只能取自合同：曾把验收报告上的「施工单位」「使用单位」当成合同乙方 / 甲方（律师反馈）
     for key in ("contract_party_a", "contract_party_b"):
         node = fields.get(key)

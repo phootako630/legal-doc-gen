@@ -515,7 +515,7 @@ _RATE_RE = re.compile(r"万分之|千分之|百分之|‰|%|％|厘")
 # 计算周期：「每日」「每逾期一日」「每逾期1天」「每个月」「按日」「日万分之五」「年利率」，
 # 以及后缀写法「100元/日」「0.05%/天」「100元每日」
 _PERIOD_RE = re.compile(
-    r"每(?:逾期)?(?:一|1)?个?[日天月年]|按[日天月年]|[日月年](?:利率|息|万分之|千分之|百分之)"
+    r"每(?:逾期|延期|迟延|延迟|拖延)?(?:一|1)?个?[日天月年]|按[日天月年]|[日月年](?:利率|息|万分之|千分之|百分之)"
     r"|[元%％‰]\s*[/／]\s*[日天月年]|元\s*每\s*[日天月年]"
 )
 
@@ -1174,16 +1174,25 @@ def warranty_expiry_field(fields: dict) -> dict:
     if not accepted or not months:
         return {"value": "", "src": "欠款含质保金，但验收日期或质保期未识别，质保期到期句请律师补写"}
     period_src = str(_node(fields, "warranty_period").get("src") or "")
-    if _NON_ACCEPTANCE_START_RE.search(period_src + period_text):
-        return {"value": "", "src": "质保期不是自验收合格之日起算，到期日请律师补写"}
+    start = period_src + period_text
+    note = ""
+    if _NON_ACCEPTANCE_START_RE.search(start):
+        # 起算点也提到验收 / 合格证（如「获得检验合格证并正式移交甲方之日起」）：律师认可按最晚验收日
+        # 推算并标黄核实（确认单（五）第 7 题）；完全与验收无关的（如交付使用之日）才不推算
+        if not _ACCEPTANCE_START_RE.search(start):
+            return {"value": "", "src": "质保期不是自验收合格之日起算，到期日请律师补写"}
+        note = "（合同起算点还含移交等条件，按验收日推算）"
     expiry = _add_months(date(*accepted), months)
     when = f"{expiry.year}年{expiry.month}月{expiry.day}日"
     if expiry > _today():
         return {"value": "", "src": f"欠款含质保金，但质保期到 {when} 才届满，请律师核对诉请"}
     return {
         "value": f"，质保期已于{when}到期",
-        "src": f"按律师规则：最晚验收合格日 + 质保期「{period_text}」推算，待核实",
+        "src": f"按律师规则：最晚验收合格日 + 质保期「{period_text}」推算{note}，待核实",
     }
+
+
+_ACCEPTANCE_START_RE = re.compile(r"验收|合格证|检验合格")
 
 
 def contract_total_stated_field(fields: dict) -> dict | None:

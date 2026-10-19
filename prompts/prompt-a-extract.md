@@ -33,7 +33,7 @@
 - `contract_party_a`：合同盖章页（或协议书首部）甲方 / 买方 / 需方 / 发包方的全称，照抄（不带括号备注）；只取合同本身，验收报告上的「使用单位」不算
 - `arbitration_institution`：争议条款约定仲裁时，仲裁机构全称（如「南京仲裁委员会」）；不涉及仲裁填 null
 - `dispute_clause_location` / `dispute_clause_text`：合同「争议解决」条款，location 写如「第二十章第1.1条」。若条款提到「工程所在地」「合同签订地」「合同履行地」「交货地点」，location 同时写出合同中约定该地点的条款，如「第二十章第1.1条及第一条第2款」
-- `breach_interest_clause_location` / `breach_interest_rate_text` / `breach_clause_text`：甲方（发包方 / 买方）逾期付款的违约条款，location 写条款编号，rate_text 写能放进「按照____计至实际付清之日止」的短语（如「日万分之零点五的利率」），clause_text 照抄条款原文；乙方工期、施工等方面的违约金不算
+- `breach_interest_clause_location` / `breach_interest_rate_text` / `breach_clause_text`：甲方（发包方 / 买方）逾期付款的违约条款，location 写条款编号，rate_text 写能放进「按照____计至实际付清之日止」的短语（如「日万分之零点五的利率」），clause_text 照抄条款原文；乙方工期、施工等方面的违约金、逾期返还保修款 / 质保金的利息条款都不算
 - `project_site`：工程所在地（含省市区的完整地址，如「江苏省南京市雨花台区XX项目」）
 - `delivery_place`：买卖合同约定的交货地点，照抄；没有填 null
 - `contract_sign_place`：合同盖章页写明的「合同签订地」，照抄；没有填 null
