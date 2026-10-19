@@ -87,6 +87,19 @@ def count_acceptance_units(files: list[dict]) -> tuple[int, str] | None:
     return None
 
 
+def mark_supplement_agreements(fields: dict, files: list[dict]) -> None:
+    """
+    上传材料里有补充协议时记下文件名（确认单（五）第 8 题）：起诉状据此加一句
+    「后双方签订补充协议，确认合同总价变更为…」，并提醒律师核对。补充协议本身不 OCR。
+    """
+    names = [f.get("filename", "") for f in files if f.get("identified_type") == "补充协议"]
+    if names:
+        fields["supplement_agreement"] = {
+            "value": "、".join(f"《{n}》" for n in names),
+            "src": "上传材料中识别到补充协议（按文件名 / 标题），请律师核对其内容",
+        }
+
+
 def apply_acceptance_count(fields: dict, files: list[dict]) -> None:
     """用代码计数覆盖 LLM 给的验收口径台数；数不出来则保留 LLM 的值。"""
     counted = count_acceptance_units(files)
@@ -107,6 +120,17 @@ def _has_value(fields: dict, key: str) -> bool:
     return isinstance(node, dict) and node.get("value") not in (None, "")
 
 
+_RETENTION_RETURN_RE = re.compile(r"返还[^。；;]{0,6}(保修|质保)|(保修|质保)(款|金)[^。；;]{0,12}返还")
+# 独立的「逾期支付合同价款」义务：动词是支付 / 付款，对象是价款。只出现价款名称不算——
+# 「未按时返还安装费质保金」里的「安装费」只是质保金的前缀（#53 复审）
+_PRICE = r"(?:合同价款|合同款|工程款|安装费|货款|进度款|价款)"
+_CONTRACT_PRICE_RE = re.compile(
+    rf"(?:逾期|迟延|延期|延迟|拖欠|未及时|未按[^。；;，,]{{0,6}}?)(?:支付|付款|付清)[^。；;，,]{{0,8}}{_PRICE}"
+    rf"|(?:支付|付款)[^。；;，,]{{0,4}}{_PRICE}[^。；;，,]{{0,6}}(?:逾期|延期|迟延)"
+    rf"|(?:拖欠|欠付){_PRICE}"
+)
+
+
 def apply_rule_guards(fields: dict) -> None:
     """
     抽取后按律师规则把关（确定性代码，不依赖模型是否照做）：
@@ -124,6 +148,17 @@ def apply_rule_guards(fields: dict) -> None:
             if key == "defendant_address" and not _has_value(fields, "defendant_address_ref"):
                 fields["defendant_address_ref"] = dict(node)
             fields[key] = {"value": None, "src": _REGISTRY_ONLY_NOTE}
+    # 甲方逾期付款违约条款只算逾期支付合同价款的：逾期返还保修款 / 质保金的利息条款不算
+    # （南京裕骁一案曾把保修协议「未按时返还保修款……支付存款利息」当成逾期付款利率）
+    clause = str((fields.get("breach_clause_text") or {}).get("value") or "")
+    if _RETENTION_RETURN_RE.search(clause) and not _CONTRACT_PRICE_RE.search(clause):
+        for key in ("breach_clause_text", "breach_interest_rate_text", "breach_interest_clause_location"):
+            fields[key] = {"value": None, "src": "按律师规则：该条款是逾期返还保修款 / 质保金的约定，不是逾期支付合同价款的违约条款"}
+    # 合同当事人只能取自合同：曾把验收报告上的「施工单位」「使用单位」当成合同乙方 / 甲方（律师反馈）
+    for key in ("contract_party_a", "contract_party_b"):
+        node = fields.get(key)
+        if isinstance(node, dict) and re.search(r"报告|检验|审批|诉讼流程", str(node.get("src") or "")):
+            fields[key] = {"value": None, "src": "按律师规则：合同当事人只取合同盖章页，验收报告 / 审批表上的单位不算"}
     # 验收日期取不到报告批准日期、退回审批表「政府验收时间」时：不是同一个日期口径，标待核实
     node = fields.get("acceptance_latest_date")
     if isinstance(node, dict) and node.get("value"):

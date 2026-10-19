@@ -9,7 +9,7 @@ export interface PageText {
 /** 后端返回的单个文件解析结果 */
 export interface ParsedFile {
   filename: string;
-  identified_type: '审批表' | '合同' | '验收报告' | '未知';
+  identified_type: '审批表' | '合同' | '验收报告' | '补充协议' | '未知';
   text: string;
   is_scanned: boolean;
   page_count: number;
@@ -102,9 +102,11 @@ export interface ExtractedFields {
   jurisdiction_text?: FieldValue;
   // 律师补充确认单规则引入的字段
   contract_party_b?: FieldValue;
+  contract_party_a?: FieldValue; // 合同盖章页甲方 / 买方（被告名称以此为准）
   elevator_qty_contract?: FieldValue;
   elevator_qty_vge?: FieldValue;
   handover_text?: FieldValue;
+  handover_clause_text?: FieldValue; // 合同约定移交对象的条款（约定移交物业才写「移交物业」）
   retention_clause_text?: FieldValue;
   retention_unpaid_amount?: FieldValue;
   document_kind?: FieldValue;
@@ -116,6 +118,13 @@ export interface ExtractedFields {
   breach_clause_sentence?: FieldValue; // 派生：约定违约金时引用违约条款的一句
   paid_note?: FieldValue; // 派生：已付款占合同款比例
   unpaid_note?: FieldValue; // 派生：欠款占合同款比例，或（到期金额-已付）算式
+  payable_amount?: FieldValue; // 派生：「支付至X%合同款¥…元」的金额（已付 + 欠款）
+  debt_term?: FieldValue; // 派生：诉请写「剩余合同款」还是「到期合同款」
+  warranty_expiry_sentence?: FieldValue; // 派生：欠款含质保金时「，质保期已于…到期」
+  supplement_agreement?: FieldValue; // 上传材料中的补充协议文件名
+  supplement_sentence?: FieldValue; // 派生：「后双方签订补充协议，确认合同总价变更为…」
+  contract_total_in_contract?: FieldValue; // 合同正文约定的原合同总价
+  contract_total_stated?: FieldValue; // 派生：起诉状「合同总价为¥…元」（有补充协议时为原价）
   delivery_place?: FieldValue; // 买卖合同交货地点
   install_address?: FieldValue; // 验收报告安装地点（推断管辖用）
   penalty_amount?: FieldValue; // 派生：违约金金额（一次性；或按日计付的暂计金额）
@@ -124,6 +133,7 @@ export interface ExtractedFields {
   penalty_until_date?: FieldValue; // 派生：暂计至（起诉状生成当日）
   warranty_period?: FieldValue; // 合同质保期（如「二年」）
   contract_sign_place?: FieldValue; // 合同盖章页「合同签订地」（约定签订地法院时推断管辖）
+  contract_sign_place_cover?: FieldValue; // 合同封面「合同订立地点」（与盖章页不一致时交律师）
   defendant_address_ref?: FieldValue; // 审批表买方地址 / 合同甲方地址（仅推断被告所在地法院）
   penalty_cap?: FieldValue; // 派生：违约金 / 利息上限「，最高不超过……」
 }

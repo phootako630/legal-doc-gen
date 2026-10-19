@@ -332,15 +332,18 @@ def test_lpr_wording_one_year():
 
 
 @pytest.mark.parametrize(
-    ("clause", "expected"),
+    ("clause", "handover", "expected"),
     [
-        ("验收合格、完整移交并办理完工程结算手续后支付", "已全部移交物业并办理结算"),
-        ("验收合格后30日内支付至100%", "已全部移交物业"),
-        (None, "已全部移交物业"),
+        # 确认单（五）第 6 题：合同约定移交物业才写物业，否则移交被告
+        ("验收合格、完整移交并办理完工程结算手续后支付", None, "已全部移交被告并办理结算"),
+        ("验收合格后30日内支付至100%", None, "已全部移交被告"),
+        (None, None, "已全部移交被告"),
+        ("验收合格后30日内支付至100%", "验收合格后乙方将电梯移交甲方指定的物业单位", "已全部移交物业"),
+        ("验收合格并移交物业公司后支付95%，结算后付清", None, "已全部移交物业并办理结算"),
     ],
 )
-def test_handover_text(clause, expected):
-    fields = apply_derived_fields(_f(payment_clause_text=clause))
+def test_handover_text(clause, handover, expected):
+    fields = apply_derived_fields(_f(payment_clause_text=clause, handover_clause_text=handover))
     assert fields["handover_text"]["value"] == expected
 
 
@@ -353,7 +356,7 @@ def test_plaintiff_follows_contract_party_b_when_different():
     apply_derived_fields(fields)
     node = fields["plaintiff_name_final"]
     assert node["value"] == HQ + "湖南分公司"
-    assert "与合同盖章页乙方一致" in node["src"]
+    assert "以合同盖章页乙方为准" in node["src"]
 
     fields = _f(
         contract_type="安装合同",
@@ -362,8 +365,10 @@ def test_plaintiff_follows_contract_party_b_when_different():
     )
     apply_derived_fields(fields)
     node = fields["plaintiff_name_final"]
+    # 确认单（五）第 1 题：安装合同一律以合同乙方为准，审批表只作参考，不再标待核实
     assert node["value"] == HQ + "郴州分公司"
-    assert "以合同盖章页乙方名称为准" in node["src"] and "待核实" in node["src"]
+    assert "以合同盖章页乙方为准" in node["src"] and "仅作参考" in node["src"]
+    assert "待核实" not in node["src"]
 
 
 def test_plaintiff_rep_label():

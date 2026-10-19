@@ -10,8 +10,17 @@ from app.config import SCANNED_PDF_TEXT_THRESHOLD
 from app.services import file_store
 
 # 文件名关键词 → 文件类型（简单规则，后续可升级为 LLM 判断）
+# 顺序有意义（按插入顺序匹配）：《XX合同补充协议》《合同修改单》也含「合同」，须先判补充协议
 _TYPE_KEYWORDS: dict[str, str] = {
+    # 确认单（五）第 8 题：补充协议较常见，常见文件名《XXX补充协议》《合同修改单》《设备补协》。
+    # 单独成一类：不当作合同去按需 OCR，只提醒律师并写「双方签订补充协议……」一句
+    "补充协议": "补充协议",
+    "补协": "补充协议",
+    "修改单": "补充协议",
+    "变更协议": "补充协议",
     "审批": "审批表",
+    # 律师反馈：审批表常以「诉讼流程」命名，扫描件读不到正文时只能靠文件名
+    "诉讼流程": "审批表",
     "合同": "合同",
     "验收": "验收报告",
     # 实务中验收材料多为《电梯监督检验报告》，与验收报告归为同一类（见 CLAUDE.md）
@@ -31,10 +40,27 @@ _CONTENT_KEYWORDS: list[tuple[str, str]] = [
 _CONTENT_HEAD_CHARS = 300  # 只看开头：正文后文提到「验收报告」「合同」不代表文件类型
 
 
+def _title_lines(text: str) -> str:
+    """
+    标题区：开头最多 3 个非空短行，遇到「甲方：」这类当事人行或「第一条」就停。补充协议只按标题
+    判断——主合同正文写「未尽事宜，双方另行签订补充协议」不能把整份合同当成补充协议（#53 复审）。
+    """
+    title = []
+    for line in (ln.strip() for ln in text.splitlines()):
+        if not line:
+            continue
+        if len(title) >= 3 or len(line) > 40 or re.search(r"[:：]|^第[一二三四五六七八九十\d]+[条章]", line):
+            break
+        title.append(line)
+    return "".join(title)
+
+
 def _identify_type(filename: str, text: str = "") -> str:
     for keyword, doc_type in _TYPE_KEYWORDS.items():
         if keyword in filename:
             return doc_type
+    if "补充协议" in _title_lines(text):
+        return "补充协议"
     head = re.sub(r"\s+", "", text)[:_CONTENT_HEAD_CHARS]
     for keyword, doc_type in _CONTENT_KEYWORDS:
         if keyword in head:

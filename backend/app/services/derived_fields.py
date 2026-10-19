@@ -146,44 +146,129 @@ def _compact(text: str | None) -> str | None:
     return re.sub(r"\s+", "", text) if text else None
 
 
+def _plausible_plaintiff(name: str) -> bool:
+    """
+    合同乙方像原告：总公司或其分公司（名称含总公司全称），或原告信息表里查得到（独立工程公司）。
+    施工单位、监检机构等别的公司不能当原告（律师反馈：系统曾把验收报告上的「施工单位」
+    当成合同乙方）。
+    """
+    return normalize_name(PLAINTIFF_HQ_NAME) in normalize_name(name) or (
+        resolve_plaintiff_name(name) is not None
+    )
+
+
+def _source_risk_note(fields: dict, key: str, label: str) -> str:
+    """
+    把上游字段的风险标记带到派生值上：原文未找到 / OCR 识别 / 其他待核实。
+    派生的原告、被告名称直接写进起诉状，不能因为换了一个 src 就丢掉这些提示（宁缺勿造）。
+    """
+    src = str(_node(fields, key).get("src") or "")
+    notes = []
+    if "原文未找到" in src:
+        notes.append(f"{label}原文未找到，待核实")
+    if "OCR" in src or "扫描" in src:
+        notes.append("合同为扫描件，OCR识别，请核实")
+    if not notes and "待核实" in src:
+        notes.append(f"{label}待核实")
+    return f"（{'；'.join(notes)}）" if notes else ""
+
+
 def plaintiff_name_field(fields: dict) -> dict | None:
     """
-    原告全称：先按审批表规则推出，再与合同盖章页乙方（卖方 / 安装方）核对；
-    不一致以合同乙方为准并标待核实（补充确认单第 1 题）。
+    原告全称。
+    安装合同：以合同盖章页乙方 / 安装方 / 安装单位为准，审批表「合同分公司」只作参考
+    （确认单（五）第 1 题：有的地区诉讼由二级、三级分公司提起，合同却是一级分公司签的）。
+    合同乙方读不到或不像原告时，才按审批表推出。
+    买卖合同：总公司；与合同盖章页乙方不一致时以合同乙方为准并标待核实（补充确认单第 1 题）。
     """
     kind = contract_kind(fields)
     branch_raw = _str_value(fields, "plaintiff_branch_raw")
     derived = derive_plaintiff_name(kind, branch_raw)
     party_b = _compact(_str_value(fields, "contract_party_b"))
+    if party_b and not _plausible_plaintiff(party_b):
+        party_b_rejected = party_b
+        party_b = None
+    else:
+        party_b_rejected = None
+
+    if kind == "安装" and party_b:
+        src = "按律师规则：以合同盖章页乙方为准"
+        if derived and derived[0] != party_b:
+            src += f"（审批表「合同分公司」推出「{derived[0]}」，仅作参考）"
+        return {
+            "value": party_b,
+            "src": src + _source_risk_note(fields, "contract_party_b", "合同乙方"),
+            "channel": "text",
+        }
+
     if derived is None:
         if not party_b:
             return None
         # 审批表「合同分公司」未填（独立工程公司签约时常见）：以合同盖章页乙方为准（第三轮第 12 题）
         return {
             "value": party_b,
-            "src": "按律师规则：审批表「合同分公司」未识别，取自合同盖章页乙方 / 安装方名称",
+            "src": "按律师规则：审批表「合同分公司」未识别，取自合同盖章页乙方 / 安装方名称"
+            + _source_risk_note(fields, "contract_party_b", "合同乙方"),
             "channel": "text",
         }
     name, uncertain = derived
     if kind == "买卖":
         src = "按律师规则：买卖合同原告为总公司"
     elif _is_branch(name):
-        src = f"按律师规则：总公司全称 + 审批表「合同分公司」（{branch_raw}）中的分公司"
-        if uncertain:
-            src += "；路径中有多个分公司，待核实"
+        src = f"按律师规则：合同乙方未识别，暂按审批表「合同分公司」（{branch_raw}）推出，待核实"
     else:
-        src = f"按律师规则：审批表「合同分公司」（{branch_raw}）为独立公司，写该公司全称"
-        if uncertain:
-            src += "；原告信息表中未找到该公司，待核实"
+        src = f"按律师规则：合同乙方未识别，审批表「合同分公司」（{branch_raw}）为独立公司，写该公司全称，待核实"
+    if kind == "安装" and uncertain:
+        src += "；路径中有多个分公司 / 信息表中未找到"
+    if party_b_rejected:
+        src += f"；合同乙方识别为「{party_b_rejected}」，不像原告，已忽略"
     if party_b and party_b != name:
         return {
             "value": party_b,
-            "src": f"按律师规则：以合同盖章页乙方名称为准；与审批表推出的「{name}」不一致，待核实",
+            "src": f"按律师规则：以合同盖章页乙方名称为准；与审批表推出的「{name}」不一致，待核实"
+            + _source_risk_note(fields, "contract_party_b", "合同乙方"),
             "channel": "text",
         }
     if party_b:
         src += "；与合同盖章页乙方一致"
     return {"value": name, "src": src, "channel": "text"}
+
+
+# 括号里的备注（审批表「合同买方名称」有时写成「XX公司（某某项目）」）
+_TRAILING_NOTE_RE = re.compile(r"[（(][^（）()]*[）)]$")
+
+
+def defendant_name_field(fields: dict) -> dict | None:
+    """
+    被告名称：以合同盖章页甲方 / 买方 / 需方 / 发包方为准（律师反馈：审批表「合同买方名称」
+    有时多写了括号备注）。合同甲方读不到时沿用抽取到的审批表名称。
+    """
+    node = _node(fields, "defendant_name")
+    approval = node.get("approval_value") if node.get("derived") else node.get("value")
+    approval_src = node.get("approval_src") if node.get("derived") else node.get("src")
+    party_a = _compact(_str_value(fields, "contract_party_a"))
+    if not party_a:
+        if not node.get("derived"):
+            return None  # 保留抽取值
+        if not approval:
+            return None
+        return {"value": approval, "src": approval_src or "", "approval_value": approval,
+                "approval_src": approval_src}
+    src = "按律师规则：以合同盖章页甲方 / 买方名称为准"
+    approval_c = _compact(str(approval)) if approval else None
+    if approval_c and approval_c != party_a:
+        stripped = _TRAILING_NOTE_RE.sub("", approval_c)
+        if stripped == party_a:
+            src += f"（审批表写作「{approval_c}」，括号内为备注）"
+        else:
+            src += f"；与审批表「{approval_c}」不一致，待核实"
+    return {
+        "value": party_a,
+        "src": src + _source_risk_note(fields, "contract_party_a", "合同甲方"),
+        "channel": "text",
+        "approval_value": approval,
+        "approval_src": approval_src,
+    }
 
 
 def plaintiff_rep_label_field(fields: dict) -> dict:
@@ -360,20 +445,42 @@ def elevator_qty_field(fields: dict) -> dict | None:
     return node
 
 
+# 移交 / 交付的接收方是物业：「移交甲方指定的物业单位」「交付给物业公司」。接收方须在同一分句内
+# 紧跟动词（不跨逗号），「移交甲方后，由物业负责保养」的接收方是甲方；「不 / 无需移交物业」不算
+_HANDOVER_TO_PROPERTY_RE = re.compile(r"(?:移交|交付|交接)(?:给|予|至|于)?[^，,。；;、]{0,8}物业")
+# 同一分句里接收方前出现否定 / 禁止（「不得移交物业」「无需交付物业」「严禁移交物业」）不算约定移交物业
+_NEGATION_RE = re.compile(r"不|无|未|禁止|严禁|勿|非")
+
+
+def _handover_to_property(text: str) -> bool:
+    for clause in re.split(r"[，,。；;]", text):
+        for m in _HANDOVER_TO_PROPERTY_RE.finditer(clause):
+            if not _NEGATION_RE.search(clause[: m.start()]):
+                return True
+    return False
+
+
 def handover_text_field(fields: dict) -> dict:
     """
-    「案涉电梯___，被告应按合同约定支付至…」：至少写「已全部移交物业」；
-    合同付款条件提到「结算」才加「并办理结算」（补充确认单第 5 题）。
+    「案涉电梯___，被告应按合同约定支付至…」：
+    合同约定移交给（甲方指定的）物业 / 物业单位的写「已全部移交物业」，否则写「已全部移交被告」
+    （确认单（五）第 6 题）；合同付款条件提到「结算」才加「并办理结算」（补充确认单第 5 题）。
     """
     clause = _str_value(fields, "payment_clause_text") or ""
+    handover = _str_value(fields, "handover_clause_text") or ""
+    to_property = any(_handover_to_property(t) for t in (handover, clause))
+    target = "物业" if to_property else "被告"
+    basis = "合同约定移交物业" if to_property else (
+        "合同未约定移交物业" if handover or clause else "未识别到移交条款，按移交被告写，待核实"
+    )
     if not clause:
         return {
-            "value": "已全部移交物业",
-            "src": "未识别到付款条款，是否写「并办理结算」待核实",
+            "value": f"已全部移交{target}",
+            "src": f"{basis}；未识别到付款条款，是否写「并办理结算」待核实",
         }
     if "结算" in clause:
-        return {"value": "已全部移交物业并办理结算", "src": "合同付款条件含「结算」"}
-    return {"value": "已全部移交物业", "src": "合同付款条件未约定结算"}
+        return {"value": f"已全部移交{target}并办理结算", "src": f"{basis}；合同付款条件含「结算」"}
+    return {"value": f"已全部移交{target}", "src": f"{basis}；合同付款条件未约定结算"}
 
 
 # ── 逾期利息 / 违约金 ─────────────────────────────────────────────────────────
@@ -402,13 +509,35 @@ def breach_clause_sentence_field(fields: dict) -> dict:
     """
     if not _breach_is_penalty(fields):
         return {"value": "", "src": "合同未约定违约金，不引用违约条款"}
-    location = _str_value(fields, "breach_interest_clause_location") or _MISSING
-    text = (_str_value(fields, "breach_clause_text") or _MISSING).rstrip("。；;，, ")
+    location = finest_clause_no(_str_value(fields, "breach_interest_clause_location")) or _MISSING
+    text = _to_litigant_terms((_str_value(fields, "breach_clause_text") or _MISSING).rstrip("。；;，, "))
     return {
         "value": f"依据合同{location}约定，{text}。",
-        "src": "按律师规则：合同约定违约金，引用违约条款原文，待核实",
+        "src": "按律师规则：合同约定违约金，引用违约条款原文（甲方 / 乙方换成被告 / 原告），待核实",
         "channel": "text",
     }
+
+
+# 「第十条第10.2条」「第10.2条」「10.2条」：取最细一级的数字编号
+_DOTTED_CLAUSE_RE = re.compile(r"(\d+(?:\.\d+)+)\s*(?:条|款|项)?")
+
+
+def finest_clause_no(location: str | None) -> str | None:
+    """
+    条款号只写最细一级（确认单（五）第 13 题）：「第十条第10.2条」→「第10.2条」。
+    没有「10.2」这类分级编号的（如「第十一条第4款」）原样保留，不猜层级。
+    """
+    if not location:
+        return location
+    found = _DOTTED_CLAUSE_RE.findall(location)
+    if not found or "及" in location or "、" in location:
+        return location
+    return f"第{found[-1]}条"
+
+
+def _to_litigant_terms(text: str) -> str:
+    """引用违约条款时把合同当事人称谓换成诉讼称谓：甲方 → 被告、乙方 → 原告（第 13 题）。"""
+    return text.replace("甲方", "被告").replace("乙方", "原告")
 
 
 # 能按时间持续计算的标准：既有比率（万分之 / ‰ / % 等），又有计算周期
@@ -418,7 +547,7 @@ _RATE_RE = re.compile(r"万分之|千分之|百分之|‰|%|％|厘")
 # 计算周期：「每日」「每逾期一日」「每逾期1天」「每个月」「按日」「日万分之五」「年利率」，
 # 以及后缀写法「100元/日」「0.05%/天」「100元每日」
 _PERIOD_RE = re.compile(
-    r"每(?:逾期)?(?:一|1)?个?[日天月年]|按[日天月年]|[日月年](?:利率|息|万分之|千分之|百分之)"
+    r"每(?:逾期|延期|迟延|延迟|拖延)?(?:一|1)?个?[日天月年]|按[日天月年]|[日月年](?:利率|息|万分之|千分之|百分之)"
     r"|[元%％‰]\s*[/／]\s*[日天月年]|元\s*每\s*[日天月年]"
 )
 
@@ -997,30 +1126,141 @@ def _ratio_mode(fields: dict) -> bool | None:
 
 
 def paid_note_field(fields: dict) -> dict:
-    """「仅支付了¥X元（占合同款的80%）」括号部分；写算式时为空。"""
-    total, paid, _ = _amount_parts(fields)
-    if _ratio_mode(fields) and total and paid is not None:
-        return {
-            "value": f"（占合同款的{_plain_number(paid / total * 100)}%）",
-            "src": "按律师规则：已付 + 欠款 = 合同总价，写占合同款比例",
-        }
-    return {"value": "", "src": "不写比例"}
+    """「仅支付了¥X元」后的括注：比例默认不写（确认单（五）第 4 题）。"""
+    # 确认单（五）第 4 题：比例默认不写，需要时由办案律师自行添加
+    return {"value": "", "src": "按律师规则：默认不写占合同款比例，需要时律师自行添加"}
 
 
 def unpaid_note_field(fields: dict) -> dict:
-    """「尚欠剩余合同款¥Y元（占合同款的20%）」或「（到期金额-已付）」算式。"""
+    """「尚欠…¥Y元」后的括注：已付 + 欠款 ≠ 总价时写算式「（到期金额-已付）」，否则不写比例。"""
     mode = _ratio_mode(fields)
     total, paid, unpaid = _amount_parts(fields)
     if mode is None or paid is None or unpaid is None:
         return {"value": "", "src": "已付或欠款金额缺失，不写比例 / 算式"}
     if mode and total:
-        return {
-            "value": f"（占合同款的{_plain_number(unpaid / total * 100)}%）",
-            "src": "按律师规则：已付 + 欠款 = 合同总价，写占合同款比例",
-        }
+        # 确认单（五）第 4 题：比例默认不写，需要时由办案律师自行添加
+        return {"value": "", "src": "按律师规则：默认不写占合同款比例，需要时律师自行添加"}
     return {
         "value": f"（{_plain_number(paid + unpaid)}-{_plain_number(paid)}）",
         "src": "按律师规则：已付 + 欠款 ≠ 合同总价，写算式（到期金额-已付款），待核实",
+    }
+
+
+def payable_amount_field(fields: dict) -> dict | None:
+    """
+    「被告应按合同约定支付至100%合同款¥X元」的金额（确认单（五）第 5 题）：
+    X = 已付 + 欠款（本次起诉已到期的合同款）。支付至 100% 时应等于合同总价，不等标待核实。
+    """
+    total, paid, unpaid = _amount_parts(fields)
+    if paid is None or unpaid is None:
+        return None
+    due = paid + unpaid
+    src = "按律师规则：已付 + 欠款"
+    ratio = parse_percent(_str_value(fields, "payable_ratio"))
+    if total and ratio is not None and abs(total * ratio / 100 - due) > 0.01:
+        src += f"；与合同总价 × {ratio:g}% 不一致，待核实"
+    return {"value": _plain_number(due), "src": src}
+
+
+def debt_term_field(fields: dict) -> dict:
+    """
+    诉请第 1 项「判令被告向原告支付___¥X元」（确认单（五）第 9 题）：
+    已付 + 欠款 = 合同总价 →「剩余合同款」；否则「到期合同款」。
+    已付 + 欠款大于合同总价（可能调过价 / 结算价不同）或金额缺失时，标待核实交律师判断。
+    """
+    total, paid, unpaid = _amount_parts(fields)
+    if total is None or paid is None or unpaid is None:
+        return {"value": "剩余合同款", "src": "合同总价、已付或欠款金额缺失，按「剩余合同款」写，待核实"}
+    diff = paid + unpaid - total
+    if abs(diff) <= 0.01:
+        return {"value": "剩余合同款", "src": "按律师规则：已付 + 欠款 = 合同总价"}
+    if diff < 0:
+        return {"value": "到期合同款", "src": "按律师规则：已付 + 欠款 < 合同总价"}
+    return {
+        "value": "到期合同款",
+        "src": "已付 + 欠款大于合同总价（可能调过价或结算价与原价不同），请律师判断，待核实",
+    }
+
+
+def _retention_in_debt(fields: dict) -> bool:
+    """审批表「未付款项构成」里质保金大于 0：本次欠款含质保金。"""
+    amount = parse_amount(_str_value(fields, "retention_unpaid_amount"))
+    return amount is not None and amount > 0.005
+
+
+def warranty_expiry_field(fields: dict) -> dict:
+    """
+    欠款含质保金时写「，质保期已于X年X月X日到期」（确认单（五）第 7 题）：
+    到期日 = 最晚验收合格日 + 质保期，标待核实。质保期不自验收起算、读不到、
+    或还没到期时不写，在出处里说明原因。
+    """
+    if not _retention_in_debt(fields):
+        return {"value": "", "src": "欠款不含质保金，不写质保期到期句"}
+    accepted = parse_date(_str_value(fields, "acceptance_latest_date"))
+    period_text = _str_value(fields, "warranty_period") or ""
+    m = _PERIOD_TEXT_RE.search(period_text)
+    months = None
+    if m and _cn_int(m.group(1)):
+        n = _cn_int(m.group(1))
+        months = n * 12 if m.group(2) == "年" else n
+    if not accepted or not months:
+        return {"value": "", "src": "欠款含质保金，但验收日期或质保期未识别，质保期到期句请律师补写"}
+    period_src = str(_node(fields, "warranty_period").get("src") or "")
+    start = period_src + period_text
+    note = ""
+    if _NON_ACCEPTANCE_START_RE.search(start):
+        # 起算点也提到验收 / 合格证（如「获得检验合格证并正式移交甲方之日起」）：律师认可按最晚验收日
+        # 推算并标黄核实（确认单（五）第 7 题）；完全与验收无关的（如交付使用之日）才不推算
+        if not _ACCEPTANCE_START_RE.search(start):
+            return {"value": "", "src": "质保期不是自验收合格之日起算，到期日请律师补写"}
+        note = "（合同起算点还含移交等条件，按验收日推算）"
+    expiry = _add_months(date(*accepted), months)
+    when = f"{expiry.year}年{expiry.month}月{expiry.day}日"
+    if expiry > _today():
+        return {"value": "", "src": f"欠款含质保金，但质保期到 {when} 才届满，请律师核对诉请"}
+    return {
+        "value": f"，质保期已于{when}到期",
+        "src": f"按律师规则：最晚验收合格日 + 质保期「{period_text}」推算{note}，待核实",
+    }
+
+
+_ACCEPTANCE_START_RE = re.compile(r"验收|合格证|检验合格")
+
+
+def contract_total_stated_field(fields: dict) -> dict | None:
+    """
+    「合同总价为¥X元」：一般就是审批表合同总额；有补充协议时写合同正文的原价
+    （确认单（五）第 8 题：再加一句「双方签订补充协议，确认合同总价变更为…」）。
+    """
+    total = _node(fields, "total_amount")
+    if not _str_value(fields, "supplement_agreement"):
+        if total.get("value") in (None, ""):
+            return None
+        return {k: v for k, v in total.items() if k != "derived"}
+    original = _node(fields, "contract_total_in_contract")
+    if parse_amount(original.get("value")) is None:
+        return {"value": None, "src": "有补充协议：合同正文的原合同总价未识别，请律师填写"}
+    return {
+        "value": _plain_number(parse_amount(original.get("value"))),
+        "src": f"有补充协议：合同正文约定的原合同总价（{original.get('src') or '合同'}），待核实",
+    }
+
+
+def supplement_sentence_field(fields: dict) -> dict:
+    """
+    有补充协议时：「后双方签订补充协议，确认合同总价变更为¥X元。」X 为审批表合同总额。
+    补充协议可能改单价、数量、规格、税率，表述一律标待核实，由律师确认（确认单（五）第 8 题）。
+    """
+    files = _str_value(fields, "supplement_agreement")
+    total = parse_amount(_node(fields, "total_amount").get("value"))
+    if not files:
+        return {"value": "", "src": "未识别到补充协议"}
+    if total is None:
+        return {"value": "后双方签订补充协议，确认合同总价变更为¥【待补充】元。",
+                "src": f"识别到补充协议 {files}；合同总额未识别，请律师核对表述，待核实"}
+    return {
+        "value": f"后双方签订补充协议，确认合同总价变更为¥{_plain_number(total)}元。",
+        "src": f"按律师规则：识别到补充协议 {files}，表述请律师核对（可能调整单价、数量、规格或税率），待核实",
     }
 
 
@@ -1049,7 +1289,9 @@ def _jurisdiction(fields: dict) -> tuple[str, str | None, str]:
         return ("defendant", *_defendant_seat_court(fields, "约定被告所在地法院"))
     if _SIGN_PLACE_RE.search(dispute) and not _SITE_RE.search(dispute):
         # 签订地取合同盖章页「合同签订地」栏（新案卷核对：律师按它写法院），推断结果待核实
-        place = _str_value(fields, "contract_sign_place")
+        place, conflict = _sign_place(fields)
+        if conflict:
+            return "sign_place", None, conflict
         district = derive_court_district(place)
         if district:
             return "sign_place", district, f"按合同签订地「{place}」推定，待核实管辖"
@@ -1059,6 +1301,19 @@ def _jurisdiction(fields: dict) -> tuple[str, str | None, str]:
     if _SITE_RE.search(dispute) or not dispute:
         return _site_jurisdiction(fields, delivery=bool(_DELIVERY_RE.search(dispute)))
     return ("general", *_defendant_seat_court(fields, "未约定具体地点"))
+
+
+def _sign_place(fields: dict) -> tuple[str | None, str | None]:
+    """
+    合同签订地：盖章页「合同签订地」优先，没有取封面「合同订立地点」。两处都写了、
+    却推出不同的法院时返回说明，交律师判断（确认单（五）第 15 题）。
+    """
+    stamp = _str_value(fields, "contract_sign_place")
+    cover = _str_value(fields, "contract_sign_place_cover")
+    if stamp and cover and _compact(stamp) != _compact(cover):
+        if derive_court_district(stamp) != derive_court_district(cover):
+            return stamp, f"合同盖章页签订地「{stamp}」与封面订立地点「{cover}」不一致，请律师判断管辖法院"
+    return stamp or cover, None
 
 
 def _defendant_seat_court(fields: dict, basis: str) -> tuple[str | None, str]:
@@ -1183,7 +1438,7 @@ def jurisdiction_text_field(fields: dict) -> dict:
             f"故原告向{court}人民法院提起诉讼。"
         )
     elif mode == "sign_place":
-        place = _str_value(fields, "contract_sign_place") or _MISSING
+        place = _sign_place(fields)[0] or _MISSING
         text = f"合同签订地为{place}，故原告向{court}人民法院提起诉讼。"
     elif mode == "defendant":
         text = f"{_seat_ref_note(fields)}故原告向{court}人民法院提起诉讼。"
@@ -1291,6 +1546,7 @@ def payable_ratio_field(fields: dict) -> dict:
 # 管辖辖区在管辖句之前，台数在前。
 _DERIVERS: list[tuple[str, Callable[[dict], dict | None], bool]] = [
     ("plaintiff_name_final", plaintiff_name_field, True),
+    ("defendant_name", defendant_name_field, True),
     ("plaintiff_rep_label", plaintiff_rep_label_field, True),
     ("plaintiff_phone", plaintiff_phone_field, True),
     ("plaintiff_credit_code", _registry_field("credit_code"), True),
@@ -1309,6 +1565,10 @@ _DERIVERS: list[tuple[str, Callable[[dict], dict | None], bool]] = [
     ("penalty_start_date", penalty_start_date_field, True),
     ("penalty_until_date", penalty_until_date_field, True),
     ("penalty_amount", penalty_amount_field, True),
+    ("debt_term", debt_term_field, True),
+    ("warranty_expiry_sentence", warranty_expiry_field, True),
+    ("contract_total_stated", contract_total_stated_field, True),
+    ("supplement_sentence", supplement_sentence_field, True),
     ("paid_note", paid_note_field, True),
     ("unpaid_note", unpaid_note_field, True),
     ("document_kind", document_kind_field, False),
@@ -1316,6 +1576,8 @@ _DERIVERS: list[tuple[str, Callable[[dict], dict | None], bool]] = [
     ("jurisdiction_text", jurisdiction_text_field, False),
     ("addressee", addressee_field, False),
     ("payable_ratio", payable_ratio_field, False),
+    # 依赖 payable_ratio（核对 总价 × 比例 是否等于 已付 + 欠款），放在它后面
+    ("payable_amount", payable_amount_field, True),
 ]
 
 

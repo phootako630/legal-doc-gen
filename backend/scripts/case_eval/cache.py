@@ -1,6 +1,6 @@
 # eval 的录制 / 回放缓存：按请求内容哈希保存 LLM 与 OCR 的返回，改规则后可零费用重跑。
 #
-# 拦截两处（都是 agent 实际调用外部服务的唯一入口）：
+# 拦截两处（都是 agent 实际调用外部服务的唯一入口；另把只供展示的校验说明生成换成空实现）：
 #   - app.agent.nodes.chat：DeepSeek 调用，键 = 模型 + 消息 + json_mode；
 #   - app.services.ocr_engine._ocr_image_b64：单页 OCR，键 = OCR 模型 + 页面图片。
 # 页面图片由 PyMuPDF 确定性渲染，同一份 PDF 同一页每次哈希相同。
@@ -146,6 +146,10 @@ class ReplayCache:
         return ocr
 
 
+async def _skip_validate_prose(fields: dict, checks: list) -> tuple[str, str]:
+    return "（eval 不生成校验说明）", ""
+
+
 class patched:
     """在 with 块内把 agent 的 LLM / OCR 入口换成带缓存的版本，退出时还原。"""
 
@@ -158,6 +162,9 @@ class patched:
         setattr(obj, name, value)
 
     def __enter__(self) -> ReplayCache:
+        # 校验说明文本（prompt-a-validate）只给律师看、不打分，提示词里却带着全部字段：
+        # 规则一改字段就变，严格回放必然未命中。eval 里不生成它，省一次调用，回放也稳定
+        self._set(nodes, "_validate_prose", _skip_validate_prose)
         self._set(nodes, "chat", self.cache.wrap_chat(nodes.chat))
         self._set(ocr_engine, "_ocr_image_b64", self.cache.wrap_ocr(ocr_engine._ocr_image_b64))
         # ocr_page 一开始就检查 DashScope key；纯回放不需要 key，给一个占位让它走到缓存
