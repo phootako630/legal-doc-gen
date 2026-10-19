@@ -210,10 +210,17 @@ def _contacts_display(contacts: object) -> str:
 
 # 随合同类型切换的模板措辞（安装/供货、安装价格/产品价格、违约金/逾期付款利息）：
 # 不是填空，不标注、不高亮
-_WORDING_KEYS = {"contract_action", "price_term", "plaintiff_rep_label", "interest_term"}
+_WORDING_KEYS = {"contract_action", "price_term", "plaintiff_rep_label", "interest_term", "debt_term"}
 # 可有可无的句子 / 括注（违约条款引用、已付与欠款的比例或算式）：规则判定不需要时为空，
 # 渲染为空串，不算【待补充】，也不计入就绪度
-_OPTIONAL_KEYS = {"breach_clause_sentence", "paid_note", "unpaid_note", "penalty_cap"}
+_OPTIONAL_KEYS = {
+    "breach_clause_sentence",
+    "paid_note",
+    "unpaid_note",
+    "penalty_cap",
+    "warranty_expiry_sentence",  # 欠款含质保金且质保期已届满时才写（确认单（五）第 7 题）
+    "supplement_sentence",  # 有补充协议时才写（确认单（五）第 8 题）
+}
 
 # 约定仲裁时整篇改为仲裁申请书（律师补充确认单第 6 题）。只替换模板的固定文字，不动填入的值；
 # 按顺序替换，「原、被告」须先于单独的「原告」「被告」。

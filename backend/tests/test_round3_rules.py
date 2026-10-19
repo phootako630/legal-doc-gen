@@ -70,7 +70,8 @@ def test_penalty_clause_writes_penalty_and_cites_clause():
     )
     assert fields["interest_term"]["value"] == "违约金"
     assert fields["breach_clause_sentence"]["value"] == (
-        "依据合同第11.4条约定，甲方逾期付款的，每日按未付款的万分之零点五支付违约金。"
+        # 确认单（五）第 13 题：引用时甲方 / 乙方换成被告 / 原告
+        "依据合同第11.4条约定，被告逾期付款的，每日按未付款的万分之零点五支付违约金。"
     )
     text = render_complaint(
         fields,
@@ -106,10 +107,11 @@ def test_penalty_without_clause_text_asks_lawyer():
 _AMOUNT_TEMPLATE = "仅支付了¥{{paid_amount}}元{{paid_note}}，尚欠¥{{unpaid_amount}}元{{unpaid_note}}未付"
 
 
-def test_amounts_summing_to_total_use_ratio():
+def test_amounts_summing_to_total_write_no_ratio():
+    # 确认单（五）第 4 题：比例默认不写，由办案律师自行决定
     fields = _f(total_amount=1000000, paid_amount=800000, unpaid_amount=200000)
     assert render_complaint(fields, template=_AMOUNT_TEMPLATE) == (
-        "仅支付了¥800000元（占合同款的80%），尚欠¥200000元（占合同款的20%）未付"
+        "仅支付了¥800000元，尚欠¥200000元未付"
     )
 
 
@@ -232,7 +234,8 @@ def test_independent_company_short_name_resolved_from_table(registry):
         )
     )
     assert fields["plaintiff_name_final"]["value"] == HQ + "某州工程有限公司"
-    assert "待核实" not in fields["plaintiff_name_final"]["src"]
+    # 确认单（五）第 1 题：以合同乙方为准；合同乙方没读到、只靠审批表推出时提示核实
+    assert "合同乙方未识别" in fields["plaintiff_name_final"]["src"]
 
 
 def test_unknown_independent_company_is_marked_for_review(registry):

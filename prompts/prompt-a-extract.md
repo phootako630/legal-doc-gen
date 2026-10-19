@@ -13,13 +13,13 @@
 - `contract_type`：审批表「合同类型」栏，照抄（如「安装合同」「买卖合同」）
 - `plaintiff_branch_raw`：审批表「合同分公司」栏，**照抄原文**（如「集团/营销网络/江苏分公司」）。原告全称由系统按规则拼接，`plaintiff_name_final` 可填 null
 - 原告的统一社会信用代码、负责人、住址、电话由系统从分公司信息表补，材料里没有就填 null
-- `defendant_name`：审批表「合同买方名称」栏
+- `defendant_name`：审批表「合同买方名称」栏（系统会再以合同盖章页甲方 / 买方名称为准）
 - `defendant_credit_code`：验收报告「使用单位统一社会信用代码」等处有原文才填
 - `defendant_legal_rep` / `defendant_address`：律师一律用企查查等工商登记信息，**不要取审批表「买方单位地址」**；材料里没有工商登记信息就填 null
 - `defendant_address_ref`：审批表「买方单位地址」照抄（没有时取合同盖章页甲方地址）。只供系统推断被告所在地法院，不写进起诉状
 - `contacts`：只取审批表「联系人」「联系电话」栏，不取「甲方收款联系人」。每人输出 `{"name": {...}, "phone": {...}}`
-- `contract_sign_date`：合同盖章页的签署日期；盖章页没写日期时，取封面上写到年月日的「签订日期」（只写到年月的「合同订立时间」不取）；合同是扫描件暂未识别时，取审批表「签约时间」
-- `contract_title` / `contract_no`：合同封面；封面标题分行时按顺序连成全称，项目名不能丢，不取正文首页的简短标题；合同编号审批表上也有
+- `contract_sign_date`：合同盖章页的签署日期（盖章处写成「2024-05-24」的也算）；盖章页没写日期时，取封面上写到年月日的「签订日期」（只写到年月的「合同订立时间」不取）；合同是扫描件暂未识别时，取审批表「签约时间」
+- `contract_title` / `contract_no`：合同封面；封面标题分行时按顺序连成全称，项目名不能丢，不取正文首页的简短标题；合同没有单独封面时取首页顶部的标题；合同编号审批表上也有
 - `elevator_qty_by_approval`：审批表「签约台数」/「实际履行台数」；`elevator_qty_by_contract`：合同约定的台数；验收报告台数由系统按设备代码计数
 - `total_amount`：审批表「合同总额」处；或合同前部「合同总额」「合同金额」等表述
 - `paid_amount`：审批表「已付款」处；`unpaid_amount`：审批表「未付款金额」处
@@ -29,13 +29,17 @@
 - `retention_ratio`：合同约定的质保金比例合计（如「5%」）；合同明确没有质保金填「无」；找不到填 null
 - `retention_clause_text`：合同质保金条款原文（如「质保期满一年支付2%，满二年支付3%」），找不到填 null
 - `retention_unpaid_amount`：审批表「未付款项构成」中「质保金」一栏的金额（如「0.00元」），照抄
-- `contract_party_b`：合同盖章页（或协议书首部）乙方 / 卖方 / 安装方 / 安装单位的全称，照抄
+- `contract_party_b`：合同盖章页（或协议书首部）乙方 / 卖方 / 供方 / 安装方 / 安装单位的全称，照抄；只取合同本身，验收报告上的「施工单位」不算
+- `contract_party_a`：合同盖章页（或协议书首部）甲方 / 买方 / 需方 / 发包方的全称，照抄（不带括号备注）；只取合同本身，验收报告上的「使用单位」不算
 - `arbitration_institution`：争议条款约定仲裁时，仲裁机构全称（如「南京仲裁委员会」）；不涉及仲裁填 null
 - `dispute_clause_location` / `dispute_clause_text`：合同「争议解决」条款，location 写如「第二十章第1.1条」。若条款提到「工程所在地」「合同签订地」「合同履行地」「交货地点」，location 同时写出合同中约定该地点的条款，如「第二十章第1.1条及第一条第2款」
 - `breach_interest_clause_location` / `breach_interest_rate_text` / `breach_clause_text`：甲方（发包方 / 买方）逾期付款的违约条款，location 写条款编号，rate_text 写能放进「按照____计至实际付清之日止」的短语（如「日万分之零点五的利率」），clause_text 照抄条款原文；乙方工期、施工等方面的违约金不算
 - `project_site`：工程所在地（含省市区的完整地址，如「江苏省南京市雨花台区XX项目」）
 - `delivery_place`：买卖合同约定的交货地点，照抄；没有填 null
-- `contract_sign_place`：合同盖章页（或封面）写明的「合同签订地 / 合同订立地点」，照抄；没有填 null
+- `contract_sign_place`：合同盖章页写明的「合同签订地」，照抄；没有填 null
+- `contract_sign_place_cover`：合同封面写明的「合同订立地点 / 签订地点」，照抄；没有填 null
+- `handover_clause_text`：合同约定电梯验收后移交给谁的条款原文（如「移交甲方指定的物业单位」），照抄；没有填 null
+- `contract_total_in_contract`：合同正文 / 协议书约定的合同总价（只填数字）；找不到填 null
 - `warranty_period`：合同质保期 / 保修期条款约定的期限，只写期限（如「二年」「24个月」）；src 写条款位置，起算点不是验收合格之日的在 src 注明；没有填 null
 - `install_address`：验收 / 监督检验报告的「安装地点」（或「设备使用地点」），照抄；多份报告取第一份
 
@@ -85,6 +89,7 @@
   "retention_clause_text": {"value": null, "src": ""},
   "retention_unpaid_amount": {"value": null, "src": ""},
   "contract_party_b": {"value": null, "src": ""},
+  "contract_party_a": {"value": null, "src": ""},
   "arbitration_institution": {"value": null, "src": ""},
   "breach_interest_clause_location": {"value": null, "src": ""},
   "breach_interest_rate_text": {"value": null, "src": ""},
@@ -94,6 +99,9 @@
   "project_site": {"value": null, "src": ""},
   "delivery_place": {"value": null, "src": ""},
   "contract_sign_place": {"value": null, "src": ""},
+  "contract_sign_place_cover": {"value": null, "src": ""},
+  "handover_clause_text": {"value": null, "src": ""},
+  "contract_total_in_contract": {"value": null, "src": ""},
   "warranty_period": {"value": null, "src": ""},
   "install_address": {"value": null, "src": ""},
   "internet_lookup_status": {"value": null, "src": ""}

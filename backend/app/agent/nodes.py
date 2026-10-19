@@ -35,6 +35,7 @@ from app.services.extraction import (
     enrich_provenance,
     format_checks_for_llm,
     mark_ocr_fields,
+    mark_supplement_agreements,
 )
 from app.services.derived_fields import (
     apply_derived_fields,
@@ -76,13 +77,17 @@ _ALL_CLAUSE_KEYS = [
     "arbitration_institution",
     "defendant_address_ref",  # 合同盖章页甲方地址：被告所在地管辖时推断法院用（新案卷核对）
     "contract_sign_place",  # 合同盖章页「合同签订地」：约定签订地法院时推断法院用
+    "contract_sign_place_cover",  # 确认单（五）第 15 题：封面「合同订立地点」，与盖章页不一致时交律师
+    "handover_clause_text",  # 确认单（五）第 6 题：约定移交物业才写「移交物业」
+    "contract_total_in_contract",  # 确认单（五）第 8 题：有补充协议时写原合同总价
 ]
 # 以合同为准的字段：律师取合同盖章页/封面/协议书（签约日期、合同名称、合同台数、安装地址）。
 # OCR 合同后若取得这些值，覆盖此前从审批表/验收报告推测的值。
 _CONTRACT_AUTHORITATIVE_KEYS = [
     "contract_sign_date",  # 律师规则：签约日期以合同盖章页为准（确认单第 4 题）
     "contract_title",
-    "contract_party_b",  # 补充确认单第 1 题：原告名称与合同盖章页乙方核对
+    "contract_party_b",  # 确认单（五）第 1 题：安装合同原告以合同盖章页乙方为准
+    "contract_party_a",  # 律师反馈：被告名称以合同盖章页甲方 / 买方为准
     "elevator_qty_by_contract",
     "project_site",
 ]
@@ -208,6 +213,8 @@ async def extract_node(state: GraphState) -> dict:
     mark_ocr_fields(fields, set(state.get("scanned_filenames", [])))
     # 验收口径台数由代码数报告里的设备代码，不信 LLM 数数（实测会数错）
     apply_acceptance_count(fields, state.get("files", []))
+    # 确认单（五）第 8 题：有补充协议时记下，起诉状加一句并提醒律师
+    mark_supplement_agreements(fields, state.get("files", []))
     # 律师规则把关：被告住址只用工商登记信息、AI 归纳的付款条款标待核实
     apply_rule_guards(fields)
     # 值回原文逐页锚定：补充已验证页码 + 命中片段 + 通道 + confidence（出处可追溯）
