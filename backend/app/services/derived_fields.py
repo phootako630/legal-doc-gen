@@ -1577,7 +1577,9 @@ def payable_ratio_field(fields: dict) -> dict | None:
             label = _stage_label(fields, hit.no) if hit.no else "付款条款"
             return {
                 "value": f"{hit.end:g}%",
-                "src": f"{PAYABLE_FROM_STAGES}：已付 + 欠款占合同总价 {_plain_number(due)}%，与{label}付至 {hit.end:g}% 相符",
+                "src": f"{PAYABLE_FROM_STAGES}：已付 + 欠款占合同总价 {_plain_number(due)}%，与{label}付至 {hit.end:g}% 相符"
+                # 比例依赖付款条款原文：原文未找到 / OCR / 待核实要带到比例上（#54 评审）
+                + _source_risk_note(fields, "payment_clause_text", "付款条款"),
             }
         return {"value": None, "src": f"{payable_ratio_unmatched_note(fields)}，待核实"}
     ratio = parse_percent(_str_value(fields, "retention_ratio"))

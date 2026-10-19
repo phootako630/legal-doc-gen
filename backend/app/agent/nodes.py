@@ -42,6 +42,7 @@ from app.services.derived_fields import (
     needs_warranty_period,
     parse_percent,
     PAYABLE_FROM_STAGES,
+    payable_ratio_field,
     payable_ratio_options,
     retention_is_guarantee,
 )
@@ -717,7 +718,9 @@ async def retention_node(state: GraphState) -> dict:
         "律师"
     )
     # 「已付 + 欠款」已与付款条款的累计节点对上（payable_ratio_field）：比例已定，不再问律师
-    from_stages = isinstance(node, dict) and str(node.get("src") or "").startswith(PAYABLE_FROM_STAGES)
+    # 正常图里 retention 在 validate（派生字段）之前，这里当场匹配，不能等派生结果（#54 评审）
+    matched = payable_ratio_field(fields)
+    from_stages = bool(matched) and str(matched.get("src") or "").startswith(PAYABLE_FROM_STAGES)
     # 只是银行质保保函、合同款里没有扣留质保金：不问律师，按支付至 100%（payable_ratio_field）
     if not ratio or lawyer_set or from_stages or retention_is_guarantee(fields):
         return {}

@@ -65,7 +65,10 @@ def _ratio(piece: str) -> tuple[str, float] | None:
     m = _CUMULATIVE_RE.search(piece)
     if m:
         return "cum", float(m.group(1))
-    m = _STAGE_RE.search(piece) or _REMAINDER_RE.search(piece)
+    m = _STAGE_RE.search(piece)
+    # 「质保金：乙方向甲方开具合同总价5%的银行质保保函」是开保函，不是支付价款（#54 评审）
+    if not m and "保函" not in piece:
+        m = _REMAINDER_RE.search(piece)
     if m:
         return "stage", float(m.group(1))
     return None

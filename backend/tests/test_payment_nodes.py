@@ -96,16 +96,62 @@ def test_due_ratio_95_matches_node_and_skips_retention_question():
         "1、预付款：支付合同总价的5%；2、排产款：支付合同总价的5%；3、发货款：支付合同总价的60%；"
         "4、验收款：验收合格后支付合同总价的25%；5、质保金：质保期满后支付合同总价的5%。"
     )
-    fields = apply_derived_fields(
-        _case(clause, 1000000, 700000, 250000, retention_ratio="5%", retention_clause_text="质保金5%，质保期满后支付")
-    )
+    raw = _case(clause, 1000000, 700000, 250000, retention_ratio="5%", retention_clause_text="质保金5%，质保期满后支付")
+    # 正常图里 retention 在派生字段之前运行：用未派生的原始字段调用，比例已对上节点就不暂停
+    assert _retention_asks(raw) == []
+    fields = apply_derived_fields(raw)
     assert fields["payable_ratio"]["value"] == "95%"
     assert fields["payment_cite_location"]["value"] == "第七条第4项"
     assert fields["payment_cite_text"]["value"] == "“验收合格后支付合同总价的25%”"  # 小标题「验收款：」不抄
 
-    from app.agent.nodes import retention_node
 
-    assert asyncio.run(retention_node({"extracted_fields": fields})) == {}  # 比例已对上节点，不再暂停
+def _retention_asks(fields):
+    from app.agent import nodes
+
+    asked = []
+
+    def fake_interrupt(payload):
+        asked.append(payload)
+        return {}
+
+    orig = nodes.interrupt
+    nodes.interrupt = fake_interrupt
+    try:
+        asyncio.run(nodes.retention_node({"extracted_fields": fields}))
+    finally:
+        nodes.interrupt = orig
+    return asked
+
+
+def test_unmatched_ratio_with_retention_still_asks_lawyer():
+    clause = "1、支付合同总价的70%；2、验收后支付至95%；3、质保金：质保期满后支付合同总价的5%。"
+    raw = _case(clause, 1000000, 600000, 250000, retention_ratio="5%", retention_clause_text="质保金5%，质保期满后支付")
+    asked = _retention_asks(raw)
+    assert asked and asked[0]["pending"]["field_keys"] == ["payable_ratio"]
+
+
+def test_guarantee_under_retention_heading_is_not_a_payment():
+    clause = "1、验收后支付至合同总价的95%；2、质保金：乙方向甲方开具合同总价5%的银行质保保函。"
+    assert parse_payment_stages(clause) == []  # 保函不算付款，累计到不了 100%，不拿来匹配
+    fields = apply_derived_fields(_case(clause, 1000000, 950000, 50000))
+    assert "保函" not in str(fields["payment_cite_text"]["value"])
+    # 同一节点里保函之外还有真实付款义务时照常解析
+    real = "1、支付合同总价的95%；2、乙方提交合同总价5%的银行保函后15日内甲方支付合同总价的5%。"
+    assert [s.end for s in parse_payment_stages(real)] == [95, 100]
+
+
+def test_matched_ratio_keeps_source_risk_in_complaint():
+    from app.services.complaint_renderer import render_complaint
+
+    clause = "1、支付合同总价的70%；2、验收后支付至95%；3、质保期满后支付合同总价的5%。"
+    for note in ("《合同》第七条（原文未找到，待核实）", "《合同》第七条（OCR识别，待核实）"):
+        fields = _case(clause, 1000000, 700000, 250000)
+        fields["payment_clause_text"]["src"] = note
+        apply_derived_fields(fields)
+        assert fields["payable_ratio"]["value"] == "95%"
+        assert "待核实" in fields["payable_ratio"]["src"] or "请核实" in fields["payable_ratio"]["src"]
+        text = render_complaint(fields, template="支付至{{payable_ratio}}合同款")
+        assert text == "支付至⚠️ 待核实：95%合同款"
 
 
 def test_unmatched_ratio_left_for_lawyer_with_reason():
