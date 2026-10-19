@@ -447,11 +447,17 @@ def elevator_qty_field(fields: dict) -> dict | None:
 
 # 移交 / 交付的接收方是物业：「移交甲方指定的物业单位」「交付给物业公司」。接收方须在同一分句内
 # 紧跟动词（不跨逗号），「移交甲方后，由物业负责保养」的接收方是甲方；「不 / 无需移交物业」不算
-_HANDOVER_TO_PROPERTY_RE = re.compile(r"(?<![不无未])(?<!无需)(?<!无须)(?:移交|交付|交接)(?:给|予|至|于)?[^，,。；;、]{0,8}物业")
+_HANDOVER_TO_PROPERTY_RE = re.compile(r"(?:移交|交付|交接)(?:给|予|至|于)?[^，,。；;、]{0,8}物业")
+# 同一分句里接收方前出现否定 / 禁止（「不得移交物业」「无需交付物业」「严禁移交物业」）不算约定移交物业
+_NEGATION_RE = re.compile(r"不|无|未|禁止|严禁|勿|非")
 
 
 def _handover_to_property(text: str) -> bool:
-    return bool(_HANDOVER_TO_PROPERTY_RE.search(text))
+    for clause in re.split(r"[，,。；;]", text):
+        for m in _HANDOVER_TO_PROPERTY_RE.finditer(clause):
+            if not _NEGATION_RE.search(clause[: m.start()]):
+                return True
+    return False
 
 
 def handover_text_field(fields: dict) -> dict:

@@ -338,10 +338,31 @@ def test_retention_return_with_price_prefix_is_dropped(clause):
 
 
 @pytest.mark.parametrize(
+    "clause",
+    [
+        "甲方未按约定支付工程款或未按时返还质保金的，每日按万分之五支付违约金。",
+        "甲方未按合同约定支付工程款或未按时返还质保金的，每日按万分之五支付违约金。",
+        "甲方未按时支付工程款或未按时返还质保金的，每日按万分之五支付违约金。",
+    ],
+)
+def test_mixed_price_and_retention_clause_is_kept(clause):
+    fields = {
+        "breach_clause_text": {"value": clause, "src": "《合同》"},
+        "breach_interest_rate_text": {"value": "每日万分之五的标准", "src": "《合同》"},
+    }
+    apply_rule_guards(fields)
+    assert fields["breach_clause_text"]["value"] == clause
+    assert fields["breach_interest_rate_text"]["value"] == "每日万分之五的标准"
+
+
+@pytest.mark.parametrize(
     ("handover", "expected"),
     [
         ("设备移交甲方后，由甲方委托物业公司负责日常保养", "已全部移交被告"),
         ("本合同电梯无需移交物业，由甲方自行管理", "已全部移交被告"),
+        ("电梯不得移交物业，应直接移交甲方。", "已全部移交被告"),
+        ("电梯不应移交物业", "已全部移交被告"),
+        ("严禁乙方擅自将电梯交付物业", "已全部移交被告"),
         ("验收合格后乙方将电梯交付给甲方指定的物业公司", "已全部移交物业"),
     ],
 )
