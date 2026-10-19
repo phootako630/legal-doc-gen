@@ -97,6 +97,8 @@ export interface ExtractedFields {
   // 律师确认单规则引入的字段（后端抽取或派生；旧会话可能没有）
   contract_type?: FieldValue;
   payment_clause_summary?: FieldValue;
+  payment_cite_location?: FieldValue; // 派生：欠款对应的付款节点条款号
+  payment_cite_text?: FieldValue; // 派生：欠款对应的付款节点原文（写入起诉状）
   retention_ratio?: FieldValue;
   payable_ratio?: FieldValue;
   jurisdiction_text?: FieldValue;

@@ -12,6 +12,8 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 
+from app.services.payment_nodes import match_cumulative, parse_payment_stages
+
 # ── 结果模型 ──────────────────────────────────────────────────────────────────
 
 
@@ -253,6 +255,37 @@ def latest_acceptance_date(dates: list[object]) -> tuple[int, int, int] | None:
 # ── 批量入口：从 extracted_fields 跑全部检查 ────────────────────────────────
 
 
+def check_payment_progress(
+    total: object, paid: object, unpaid: object, payment_clause: object
+) -> ValidationCheck:
+    """
+    「已付 + 欠款」占合同总价的比例能否对上付款条款的某个累计节点（确认单（五）第 3 题、律师反馈）。
+    对不上不算冲突，标琥珀色提醒律师：可能调过价、实际台数与合同不同或质保金到期时间不统一。
+    """
+    key = "payment_progress"
+    related = ["payable_ratio", "payment_clause_text", "total_amount", "paid_amount", "unpaid_amount"]
+    t, p, u = parse_amount(total), parse_amount(paid), parse_amount(unpaid)
+    stages = parse_payment_stages(payment_clause if isinstance(payment_clause, str) else None)
+    if not t or p is None or u is None or not stages:
+        return ValidationCheck(key, False, "付款条款未拆出付款节点，未核对付款比例。", related, applicable=False)
+    due = (p + u) / t * 100
+    hit = match_cumulative(stages, due)
+    due_text = f"{due:.2f}".rstrip("0").rstrip(".")
+    if hit:
+        return ValidationCheck(
+            key, True, f"已付 + 欠款占合同总价 {due_text}%，与付款节点「付至 {hit.end:g}%」相符。", related
+        )
+    cums = "、".join(f"{s.end:g}%" for s in stages)
+    return ValidationCheck(
+        key,
+        True,
+        f"已付 + 欠款占合同总价 {due_text}%，与付款条款各节点的累计比例（{cums}）都对不上：可能调过价、"
+        "实际台数与合同不同或质保金到期时间不统一，请律师手动核对。",
+        related,
+        needs_review=True,
+    )
+
+
 def _field_value(fields: dict, key: str) -> object:
     """从 extracted_fields[key] 取 value；兼容 {value,src} 结构与裸值。"""
     node = fields.get(key)
@@ -276,6 +309,12 @@ def run_all_checks(fields: dict) -> list[ValidationCheck]:
         ),
         validate_credit_code(_field_value(fields, "defendant_credit_code")),
         check_date_valid(_field_value(fields, "contract_sign_date"), "contract_sign_date"),
+        check_payment_progress(
+            _field_value(fields, "total_amount"),
+            _field_value(fields, "paid_amount"),
+            _field_value(fields, "unpaid_amount"),
+            _field_value(fields, "payment_clause_text"),
+        ),
     ]
     return checks
 
