@@ -317,3 +317,41 @@ def test_warranty_period_not_needed_for_rate_penalty(monkeypatch):
     out = _run_augment(monkeypatch, ocr, fields=fields, page_count=20)
     assert ocr.await_count == 0
     assert out == {}
+
+
+def test_strategic_contract_only_fills_clauses_never_case_fields(monkeypatch):
+    # 主合同已读出当事人、签约日期等，但缺违约条款 → 接着读战略合同；战略合同只能补条款（#55 评审）
+    main_fields = {
+        "contract_sign_date": {"value": "2024年2月26日", "src": "《主合同.pdf》盖章页"},
+        "contract_party_a": {"value": "虚构置业有限公司", "src": "《主合同.pdf》盖章页"},
+        "contract_party_b": {"value": "某电梯公司江苏分公司", "src": "《主合同.pdf》盖章页"},
+        "contract_title": {"value": "某项目电梯买卖合同", "src": "《主合同.pdf》"},
+        "payment_clause_text": {"value": "验收后付清", "src": "《主合同.pdf》第七条"},
+        "dispute_clause_text": {"value": None, "src": ""},
+        "breach_interest_rate_text": {"value": None, "src": ""},
+        "delivery_place": {"value": None, "src": ""},
+    }
+    strategic_result = {
+        "contract_sign_date": {"value": "2020年1月1日", "src": "《战略合同.pdf》"},
+        "contract_party_a": {"value": "虚构集团有限公司", "src": "《战略合同.pdf》"},
+        "contract_party_b": {"value": "某电梯公司", "src": "《战略合同.pdf》"},
+        "contract_title": {"value": "集团电梯战略合作协议", "src": "《战略合同.pdf》"},
+        "elevator_qty_by_contract": {"value": 100, "src": "《战略合同.pdf》"},
+        "delivery_place": {"value": "集团各项目工地", "src": "《战略合同.pdf》"},
+        "dispute_clause_location": {"value": "第三条", "src": "《战略合同.pdf》"},
+        "dispute_clause_text": {"value": "提交南京仲裁委员会仲裁", "src": "《战略合同.pdf》"},
+    }
+    monkeypatch.setattr(nodes_mod, "ocr_page", _ocr_by_page({1: _PAGE2}))
+    monkeypatch.setattr(nodes_mod, "chat", AsyncMock(return_value=strategic_result))
+    strategic = dict(_scanned_contract(), filename="战略合同.pdf", identified_type="战略合同")
+    state = {"extracted_fields": main_fields, "files": [strategic]}
+    f = asyncio.run(nodes_mod.ocr_augment_node(state))["extracted_fields"]
+
+    assert f["dispute_clause_text"]["value"] == "提交南京仲裁委员会仲裁"
+    assert f["dispute_clause_text"]["src"].startswith("《战略合同.pdf》")
+    assert f["contract_sign_date"]["value"] == "2024年2月26日"
+    assert f["contract_party_a"]["value"] == "虚构置业有限公司"
+    assert f["contract_party_b"]["value"] == "某电梯公司江苏分公司"
+    assert f["contract_title"]["value"] == "某项目电梯买卖合同"
+    assert "elevator_qty_by_contract" not in f or f["elevator_qty_by_contract"].get("value") != 100
+    assert not f["delivery_place"].get("value")
