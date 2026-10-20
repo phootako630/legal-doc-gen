@@ -2,18 +2,19 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Switch } from '@/components/ui/switch';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { FileDropzone } from './FileDropzone';
 import { FileList } from './FileList';
+import { InternetToggle } from './InternetToggle';
 import { MaterialReview } from './MaterialReview';
 import { UploadProgressPanel } from './UploadProgressPanel';
 import { BranchTableNotice } from '@/components/branches/BranchTableNotice';
 import { uploadFiles, fetchUploadProgress } from '@/lib/api';
 import { newRequestKey } from '@/lib/request-key';
 import { materialStatus, withDetectedTypes } from '@/lib/materials';
+import { formatMB, totalSizeError } from '@/lib/upload-limits';
 import type { DocType, UploadResponse, UploadProgress } from '@/lib/types';
-import { Globe, Loader2, TriangleAlert, ArrowRight } from 'lucide-react';
+import { Loader2, TriangleAlert, ArrowRight } from 'lucide-react';
 
 interface UploadStepProps {
   onDone: (result: UploadResponse, internetAllowed: boolean) => void;
@@ -67,6 +68,8 @@ export function UploadStep({ onDone, onOpenBranches }: UploadStepProps) {
 
   const handleSubmit = async () => {
     if (files.length === 0) { setError('请至少上传一个文件'); return; }
+    const tooLarge = totalSizeError(files);
+    if (tooLarge) { setError(tooLarge); return; }
     setLoading(true);
     setError(null);
     setUploadResult(null);
@@ -127,25 +130,7 @@ export function UploadStep({ onDone, onOpenBranches }: UploadStepProps) {
 
         {uploadResult && <MaterialReview files={uploadResult.files} onChangeType={changeType} />}
 
-        {/* 联网查询开关 */}
-        <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-4 py-3.5">
-          <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary/10 text-primary">
-              <Globe className="h-4 w-4" />
-            </div>
-            <div>
-              <p className="text-sm font-medium leading-tight">联网查询原告信息</p>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                允许 AI 通过企业名称在线补全统一社会信用代码等信息
-              </p>
-            </div>
-          </div>
-          <Switch
-            checked={internetAllowed}
-            onCheckedChange={setInternetAllowed}
-            aria-label="联网查询开关"
-          />
-        </div>
+        <InternetToggle checked={internetAllowed} onChange={setInternetAllowed} />
 
         {loading && <UploadProgressPanel progress={progress} />}
 
@@ -175,7 +160,9 @@ export function UploadStep({ onDone, onOpenBranches }: UploadStepProps) {
         {/* 提交 */}
         <div className="flex items-center justify-between border-t border-border pt-4">
           <p className="text-xs text-muted-foreground">
-            {files.length === 0 ? '尚未选择文件' : `已选择 ${files.length} 个文件`}
+            {files.length === 0
+              ? '尚未选择文件'
+              : `已选择 ${files.length} 个文件，共 ${formatMB(files.reduce((n, f) => n + f.size, 0))}`}
           </p>
           <Button
             onClick={uploadResult ? confirm : handleSubmit}

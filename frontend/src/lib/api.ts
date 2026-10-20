@@ -45,6 +45,10 @@ export async function uploadFiles(files: File[], progressId: string): Promise<Up
   // 进度 id：后端按它隔离进度，多人同时上传时进度条互不串
   form.append('progress_id', progressId);
   const res = await safeFetch(`${BASE}/upload`, { method: 'POST', body: form });
+  // 超过服务器上限时 nginx 直接返回 413（英文 HTML 页，没有 detail）：给中文提示
+  if (res.status === 413) {
+    throw new Error('上传的文件总大小超过服务器上限，请删除不需要的文件或压缩扫描件后重试');
+  }
   if (!res.ok) throw await extractError(res, '上传失败');
   return res.json() as Promise<UploadResponse>;
 }
