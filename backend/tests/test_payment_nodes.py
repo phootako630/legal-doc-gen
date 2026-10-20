@@ -234,3 +234,19 @@ def test_table_clause_matches_and_cites_owed_rows():
     assert fields["payable_ratio"]["value"] == "95%"
     assert fields["payment_cite_location"]["value"] == "第七条第3项"
     assert fields["payment_cite_text"]["value"] == "“验收款，25%，政府验收合格后30日内”"
+
+
+def test_table_total_row_is_not_a_stage():
+    md = MD_TABLE + "| 合计 |  | 100% |  |\n"
+    assert [s.end for s in parse_payment_stages(md)] == [30, 70, 95, 100]
+    html = HTML_TABLE.replace("</table>", "<tr><td>总计</td><td></td><td>100%</td></tr></table>")
+    assert [s.end for s in parse_payment_stages(html)] == [20, 80, 100]
+
+
+def test_table_guarantee_row_is_not_a_payment():
+    table = "| 节点 | 比例 | 条件 |\n|---|---|---|\n| 验收款 | 95% | 验收后支付 |\n| 银行质保保函 | 5% | 乙方向甲方开具保函 |\n"
+    assert parse_payment_stages(table) == []  # 保函不算付款，累计到不了 100%，交律师核对
+    fields = apply_derived_fields(_case(table, 1000000, 950000, 50000))
+    assert "保函" not in str(fields["payment_cite_text"]["value"])
+    paid_after = table.replace("乙方向甲方开具保函", "收到乙方保函后支付")
+    assert [s.end for s in parse_payment_stages(paid_after)] == [95, 100]

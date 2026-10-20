@@ -83,6 +83,7 @@ def _ratio(piece: str) -> tuple[str, float] | None:
 
 
 _PCT_CELL_RE = re.compile(_PCT)
+_TOTAL_ROW_RE = re.compile(r"合\s*计|总\s*计|小\s*计|共\s*计")
 _NO_CELL_RE = re.compile(r"^(?:第)?\s*(\d{1,2}(?:[.．]\d{1,2}){0,3})\s*(?:[期条项、.．])?$")
 
 
@@ -107,7 +108,12 @@ def _table_stages(text: str) -> list[PaymentStage]:
                 elif re.search(r"比例|百分比|%|％", c) and stage_col is None:
                     stage_col = i
             continue
-        if _PENALTY_RE.search("".join(cells)):
+        row = "".join(cells)
+        # 违约金 / 利息行、「合计 / 总计 100%」汇总行不是付款节点（#57 评审）
+        if _PENALTY_RE.search(row) or _TOTAL_ROW_RE.search(row):
+            continue
+        # 「银行质保保函｜5%｜乙方向甲方开具保函」是开保函，不是支付价款；同一行写了支付（「收到保函后支付」）才算
+        if "保函" in row and not re.search(r"支付|付款|付清", row):
             continue
         no_match = _NO_CELL_RE.match(cells[0].strip()) if cells else None
         no = no_match.group(1) if no_match else ""
