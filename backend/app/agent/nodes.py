@@ -226,6 +226,8 @@ async def extract_node(state: GraphState) -> dict:
     apply_strategic_guards(fields, state.get("files", []))
     # 值回原文逐页锚定：补充已验证页码 + 命中片段 + 通道 + confidence（出处可追溯）
     enrich_provenance(fields, state.get("files", []))
+    # 锚定可能把出处改成实际命中的战略合同：按实际来源再把关一次（#56 评审）
+    apply_strategic_guards(fields, state.get("files", []))
     return {"extracted_fields": fields}
 
 
@@ -395,7 +397,12 @@ def _mark_strategic_dispute_location(fields: dict, extracted: dict, filename: st
     loc = extracted.get("dispute_clause_location")
     strategic_loc = str(loc.get("value") or "") if isinstance(loc, dict) else ""
     main = fields.get("dispute_clause_location")
-    main_loc = str(main.get("value") or "") if isinstance(main, dict) else ""
+    # 主合同位置须真取自主合同：缺失时合并循环可能已把战略合同的条款号填进来，不能当成主合同的
+    main_loc = (
+        str(main.get("value") or "")
+        if isinstance(main, dict) and filename not in str(main.get("src") or "")
+        else ""
+    )
     part = f"{STRATEGIC_LABEL}{strategic_loc}" if strategic_loc else STRATEGIC_LABEL
     value = f"{main_loc}及{part}" if main_loc and not main_loc.startswith(STRATEGIC_LABEL) else part
     node = {"value": value, "src": f"《{filename}》"}
@@ -488,6 +495,7 @@ async def ocr_augment_node(state: GraphState) -> dict:
         return {}
     # 有新 OCR 文本：重新逐页锚定，令条款字段拿到真实页码 + channel=ocr
     enrich_provenance(fields, files)
+    apply_strategic_guards(fields, files)  # 按锚定后的实际来源再把关
     return {"extracted_fields": fields, "files": files}
 
 

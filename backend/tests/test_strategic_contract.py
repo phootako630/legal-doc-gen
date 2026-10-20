@@ -140,3 +140,35 @@ def test_scanned_main_referral_then_scanned_strategic(monkeypatch):
     assert f["dispute_clause_text"]["value"] == "提交南京仲裁委员会仲裁"
     assert f["dispute_clause_location"]["value"] == "第十条及战略合同第三条"
     assert "OCR" in f["dispute_clause_text"]["src"] and "OCR" in f["dispute_clause_location"]["src"]
+
+
+def test_guard_rechecks_after_provenance_finds_strategic_source(monkeypatch):
+    # 模型把战略合同里的日期标成主合同来源；锚定改成实际命中的战略合同后，仍须清空（#56 评审）
+    main_text = "电梯买卖合同\n甲方：虚构置业有限公司\n第十条 争议解决按战略合同执行。"
+    strategic_text = "电梯采购战略合同\n签订日期：2020年1月1日\n第三条 争议提交南京仲裁委员会仲裁。"
+    files = [
+        {"filename": "主合同.pdf", "identified_type": "合同", "is_scanned": False, "text": main_text,
+         "pages": [{"page": 1, "text": main_text}], "file_id": None},
+        {"filename": "战略合同.pdf", "identified_type": "战略合同", "is_scanned": False, "text": strategic_text,
+         "pages": [{"page": 1, "text": strategic_text}], "file_id": None},
+    ]
+    llm_fields = {"contract_sign_date": {"value": "2020年1月1日", "src": "《主合同.pdf》"}}
+    monkeypatch.setattr(nodes_mod, "chat", AsyncMock(return_value=llm_fields))
+    out = asyncio.run(nodes_mod.extract_node({"files": files, "checklist": {}}))
+    assert out["extracted_fields"]["contract_sign_date"]["value"] is None
+
+
+def test_unknown_main_location_cites_strategic_only(monkeypatch):
+    monkeypatch.setattr(nodes_mod, "chat", AsyncMock(return_value=_STRATEGIC_RESULT))
+    strategic = {
+        "filename": "集团战略合同.pdf",
+        "identified_type": "战略合同",
+        "is_scanned": False,
+        "text": _STRATEGIC_TEXT,
+        "pages": [{"page": 1, "text": _STRATEGIC_TEXT}],
+        "file_id": None,
+    }
+    fields = _case_fields()
+    fields.pop("dispute_clause_location")  # 主合同的转引条款号没读到
+    f = asyncio.run(nodes_mod.ocr_augment_node({"extracted_fields": fields, "files": [strategic]}))["extracted_fields"]
+    assert f["dispute_clause_location"]["value"] == "战略合同第三条"
