@@ -24,12 +24,13 @@
 
 | 功能 | 说明 |
 |---|---|
-| 材料解析 | 可解析 PDF、Word、扫描件 PDF。扫描件不整份 OCR，agent 只读需要的页（付款 / 违约 / 争议条款、签章页、设备清单、验收报告） |
+| 材料解析 | 可解析 PDF、Word、扫描件 PDF（单个 ≤ 20 MB，一次合计 ≤ 95 MB）。扫描件不整份 OCR，agent 只读需要的页（付款 / 违约 / 争议条款、签章页、设备清单、验收报告），找到即停，单案扫描合同最多 50 页、扫描验收报告最多 30 页；文件名认不出类型的扫描件只识别第 1 页标题 |
+| 材料确认 | 上传后逐份显示系统识别的类型（审批表 / 合同 / 补充协议 / 验收报告 / 战略或框架合同），认错可下拉改，按改后的类型重算缺哪些材料 |
 | 字段抽取与锚定 | 审批表结构字段直取，合同条款原文保留。抽取值回原文逐页命中，没命中的标待核实 |
 | 交叉校验 | 金额勾稽（总额 = 已付 + 未付）、签约 / 合同 / 验收三源台数、信用代码校验位、日期 |
-| 律师填写规则 | 两份《起诉状规则确认单》落成代码（`services/derived_fields.py`），覆盖以下内容：<br>• 原告拼接（总公司 + 分公司 / 独立公司）<br>• 买卖 / 安装措辞<br>• 台数口径（含 VGE 家用电梯）<br>• 违约金与逾期利息（按费率、一次性金额、按日固定金额、上限）<br>• 已付 / 欠款比例<br>• 管辖法院与管辖句<br>• 仲裁申请书切换 |
+| 律师填写规则 | 多轮《起诉状规则确认单》落成代码（`services/derived_fields.py`、`services/payment_nodes.py`），覆盖以下内容：<br>• 原告拼接（总公司 + 分公司 / 独立公司）<br>• 买卖 / 安装措辞<br>• 台数口径（含 VGE 家用电梯）<br>• 付款节点引用（按「已付 + 欠款」的累计比例找欠款对应的条款项）<br>• 补充协议、战略 / 框架合同（只取其中的条款）<br>• 违约金与逾期利息（按费率、一次性金额、按日固定金额、上限）<br>• 已付 / 欠款比例<br>• 管辖法院与管辖句<br>• 仲裁申请书切换 |
 | 断点问律师 | 材料缺失、字段冲突、台数不一致、合同有质保金（选「支付至 X% 合同款」）时暂停，律师选定后继续 |
-| 审核页 | 中文字段表，显示状态、来源、页码，按可信度排序，所有字段可编辑。可对单个字段提交问题反馈 |
+| 审核页 | 中文字段表，显示状态、来源、页码，按当事人 / 合同与金额 / 付款与违约条款 / 管辖与文书分组，可勾选「只看需处理的」；所有字段可编辑，可对单个字段提交问题反馈。从预览页返回修改不丢改动；刷新页面前浏览器先确认，刷新后可「继续上次的案件」 |
 | 起诉状导出 | 预览页标出「N 处待补充」。Word 导出保留黄色高亮，方便律师最后复核 |
 | 原告信息表 | 全所共用的原告信用代码 / 负责人 / 住址底表。所有人可查看、下载 Excel；凭管理员口令上传新版或回退历史版本 |
 | 登录 | 管理员在服务器上建账号（无注册入口），7 天免登录，律师可自行改密码，连续输错密码会锁定 |
@@ -80,7 +81,7 @@ flowchart TB
             RAU["/api/auth/*"]
             RU["POST /api/upload"]
             RA["POST /api/analyze（幂等，可带断点）"]
-            RR["POST /api/resume（断点恢复）"]
+            RR["POST /api/resume（断点恢复）<br/>GET /api/case/{run_id}（刷新后继续）"]
             RG["POST /api/generate（模板渲染）"]
             RB["/api/branches/*（原告信息表）"]
             RF["POST /api/feedback"]
@@ -195,8 +196,9 @@ legal-doc-gen/
 ├── frontend/                        # React 前端
 │   └── src/
 │       ├── components/{auth,upload,processing,review,preview,branches,layout,ui}/
-│       ├── hooks/{useAuth,useComplaintFlow,useAdminToken}.ts
-│       └── lib/{api,auth-api,branch-api,buildReviewFields,field-map,html-doc-generator,types}.ts
+│       ├── hooks/{useAuth,useComplaintFlow,useAdminToken,useLeaveWarning}.ts
+│       └── lib/{api,auth-api,branch-api,buildReviewFields,case-session,field-groups,field-map,
+│               html-doc-generator,materials,request-key,types,upload-limits}.ts
 │
 ├── backend/                         # Python FastAPI 后端
 │   ├── app/
@@ -206,10 +208,11 @@ legal-doc-gen/
 │   │   └── services/                                         # 框架无关纯函数工具
 │   │       ├── file_parser  file_store  ocr_engine  llm_client  prompt_loader
 │   │       ├── extraction  anchoring  provenance  doc_search  validators  confidence
-│   │       ├── derived_fields  acceptance_report  equipment_list  complaint_renderer
+│   │       ├── derived_fields  payment_nodes  acceptance_report  equipment_list  complaint_renderer
 │   │       ├── branch_table  branch_registry  company_lookup（预留）
-│   │       └── auth_store  login_guard  run_log  progress_table
+│   │       └── auth_store  login_guard  run_log  progress_table  llm_progress  upload_progress
 │   ├── scripts/{manage_users,list_feedback,usage_report}.py  # 账号管理 / 查看反馈 / 使用统计
+│   ├── scripts/eval_cases.py + case_eval/                    # 案件 eval：真实案卷逐字段打分（案卷不进仓库）
 │   └── tests/                                                # pytest（虚构数据）
 │
 ├── deploy/                          # nginx 配置、cert.sh、deploy.sh、中文部署指南
@@ -217,7 +220,7 @@ legal-doc-gen/
 └── .github/workflows/{ci,deploy}.yml
 ```
 
-`routers/extract.py` 中的 `POST /api/extract` 是 v1 遗留接口。前端仍用其中的 `GET /api/extract/progress` 显示分析进度。
+`routers/extract.py` 中的 `POST /api/extract` 与 `GET /api/extract/progress` 是 v1 遗留接口，前端已不再调用；分析进度走 `GET /api/analyze/progress`。
 
 ---
 
@@ -244,6 +247,8 @@ pnpm dev                   # http://localhost:5173，/api/* 代理转发到 :800
 cd backend && ruff check . && python -m pytest
 cd frontend && pnpm lint && pnpm build
 ```
+
+改了抽取或律师规则后，可用律师已写好诉状的真实案卷跑 `backend/scripts/eval_cases.py`，按字段打分并与上次结果对比（OCR / LLM 返回已录制，`--strict` 回放零费用）。案卷只放服务器 `/srv/eval-cases`，见 [deploy/README.md](./deploy/README.md)。
 
 ## 部署（UAT / 生产）
 

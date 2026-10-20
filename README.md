@@ -33,12 +33,13 @@ After the lawyer reviews and confirms, the app generates a civil complaint as a 
 
 | Feature | Details |
 |---|---|
-| Material parsing | Text PDFs, Word files and scanned PDFs. Scans are never OCR'd whole: the agent reads only the pages it needs (payment / breach / dispute clauses, signature page, equipment list, acceptance reports). |
+| Material parsing | Text PDFs, Word files and scanned PDFs (≤ 20 MB each, ≤ 95 MB per upload). Scans are never OCR'd whole: the agent reads only the pages it needs (payment / breach / dispute clauses, signature page, equipment list, acceptance reports) and stops once it finds them, capped at 50 pages of scanned contracts and 30 pages of scanned acceptance reports per case. A scan whose file name gives no type has only its first page OCR'd to read the title. |
+| Material confirmation | After upload, each file shows its detected type (approval form / contract / supplementary agreement / acceptance report / strategic or framework contract). The lawyer can correct it from a dropdown, and the missing-materials check is recomputed. |
 | Extraction & anchoring | Structured fields are read straight from the approval form, and contract clauses are kept verbatim. Each value is matched back to the source page by page; values with no match are flagged "to verify". |
 | Cross-validation | Amount reconciliation (total = paid + unpaid), elevator counts across signing / contract / acceptance, credit-code check digit, dates. |
-| Lawyer drafting rules | Two rounds of lawyer-confirmed rule sheets, implemented as code in `services/derived_fields.py`. They cover:<br>• plaintiff naming (HQ + branch, or an independent subsidiary)<br>• sales vs. installation wording<br>• elevator-count basis (including VGE home elevators)<br>• penalty vs. late-payment interest (rate-based, lump-sum, fixed daily amount, caps)<br>• paid / unpaid ratios<br>• competent court and jurisdiction sentence<br>• switching to an arbitration application |
+| Lawyer drafting rules | Several rounds of lawyer-confirmed rule sheets, implemented as code in `services/derived_fields.py` and `services/payment_nodes.py`. They cover:<br>• plaintiff naming (HQ + branch, or an independent subsidiary)<br>• sales vs. installation wording<br>• elevator-count basis (including VGE home elevators)<br>• citing the payment milestones the debt falls under (matched by the cumulative ratio of paid + unpaid)<br>• supplementary agreements and strategic / framework contracts (clauses only)<br>• penalty vs. late-payment interest (rate-based, lump-sum, fixed daily amount, caps)<br>• paid / unpaid ratios<br>• competent court and jurisdiction sentence<br>• switching to an arbitration application |
 | Lawyer breakpoints | Pauses on missing materials, field conflicts, count mismatches, and contracts with retention money (the lawyer picks "paid up to X% of the contract price"). It resumes once the lawyer decides. |
-| Review page | A Chinese field table with status, source and page, sorted by confidence. Every field is editable, and each field has a button for submitting feedback on it. |
+| Review page | A Chinese field table with status, source and page, grouped into parties / contract & amounts / payment & breach clauses / jurisdiction & document, with a "needs attention only" filter. Every field is editable, and each field has a button for submitting feedback on it. Edits survive going back from the preview; the browser asks before a refresh, and after one the lawyer can resume the previous case. |
 | Complaint export | The preview shows how many blanks still need filling. The Word export keeps the yellow highlights for a final check. |
 | Plaintiff info table | A firm-wide table of plaintiff credit codes, legal representatives and addresses. Anyone can view or download it as Excel; uploading a new version or restoring an old one needs the admin token. |
 | Login | Accounts are created by an admin on the server (there is no sign-up). Sessions last 7 days, lawyers can change their own password, and repeated wrong passwords lock the login. |
@@ -89,7 +90,7 @@ flowchart TB
             RAU["/api/auth/*"]
             RU["POST /api/upload"]
             RA["POST /api/analyze (idempotent, may pause)"]
-            RR["POST /api/resume (resume breakpoint)"]
+            RR["POST /api/resume (resume breakpoint)<br/>GET /api/case/{run_id} (resume after refresh)"]
             RG["POST /api/generate (template render)"]
             RB["/api/branches/* (plaintiff info table)"]
             RF["POST /api/feedback"]
@@ -204,8 +205,9 @@ legal-doc-gen/
 ├── frontend/                        # React frontend
 │   └── src/
 │       ├── components/{auth,upload,processing,review,preview,branches,layout,ui}/
-│       ├── hooks/{useAuth,useComplaintFlow,useAdminToken}.ts
-│       └── lib/{api,auth-api,branch-api,buildReviewFields,field-map,html-doc-generator,types}.ts
+│       ├── hooks/{useAuth,useComplaintFlow,useAdminToken,useLeaveWarning}.ts
+│       └── lib/{api,auth-api,branch-api,buildReviewFields,case-session,field-groups,field-map,
+│               html-doc-generator,materials,request-key,types,upload-limits}.ts
 │
 ├── backend/                         # Python FastAPI backend
 │   ├── app/
@@ -215,10 +217,11 @@ legal-doc-gen/
 │   │   └── services/                                         # Framework-agnostic pure-function tools
 │   │       ├── file_parser  file_store  ocr_engine  llm_client  prompt_loader
 │   │       ├── extraction  anchoring  provenance  doc_search  validators  confidence
-│   │       ├── derived_fields  acceptance_report  equipment_list  complaint_renderer
+│   │       ├── derived_fields  payment_nodes  acceptance_report  equipment_list  complaint_renderer
 │   │       ├── branch_table  branch_registry  company_lookup (placeholder)
-│   │       └── auth_store  login_guard  run_log  progress_table
+│   │       └── auth_store  login_guard  run_log  progress_table  llm_progress  upload_progress
 │   ├── scripts/{manage_users,list_feedback,usage_report}.py  # Accounts / feedback / usage report
+│   ├── scripts/eval_cases.py + case_eval/                    # Case eval: per-field scoring on real cases (kept out of the repo)
 │   └── tests/                                                # pytest (synthetic data)
 │
 ├── deploy/                          # nginx config, cert.sh, deploy.sh, deployment guide (Chinese)
@@ -226,7 +229,7 @@ legal-doc-gen/
 └── .github/workflows/{ci,deploy}.yml
 ```
 
-`POST /api/extract` in `routers/extract.py` is a v1 leftover. The frontend still uses `GET /api/extract/progress` from the same router for the progress display.
+`POST /api/extract` and `GET /api/extract/progress` in `routers/extract.py` are v1 leftovers the frontend no longer calls; analysis progress comes from `GET /api/analyze/progress`.
 
 ---
 
@@ -253,6 +256,8 @@ Checks and tests:
 cd backend && ruff check . && python -m pytest
 cd frontend && pnpm lint && pnpm build
 ```
+
+After changing extraction or the lawyer rules, run `backend/scripts/eval_cases.py` on real cases that already have a lawyer-written complaint. It scores each field and compares with the previous run (OCR / LLM responses are recorded, so `--strict` replay costs nothing). The cases live only on the server under `/srv/eval-cases`; see [deploy/README.md](./deploy/README.md).
 
 ## Deployment (UAT / production)
 

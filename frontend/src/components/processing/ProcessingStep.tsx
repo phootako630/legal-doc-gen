@@ -12,7 +12,7 @@ interface ProcessingStepProps {
   onDone: (result: CaseState) => void;
 }
 
-/** 后端三个 LLM 阶段（与 /api/extract/progress 返回的 stage 名一一对应） */
+/** 后端三个 LLM 阶段（与 /api/analyze/progress 返回的 stage 名一一对应） */
 type StageKey = 'checklist' | 'extract' | 'validate';
 
 const STAGE_ORDER: StageKey[] = ['checklist', 'extract', 'validate'];

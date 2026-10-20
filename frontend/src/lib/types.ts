@@ -29,7 +29,7 @@ export interface UploadResponse {
   warnings: string[];
 }
 
-/** GET /api/extract/progress 的响应：三步 LLM 处理的实时阶段（前端轮询用） */
+/** GET /api/analyze/progress 的响应：三步 LLM 处理的实时阶段（前端轮询用） */
 export interface LlmProgress {
   active: boolean;
   stage: '材料清点' | '字段抽取' | '校验高亮' | '';
