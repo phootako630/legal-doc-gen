@@ -131,6 +131,65 @@ _CONTRACT_PRICE_RE = re.compile(
 )
 
 
+# 主合同只写「争议的解决……按战略合同内相关条款执行」，本身没有约定仲裁 / 法院（律师反馈：徐州苏宁）
+_STRATEGIC_REF_RE = re.compile(r"(?:战略|框架)(?:合同|协议|合作)")
+_FORUM_RE = re.compile(r"仲裁|法院|诉讼|管辖")
+# 战略 / 框架合同只能提供这些条款：它不是本案合同（与 agent/nodes.py 的按需 OCR 白名单一致）
+STRATEGIC_CLAUSE_KEYS = frozenset({
+    "payment_clause_location",
+    "payment_clause_text",
+    "payment_clause_summary",
+    "breach_interest_clause_location",
+    "breach_interest_rate_text",
+    "breach_clause_text",
+    "dispute_clause_location",
+    "dispute_clause_text",
+    "arbitration_institution",
+    "warranty_period",
+    "retention_ratio",
+    "retention_clause_text",
+})
+STRATEGIC_LABEL = "战略合同"
+
+
+def refers_to_strategic(text: str | None) -> bool:
+    """争议条款只是转引战略 / 框架合同，自己没写仲裁机构或法院。"""
+    compact = re.sub(r"\s+", "", text or "")
+    return bool(_STRATEGIC_REF_RE.search(compact)) and not _FORUM_RE.search(compact)
+
+
+def _from_files(node: object, names: list[str]) -> bool:
+    src = str(node.get("src") or "") if isinstance(node, dict) else ""
+    return any(name and name in src for name in names)
+
+
+def apply_strategic_guards(fields: dict, files: list[dict]) -> None:
+    """
+    战略 / 框架合同的把关（确定性代码）：
+    - 取自战略合同的当事人、签约日期、合同名称、台数、地点、金额等本案字段一律清空（它不是本案合同）；
+    - 争议条款取自战略合同时，位置写成「战略合同第X条」，起诉状不会误写成「案涉合同第X条」；
+    - 主合同的争议条款只是转引战略合同（没写仲裁 / 法院）时清空条款内容、保留主合同条款位置，
+      交给按需读取去战略合同里找（律师反馈：徐州苏宁）。
+    """
+    names = [f.get("filename", "") for f in files if f.get("identified_type") == "战略合同"]
+    if not names:
+        return
+    for key, node in list(fields.items()):
+        if key not in STRATEGIC_CLAUSE_KEYS and _from_files(node, names):
+            fields[key] = {"value": None, "src": "按律师规则：战略 / 框架合同不是本案合同，此项不取自战略合同"}
+    text = fields.get("dispute_clause_text")
+    loc = fields.get("dispute_clause_location")
+    if _from_files(text, names) and isinstance(loc, dict) and loc.get("value"):
+        if STRATEGIC_LABEL not in str(loc["value"]) and _from_files(loc, names):
+            loc["value"] = f"{STRATEGIC_LABEL}{loc['value']}"
+    elif isinstance(text, dict) and refers_to_strategic(text.get("value")):
+        fields["dispute_clause_text"] = {
+            "value": None,
+            "src": f"主合同约定争议解决按战略 / 框架合同执行（原文：{text.get('value')}），待从战略合同中读取",
+            "strategic_ref": True,
+        }
+
+
 def apply_rule_guards(fields: dict) -> None:
     """
     抽取后按律师规则把关（确定性代码，不依赖模型是否照做）：
