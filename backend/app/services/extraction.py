@@ -6,9 +6,10 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from app.services.acceptance_report import latest_approved_date
 from app.services.confidence import ConfidenceSignals, compute_confidence
 from app.services.provenance import _src_filename, resolve_provenance
-from app.services.validators import ValidationCheck
+from app.services.validators import ValidationCheck, parse_date
 
 
 def build_combined_text(files: list[dict]) -> str:
@@ -107,6 +108,31 @@ def apply_acceptance_count(fields: dict, files: list[dict]) -> None:
         return
     qty, src = counted
     fields["elevator_qty_by_acceptance"] = {"value": qty, "src": src}
+
+
+def apply_acceptance_date(fields: dict, files: list[dict]) -> None:
+    """
+    文字版验收报告的最晚批准日期由代码在**全部**报告文件里取（律师规则：多份取最晚一批）：一个案件常是
+    每台电梯一份 PDF，LLM 容易只看第一份。读不到「批准」日期时保留 LLM 的值；扫描报告由
+    report_ocr 节点按同一规则合并。
+    """
+    best: tuple[tuple[int, int, int], str, str, int | None] | None = None
+    for f in files:
+        if f.get("identified_type") != "验收报告" or f.get("is_scanned") or not f.get("text"):
+            continue
+        pages = f.get("pages") or [{"page": None, "text": f["text"]}]
+        found = latest_approved_date(pages)
+        ymd = parse_date(found[0]) if found else None
+        if found and ymd and (best is None or ymd > best[0]):
+            best = (ymd, found[0], f.get("filename", "验收报告"), found[1])
+    if best is None:
+        return
+    _, value, filename, page = best
+    where = f"第{page}页" if page else ""
+    fields["acceptance_latest_date"] = {
+        "value": value,
+        "src": f"《{filename}》{where}批准日期（代码取全部验收报告中最晚）",
+    }
 
 
 # 律师规则（确认单第 5 题）：被告住址、法定代表人一律用工商登记信息，审批表上的地址不用

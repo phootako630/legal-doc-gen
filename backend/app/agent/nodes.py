@@ -29,6 +29,7 @@ from app.services.doc_search import locate_clause_bodies
 from app.services.equipment_list import count_vge_units
 from app.services.extraction import (
     apply_acceptance_count,
+    apply_acceptance_date,
     count_acceptance_units,
     STRATEGIC_CLAUSE_KEYS,
     STRATEGIC_LABEL,
@@ -218,6 +219,8 @@ async def extract_node(state: GraphState) -> dict:
     mark_ocr_fields(fields, set(state.get("scanned_filenames", [])))
     # 验收口径台数由代码数报告里的设备代码，不信 LLM 数数（实测会数错）
     apply_acceptance_count(fields, state.get("files", []))
+    # 多份文字版报告的最晚批准日期也由代码取（LLM 常只看第一份）
+    apply_acceptance_date(fields, state.get("files", []))
     # 确认单（五）第 8 题：有补充协议时记下，起诉状加一句并提醒律师
     mark_supplement_agreements(fields, state.get("files", []))
     # 律师规则把关：被告住址只用工商登记信息、AI 归纳的付款条款标待核实
