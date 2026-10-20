@@ -6,6 +6,7 @@
 # 都对不上（如算出 85%，节点为 5%-10%-70%-95%-100%）时，可能调过价、实际台数与合同不同、
 # 质保金到期时间不统一，交律师手动核对，不猜。
 #
+# 付款条款写成表格时按行拆（`_table_stages`）。
 # 纯确定性解析：比例只认「支付 / 付……X%」（本期）与「支付至 / 付至……X%」（累计）两种写法；
 # 「开具……5%……保函」、违约金 / 利息这类不是付款的百分比不计。解析不出、累计倒退、超过或到不了 100% 时
 # 返回空，退回原来的写法。
@@ -13,6 +14,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+
+from app.services.equipment_list import table_rows
 
 _TOL = 0.05  # 百分点：金额四舍五入到分后，比例会有微小误差
 
@@ -79,10 +82,66 @@ def _ratio(piece: str) -> tuple[str, float] | None:
     return None
 
 
+_PCT_CELL_RE = re.compile(_PCT)
+_NO_CELL_RE = re.compile(r"^(?:第)?\s*(\d{1,2}(?:[.．]\d{1,2}){0,3})\s*(?:[期条项、.．])?$")
+
+
+def _table_stages(text: str) -> list[PaymentStage]:
+    """
+    付款条款写成表格（OCR 出来是 Markdown / HTML 表格，律师反馈）：每行一个付款节点。
+    表头含「累计」的列按累计比例，含「比例 / 百分比」的列按本期比例；没有表头时取行内第一个百分比。
+    序号列（「1」「第2期」「4.2.1」）作条款编号，其余单元格照抄原文作节点内容。
+    """
+    rows = table_rows(text)
+    if len(rows) < 2:
+        return []
+    cum_col = stage_col = None
+    stages: list[PaymentStage] = []
+    running = 0.0
+    for cells in rows:
+        if not any(_PCT_CELL_RE.search(c) for c in cells):
+            # 表头：记下累计 / 本期比例所在列
+            for i, c in enumerate(cells):
+                if "累计" in c:
+                    cum_col = i
+                elif re.search(r"比例|百分比|%|％", c) and stage_col is None:
+                    stage_col = i
+            continue
+        if _PENALTY_RE.search("".join(cells)):
+            continue
+        no_match = _NO_CELL_RE.match(cells[0].strip()) if cells else None
+        no = no_match.group(1) if no_match else ""
+
+        def pct(col: int | None) -> float | None:
+            if col is None or col >= len(cells):
+                return None
+            m = _PCT_CELL_RE.search(cells[col])
+            return float(m.group(1)) if m else None
+
+        cum = pct(cum_col)
+        if cum is None:
+            stage = pct(stage_col)
+            if stage is None:
+                first = next((m for c in cells if (m := _PCT_CELL_RE.search(c))), None)
+                stage = float(first.group(1)) if first else None
+            if stage is None:
+                continue
+            cum = running + stage
+        if cum < running - _TOL or cum > 100 + _TOL:
+            return []
+        body = "，".join(c.strip() for c in (cells[1:] if no else cells) if c.strip())
+        stages.append(PaymentStage(no, body, running, cum))
+        running = cum
+    return stages if stages and abs(running - 100) <= _TOL else []
+
+
 def parse_payment_stages(text: str | None) -> list[PaymentStage]:
     """付款条款原文 → 按顺序的付款节点（含累计区间）。解析不出或累计不等于 100% 时返回空列表。"""
     if not text or not text.strip():
         return []
+    table = _table_stages(text)
+    if table:
+        return table
     stages: list[PaymentStage] = []
     running = 0.0
     for no, body in _segments(text):

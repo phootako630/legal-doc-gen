@@ -191,3 +191,46 @@ def test_lawyer_edit_is_kept():
     fields["payment_cite_text"] = {"value": "律师改写的付款条款", "src": "律师修改"}
     apply_derived_fields(fields)
     assert fields["payment_cite_text"]["value"] == "律师改写的付款条款"
+
+
+# ── 表格形式的付款条款（律师反馈：付款条款写在表格里，OCR 输出 Markdown / HTML 表格）──────
+MD_TABLE = """付款方式如下表：
+| 序号 | 付款节点 | 付款比例 | 付款条件 |
+|---|---|---|---|
+| 1 | 预付款 | 30% | 合同签订后7日内 |
+| 2 | 到货款 | 40% | 设备到货验收后15日内 |
+| 3 | 验收款 | 25% | 政府验收合格后30日内 |
+| 4 | 质保金 | 5% | 质保期满后无息支付 |
+"""
+
+HTML_TABLE = (
+    "<table><tr><td>期次</td><td>付款条件</td><td>累计付款比例</td></tr>"
+    "<tr><td>第1期</td><td>进场后支付</td><td>20%</td></tr>"
+    "<tr><td>第2期</td><td>安装完成后支付</td><td>80%</td></tr>"
+    "<tr><td>第3期</td><td>验收合格、办理结算后支付</td><td>100%</td></tr></table>"
+)
+
+
+def test_markdown_table_rows_are_stages():
+    stages = parse_payment_stages(MD_TABLE)
+    assert [(s.no, s.start, s.end) for s in stages] == [("1", 0, 30), ("2", 30, 70), ("3", 70, 95), ("4", 95, 100)]
+    assert stages[2].text == "验收款，25%，政府验收合格后30日内"
+
+
+def test_html_table_with_cumulative_column():
+    stages = parse_payment_stages(HTML_TABLE)
+    assert [(s.no, s.end) for s in stages] == [("1", 20), ("2", 80), ("3", 100)]
+
+
+def test_table_with_penalty_row_and_incomplete_table():
+    with_penalty = MD_TABLE + "| 5 | 逾期付款违约金 | 0.05% | 每日按欠款计 |\n"
+    assert [s.end for s in parse_payment_stages(with_penalty)][-1] == 100
+    partial = "| 序号 | 付款比例 |\n|---|---|\n| 1 | 30% |\n| 2 | 40% |\n"
+    assert parse_payment_stages(partial) == []  # 只抽到部分行：累计不到 100%，不拿来匹配
+
+
+def test_table_clause_matches_and_cites_owed_rows():
+    fields = apply_derived_fields(_case(MD_TABLE, 1000000, 800000, 150000))  # 已付 80%，付至 95%
+    assert fields["payable_ratio"]["value"] == "95%"
+    assert fields["payment_cite_location"]["value"] == "第七条第3项"
+    assert fields["payment_cite_text"]["value"] == "“验收款，25%，政府验收合格后30日内”"
