@@ -1,7 +1,8 @@
 // 整体流程状态管理 hook：协调 upload → processing → review → preview 四步状态
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { FlowStep, UploadResponse, CaseState } from '@/lib/types';
 import { newRequestKey } from '@/lib/request-key';
+import { clearCaseSession, saveCaseSession } from '@/lib/case-session';
 
 interface FlowState {
   step: FlowStep;
@@ -25,6 +26,8 @@ interface UseComplaintFlowReturn extends FlowState {
   setReviewEdits: (edits: Record<string, string>) => void;
   setComplaintText: (t: string) => void;
   setError: (msg: string | null) => void;
+  /** 刷新页面后继续上次的案件：回到审核页并恢复律师的修改 */
+  restoreCase: (cs: CaseState, edits: Record<string, string>) => void;
   reset: () => void;
 }
 
@@ -44,6 +47,14 @@ const initialState: FlowState = {
 export function useComplaintFlow(): UseComplaintFlowReturn {
   const [state, setState] = useState<FlowState>(initialState);
 
+  // 审核 / 预览阶段把会话编号与字段修改存进本标签页，刷新后可继续；
+  // 上传新材料或「重新开始」时清除（页面刚打开时不清：上传页要先问律师是否继续）
+  const runId = state.caseState?.run_id;
+  const inCase = state.step === 'review' || state.step === 'preview';
+  useEffect(() => {
+    if (inCase && runId) saveCaseSession(runId, state.reviewEdits);
+  }, [inCase, runId, state.reviewEdits]);
+
   const goToStep = (step: FlowStep) => setState((s) => ({ ...s, step, error: null }));
 
   const goBack = () =>
@@ -55,7 +66,8 @@ export function useComplaintFlow(): UseComplaintFlowReturn {
 
   // 新上传的材料 = 新的分析请求，换一个编号（联网开关也算在请求内容里）
   // 新材料：旧案件的审核修改一并清空
-  const setUploadResult = (r: UploadResponse, internetAllowed: boolean) =>
+  const setUploadResult = (r: UploadResponse, internetAllowed: boolean) => {
+    clearCaseSession();
     setState((s) => ({
       ...s,
       uploadResult: r,
@@ -65,13 +77,19 @@ export function useComplaintFlow(): UseComplaintFlowReturn {
       reviewEdits: {},
       complaintText: null,
     }));
+  };
   // 分析结果与断点 resume 后的新状态都存这里：返回审核页时不再弹已回答过的断点
   const setCaseState = (cs: CaseState) => setState((s) => ({ ...s, caseState: cs }));
   const setReviewEdits = (edits: Record<string, string>) =>
     setState((s) => ({ ...s, reviewEdits: edits }));
   const setComplaintText = (t: string) => setState((s) => ({ ...s, complaintText: t }));
   const setError = (msg: string | null) => setState((s) => ({ ...s, error: msg }));
-  const reset = () => setState(initialState);
+  const restoreCase = (cs: CaseState, edits: Record<string, string>) =>
+    setState((s) => ({ ...s, caseState: cs, reviewEdits: edits, step: 'review', error: null }));
+  const reset = () => {
+    clearCaseSession();
+    setState(initialState);
+  };
 
   return {
     ...state,
@@ -82,6 +100,7 @@ export function useComplaintFlow(): UseComplaintFlowReturn {
     setReviewEdits,
     setComplaintText,
     setError,
+    restoreCase,
     reset,
   };
 }

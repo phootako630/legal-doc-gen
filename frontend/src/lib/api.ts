@@ -156,6 +156,13 @@ export async function resumeCase(
   return res.json() as Promise<CaseState>;
 }
 
+/** 取回会话当前状态（刷新页面后继续上次的案件）；过期或不存在时抛中文错误 */
+export async function fetchCase(runId: string, signal?: AbortSignal): Promise<CaseState> {
+  const res = await safeFetch(`${BASE}/case/${encodeURIComponent(runId)}`, { signal });
+  if (!res.ok) throw await extractError(res, '取回上次的案件失败');
+  return res.json() as Promise<CaseState>;
+}
+
 /** 调用 LLM 生成起诉状全文 */
 export async function generateComplaint(
   validatedJson: ExtractedFields,

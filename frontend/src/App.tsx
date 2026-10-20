@@ -3,6 +3,9 @@
 // 后端开启登录时先显示登录页；登录失效后回到登录页，重新登录后流程状态仍在。
 import { useState } from 'react';
 import { useComplaintFlow } from '@/hooks/useComplaintFlow';
+import { useLeaveWarning } from '@/hooks/useLeaveWarning';
+import { clearCaseSession, loadCaseSession } from '@/lib/case-session';
+import { ResumeCaseBanner } from '@/components/upload/ResumeCaseBanner';
 import { useAuth } from '@/hooks/useAuth';
 import { LoginPage } from '@/components/auth/LoginPage';
 import { UserMenu } from '@/components/auth/UserMenu';
@@ -20,6 +23,9 @@ export default function App() {
   const flow = useComplaintFlow();
   const auth = useAuth();
   const [view, setView] = useState<'flow' | 'branches'>('flow');
+  // 页面打开时读一次：本标签页刷新前有未完成的案件，就在上传页问律师是否继续
+  const [savedCase, setSavedCase] = useState(loadCaseSession);
+  useLeaveWarning(flow.step !== 'upload');
 
   if (auth.phase === 'loading') return <div className="min-h-screen bg-background" />;
   if (auth.phase === 'login') return <LoginPage notice={auth.notice} onLogin={auth.login} />;
@@ -83,9 +89,24 @@ export default function App() {
           </div>
         )}
 
+        {flow.step === 'upload' && savedCase && (
+          <ResumeCaseBanner
+            saved={savedCase}
+            onResume={(caseState, edits) => {
+              setSavedCase(null);
+              flow.restoreCase(caseState, edits);
+            }}
+            onDiscard={() => {
+              clearCaseSession();
+              setSavedCase(null);
+            }}
+          />
+        )}
+
         {flow.step === 'upload' && (
           <UploadStep
             onDone={(result, internetAllowed) => {
+              setSavedCase(null);
               flow.setUploadResult(result, internetAllowed);
               flow.goToStep('processing');
             }}

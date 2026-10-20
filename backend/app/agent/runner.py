@@ -183,8 +183,11 @@ def _running_task(key: str, fingerprint: str) -> asyncio.Task[CaseState] | None:
     return task
 
 
-async def _existing_case(run_id: str) -> CaseState | None:
-    """已有会话的当前状态（含律师之后在断点处的决定）；会话已过期或不存在则 None。"""
+async def get_case(run_id: str) -> CaseState | None:
+    """
+    已有会话的当前状态（含律师之后在断点处的决定）；会话已过期或不存在则 None。
+    幂等重放与前端刷新后「继续上次的案件」共用。
+    """
     if await checkpoint.is_expired(run_id):
         return None
     graph = await get_graph()
@@ -221,7 +224,7 @@ async def run_analyze_once(
             saved_fp, run_id = saved
             if saved_fp != fingerprint:
                 raise IdempotencyConflict(key)
-            case = await _existing_case(run_id)
+            case = await get_case(run_id)
             if case is not None:
                 run_log.log_event("analyze_replay", run_id=run_id)
                 return case
