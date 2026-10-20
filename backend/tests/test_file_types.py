@@ -55,3 +55,47 @@ def test_type_override_logged_without_filename(tmp_path, monkeypatch):
     assert record["event"] == "file_type_override"
     assert record["changes"] == [{"from": "合同", "to": "战略合同"}]
     assert "某被告" not in lines[0]
+
+
+# ── 扫描件文件名认不出类型时，识别第 1 页标题（OCR 打桩，不触网）───────────────
+def _blank_pdf() -> bytes:
+    import fitz
+
+    doc = fitz.open()
+    doc.new_page()
+    return doc.tobytes()
+
+
+def _parse(monkeypatch, filename, ocr):
+    import asyncio
+
+    from app.services import file_parser, ocr_engine
+
+    monkeypatch.setattr(ocr_engine, "ocr_page", ocr)
+    return asyncio.run(file_parser._parse_pdf(filename, _blank_pdf(), file_parser._identify_type(filename)))
+
+
+def test_scanned_unknown_name_identified_by_first_page_title(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    ocr = AsyncMock(return_value="电梯安装合同\n甲方：虚构置业有限公司\n乙方：某电梯公司")
+    out = _parse(monkeypatch, "001.pdf", ocr)
+    assert out["is_scanned"] and out["identified_type"] == "合同"
+    assert out["text"] == "" and out["pages"] == []  # 首页文字不保留，按需读取仍从第 1 页读
+    ocr.assert_awaited_once()
+    assert ocr.await_args.args[1] == 1
+
+
+def test_scanned_named_file_skips_title_ocr(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    ocr = AsyncMock(return_value="不应调用")
+    assert _parse(monkeypatch, "某某诉讼审批表.pdf", ocr)["identified_type"] == "审批表"
+    ocr.assert_not_awaited()
+
+
+def test_scanned_title_ocr_failure_leaves_unknown(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    ocr = AsyncMock(side_effect=RuntimeError("OCR 不可用"))
+    assert _parse(monkeypatch, "扫描0001.pdf", ocr)["identified_type"] == "未知"

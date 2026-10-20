@@ -7,7 +7,7 @@ from typing import Any, Literal
 from fastapi import UploadFile
 
 from app.config import SCANNED_PDF_TEXT_THRESHOLD
-from app.services import file_store
+from app.services import file_store, ocr_engine
 
 # 文件类型取值（上传页律师可改；分析接口按此校验）
 DocType = Literal["审批表", "合同", "补充协议", "验收报告", "战略合同", "未知"]
@@ -112,6 +112,8 @@ async def _parse_pdf(
         # 扫描件不再在上传时整份 OCR（成本高、且多数条款字段可由审批表/验收报告补全）。
         # 只暂存原始字节并返回 file_id，交给 agent 在缺条款字段时按需逐页 OCR。
         file_id = file_store.put(content)
+        if identified_type == "未知":
+            identified_type = await _identify_scanned_by_title(filename, content)
         return {
             "filename": filename,
             "identified_type": identified_type,
@@ -138,6 +140,21 @@ async def _parse_pdf(
         "pages": pages,
         "file_id": None,
     }
+
+
+async def _identify_scanned_by_title(filename: str, content: bytes) -> DocType:
+    """
+    扫描件文件名认不出类型（如「001.pdf」）时，只 OCR 第 1 页、按标题再认一次：每份这样的扫描件
+    多花一页识别费用，换来材料确认页少让律师手选。OCR 不可用或失败时仍为「未知」，交给律师在
+    材料确认页选择。识别出的文字不保留：按需读取时仍从第 1 页读（扫描件 text 为空是后续节点判断
+    「还没读过」的依据）。
+    """
+    try:
+        first_page = await ocr_engine.ocr_page(content, 1)
+    except (RuntimeError, TimeoutError) as exc:
+        print(f"[UPLOAD] 扫描件首页识别失败，类型留给律师选择：{filename} — {exc}", flush=True)
+        return "未知"
+    return _identify_type(filename, first_page or "")
 
 
 def _parse_docx(filename: str, content: bytes, identified_type: str) -> dict[str, Any]:

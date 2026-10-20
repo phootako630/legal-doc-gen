@@ -154,7 +154,8 @@ v2 以 agent 会话为中心。前端与后端通过"启动 + 恢复"两类接�
 POST /api/upload
   输入：multipart/form-data（多个文件）
   处理：parse_file 逐个解析 → 可解析 PDF 用 PyMuPDF → Word 用 python-docx
-        扫描件此处不整份 OCR，仅标记 is_scanned，留待 agent 按需 ocr_page
+        扫描件此处不整份 OCR，仅标记 is_scanned，留待 agent 按需 ocr_page；文件名认不出类型的扫描件
+        只 OCR 第 1 页、按标题再认一次（`file_parser._identify_scanned_by_title`，失败仍为「未知」，文字不保留）
   输出：{
     files: [{ filename, identified_type, text, is_scanned, page_count }],
     can_proceed, missing_materials, warnings
