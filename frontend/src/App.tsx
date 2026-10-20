@@ -108,6 +108,9 @@ export default function App() {
         {flow.step === 'review' && flow.caseState && (
           <ReviewStep
             caseState={flow.caseState}
+            edits={flow.reviewEdits}
+            onEditsChange={flow.setReviewEdits}
+            onCaseStateChange={flow.setCaseState}
             // 按钮写的是「返回上传」：直接回上传页。若用 goBack 会退到处理页，
             // 同一请求编号的分析会立刻原样返回，又跳回审核页，看起来像按钮失灵
             onBack={() => flow.goToStep('upload')}

@@ -19,6 +19,11 @@ import type { CaseState } from '@/lib/types';
 
 interface ReviewStepProps {
   caseState: CaseState;
+  /** 律师已做的字段修改（存在流程状态里，从预览页返回时恢复） */
+  edits: Record<string, string>;
+  onEditsChange: (edits: Record<string, string>) => void;
+  /** resume 后的新状态写回流程状态：返回审核页时不再弹已回答过的断点 */
+  onCaseStateChange: (next: CaseState) => void;
   onBack: () => void;
   onDone: (complaintText: string) => void;
 }
@@ -41,9 +46,15 @@ function ReadinessBadge({ readiness }: { readiness: number }) {
   );
 }
 
-export function ReviewStep({ caseState, onBack, onDone }: ReviewStepProps) {
-  // 本地持有会话状态：resume 往返会替换它，字段表格/校验报告均从这里渲染
-  const [current, setCurrent] = useState<CaseState>(caseState);
+export function ReviewStep({
+  caseState: current,
+  edits,
+  onEditsChange,
+  onCaseStateChange,
+  onBack,
+  onDone,
+}: ReviewStepProps) {
+  // 会话状态由流程状态持有：resume 往返替换它，字段表格 / 校验报告均从这里渲染
   const tableRef = useRef<FieldTableHandle>(null);
   const [genLoading, setGenLoading] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
@@ -67,7 +78,7 @@ export function ReviewStep({ caseState, onBack, onDone }: ReviewStepProps) {
       const normalized: Record<string, string | null> = {};
       for (const [k, v] of Object.entries(decisions)) normalized[k] = v === '' ? null : v;
       const next = await resumeCase(current.run_id, normalized);
-      setCurrent(next); // 可能仍带 pending，则 PendingResolver 继续下一轮
+      onCaseStateChange(next); // 可能仍带 pending，则 PendingResolver 继续下一轮
     } catch (e) {
       setResumeError(e instanceof Error ? e.message : '提交失败，请重试');
     } finally {
@@ -155,6 +166,8 @@ export function ReviewStep({ caseState, onBack, onDone }: ReviewStepProps) {
               ref={tableRef}
               extractedFields={current.extracted_fields}
               validations={current.validations}
+              initialEdits={edits}
+              onEditsChange={onEditsChange}
               onFeedback={(f) =>
                 openFeedback({
                   key: f.key,

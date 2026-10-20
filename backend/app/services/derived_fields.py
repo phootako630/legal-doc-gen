@@ -49,6 +49,23 @@ _CITY_DISTRICT_RE = re.compile(
 # 和三字区名分不清边界，宁可不推、交律师填（#43 复审：不能凭长度拆分拼造辖区）
 _CITY_NO_SHI_RE = re.compile(f"^([{_CJK}]{{2}})([{_CJK}]{{2}}区)")
 _FUNCTION_ZONE_RE = re.compile(r"(?:开发|园|高新|新|保税|工业)区$")
+# 县级市法院不分区，地点只写「昆山」「常熟……项目」也能直接推定「昆山市」（确认单（六）B）。
+# 名单只收江苏、湖南（本所案件所在省份）的县级市，别省的仍需写全「XX市」；新增省份时补进来
+_COUNTY_LEVEL_CITIES = (
+    "江阴 宜兴 新沂 邳州 溧阳 常熟 张家港 昆山 太仓 启东 如皋 海安 东台 仪征 高邮 丹阳 扬中 句容 "
+    "兴化 靖江 泰兴 "
+    "浏阳 宁乡 醴陵 湘乡 韶山 耒阳 常宁 武冈 邵东 汨罗 临湘 沅江 资兴 洪江 冷水江 涟源 吉首"
+).split()
+# 可带地级市前缀（「苏州昆山」「苏州市昆山」）。名字后紧跟「区 / 县」是同名的区县（「怀化市洪江区」），
+# 不当县级市（#65 评审）
+_COUNTY_CITY_RE = re.compile(
+    f"^(?:[{_CJK}]{{2}}市?)??({'|'.join(sorted(_COUNTY_LEVEL_CITIES, key=len, reverse=True))})"
+    r"(市)?(?![区县])"
+)
+# 县级市名后面到第一个路名字之前，须出现区 / 镇 / 项目等地名单位，才算地址以县级市开头；否则多半是路名
+# （上海「常熟路」、长沙「浏阳河大道」，#65 评审）。名字后写了「市」的不受此限
+_ROAD_CHAR_RE = re.compile(r"[路街道巷弄]")
+_PLACE_UNIT_RE = re.compile(r"区|镇|乡|村|项目|地块|工地|园|苑|小区")
 # 争议条款里点名的具体法院（不是「所在地 / 当地」法院）
 _NAMED_COURT_RE = re.compile(r"(?:[市区县]|中级)人民法院")
 _PLAINTIFF_SIDE = "原告|乙方|承包方|承包人|卖方|供方|出卖人"
@@ -77,12 +94,26 @@ def _str_value(fields: dict, key: str) -> str | None:
     return s or None
 
 
+def _county_city(s: str) -> str | None:
+    """地址以县级市名开头（「昆山……项目」「苏州昆山开发区……」）→「昆山市」；路名等推不出返回 None。"""
+    m = _COUNTY_CITY_RE.match(s)
+    if not m:
+        return None
+    if not m.group(2):
+        rest = s[m.end() :]
+        road = _ROAD_CHAR_RE.search(rest)
+        if road and not _PLACE_UNIT_RE.search(rest[: road.start()]):
+            return None
+    return f"{m.group(1)}市"
+
+
 def derive_court_district(address: str | None) -> str | None:
     """
     由地址推定法院辖区，如「江苏省南京市雨花台区某某二期项目」→「南京市雨花台区」。
     县级市、县只写县级市 / 县：「江苏省苏州市昆山市花桥镇」→「昆山市」（律师确认单（四）
     第 3 题）、「江苏省徐州市沛县某镇」→「沛县」（补充答复 Q5）；市辖区写「市 + 区」。
-    地址省了「市」字的「苏州吴江区……」按「苏州市吴江区」推定。
+    地址省了「市」字的「苏州吴江区……」按「苏州市吴江区」推定；只写县级市名的「昆山中骏某项目」
+    按「昆山市」推定（县级市法院不分区，确认单（六）B）。
     推不出返回 None。
     """
     if not address:
@@ -91,6 +122,12 @@ def derive_court_district(address: str | None) -> str | None:
     s = _LEADING_WORDS_RE.sub("", s, count=1)
     s = _PROVINCE_RE.sub("", s, count=1)
     m = _CITY_DISTRICT_RE.match(s)
+    # 「市 + 开发区」这类功能区先看是不是县级市：「苏州市昆山开发区」→ 昆山市，
+    # 不拆成「苏州市」+「昆山开发区」；写明的市辖区（「怀化市洪江区」）照常采纳
+    if not m or _FUNCTION_ZONE_RE.search(m.group(2)):
+        county = _county_city(s)
+        if county:
+            return county
     if not m:
         m2 = _CITY_NO_SHI_RE.match(s)
         if m2 and not _FUNCTION_ZONE_RE.search(m2.group(2)):
