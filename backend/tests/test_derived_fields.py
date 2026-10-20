@@ -29,6 +29,8 @@ from app.services.derived_fields import (
         ("江苏省张家港某某镇", "张家港市"),
         ("昆山市花桥镇某某路", "昆山市"),
         ("湖南省浏阳某某工业园", "浏阳市"),
+        # 写明的同名市辖区照常采纳，不改成县级市（#65 评审）
+        ("湖南省怀化市洪江区某项目", "怀化市洪江区"),
     ],
 )
 def test_derive_court_district(site, expected):
@@ -55,6 +57,10 @@ def test_derive_court_district(site, expected):
         # 县级市名后面紧跟路 / 街：是别的城市的路名（上海常熟路），不推
         "常熟路某某号",
         "昆山路某某小区",
+        # 县级市名开头的复合路名（#65 评审）
+        "湖南省长沙市浏阳河大道88号",
+        "浏阳河大道88号",
+        "洪江区某项目",
     ],
 )
 def test_derive_court_district_unknown_returns_none(site):
