@@ -201,3 +201,26 @@ def test_dropped_request_does_not_cancel_analysis(monkeypatch):
     case = asyncio.run(scenario())
     assert case.run_id
     assert calls == 3  # 只跑了一次完整分析
+
+
+def test_get_case_returns_current_state_and_404s(monkeypatch):
+    """页面刷新后按 run_id 取回会话；未知 / 格式不对 / 已过期一律 404。"""
+    from app.main import app
+
+    _patch_chat(monkeypatch, _one_run())
+    client = TestClient(app)
+    body = {"files": _FILES, "internet_allowed": True}
+    run_id = client.post(
+        "/api/analyze", json=body, headers={"Idempotency-Key": "key-getcase-01"}
+    ).json()["run_id"]
+
+    got = client.get(f"/api/case/{run_id}")
+    assert got.status_code == 200
+    assert got.json()["run_id"] == run_id
+    assert got.json()["extracted_fields"]["defendant_name"]["value"] == "某被告"
+
+    assert client.get(f"/api/case/{'0' * 32}").status_code == 404
+    assert client.get("/api/case/not-a-run-id").status_code == 404
+
+    asyncio.run(checkpoint.purge_expired(retention_days=-1))
+    assert client.get(f"/api/case/{run_id}").status_code == 404

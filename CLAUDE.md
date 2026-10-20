@@ -181,6 +181,8 @@ POST /api/resume             # 律师在断点处给出决定后恢复 agent
   输入：{ run_id, decisions: {...} }   # 冲突选值 / 补录 / 确认联网结果
   输出：同 /api/analyze（可能再次 pending，直至 pending=null）
 
+GET /api/case/{run_id}       # 取回会话当前状态（刷新页面后「继续上次的案件」）；过期 / 不存在 404
+
 POST /api/generate
   输入：{ validated_state: CaseState }
   处理：render_complaint（模板填槽，非 LLM 自由生成）
@@ -475,6 +477,8 @@ Step 3: 审核确认 ⭐ 核心页面（agent 断点的 UI）
   - 右侧：校验报告 + 高亮列表
   - 律师决定 → POST /api/resume（可多次往返直至无待决）
   - 底部："确认并生成起诉状"
+  - 处理 / 审核 / 预览阶段刷新或关闭页面先弹浏览器确认（`hooks/useLeaveWarning.ts`）；会话编号与字段修改存本标签页
+    sessionStorage（`lib/case-session.ts`，关标签页即清除），刷新后上传页问「继续上次的案件？」→ GET /api/case 回到审核页
 
 Step 4: 预览下载
   - 起诉状全文预览（标注保留）
