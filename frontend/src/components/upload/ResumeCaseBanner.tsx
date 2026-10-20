@@ -1,5 +1,5 @@
 // 上传页顶部：本标签页有未完成的案件（刷新过页面）时，询问是否继续
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { History, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { fetchCase } from '@/lib/api';
@@ -23,13 +23,21 @@ export function ResumeCaseBanner({ saved, onResume, onDiscard }: ResumeCaseBanne
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const editCount = Object.keys(saved.edits).length;
+  // 取回请求进行中律师转而上传新材料时，本横幅卸载：取消请求，迟到的旧案结果一律丢弃，
+  // 否则会把新案件替换成旧案件（#66 评审）
+  const abortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   const handleResume = async () => {
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
     setLoading(true);
     setError(null);
     try {
-      onResume(await fetchCase(saved.runId), saved.edits);
+      const caseState = await fetchCase(saved.runId, ctrl.signal);
+      if (!ctrl.signal.aborted) onResume(caseState, saved.edits);
     } catch (e) {
+      if (ctrl.signal.aborted) return;
       setError(e instanceof Error ? e.message : '取回上次的案件失败');
       setLoading(false);
     }

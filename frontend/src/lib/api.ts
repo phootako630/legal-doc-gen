@@ -157,8 +157,8 @@ export async function resumeCase(
 }
 
 /** 取回会话当前状态（刷新页面后继续上次的案件）；过期或不存在时抛中文错误 */
-export async function fetchCase(runId: string): Promise<CaseState> {
-  const res = await safeFetch(`${BASE}/case/${encodeURIComponent(runId)}`);
+export async function fetchCase(runId: string, signal?: AbortSignal): Promise<CaseState> {
+  const res = await safeFetch(`${BASE}/case/${encodeURIComponent(runId)}`, { signal });
   if (!res.ok) throw await extractError(res, '取回上次的案件失败');
   return res.json() as Promise<CaseState>;
 }
