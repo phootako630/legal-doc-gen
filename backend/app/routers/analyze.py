@@ -10,7 +10,8 @@ from pydantic import BaseModel
 
 from app.agent.runner import IdempotencyConflict, run_analyze, run_analyze_once
 from app.agent.state import CaseState
-from app.services import llm_progress
+from app.services import llm_progress, run_log
+from app.services.file_parser import DocType
 
 router = APIRouter()
 
@@ -24,7 +25,9 @@ class FileInput(BaseModel):
     filename: str
     text: str
     is_scanned: bool = False
-    identified_type: str = "未知"
+    identified_type: DocType = "未知"
+    # 系统原先识别的类型：与 identified_type 不同说明律师在上传页改过，记入运行日志改进识别规则
+    detected_type: DocType | None = None
     # 总页数：按需 OCR 逐页遍历的上限。缺了它扫描合同会被当成 0 页、一页都不 OCR
     page_count: int = 0
     # 逐页文本，供抽取后定位真实页码；旧客户端可不带
@@ -50,6 +53,17 @@ class LlmProgress(BaseModel):
 _KEY_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 
 
+def _log_type_overrides(files: list[FileInput]) -> None:
+    """律师在上传页改过的文件类型：只记「从什么类型改成什么类型」，不记文件名（可能含当事人名称）。"""
+    changes = [
+        {"from": f.detected_type, "to": f.identified_type}
+        for f in files
+        if f.detected_type is not None and f.detected_type != f.identified_type
+    ]
+    if changes:
+        run_log.log_event("file_type_override", changes=changes)
+
+
 @router.post("/analyze", response_model=CaseState)
 async def analyze(
     req: AnalyzeRequest,
@@ -57,6 +71,7 @@ async def analyze(
 ) -> CaseState:
     """启动 LangGraph agent；命中 interrupt 时返回带 pending 的 CaseState 供律师决策。"""
     files = [f.model_dump() for f in req.files]
+    _log_type_overrides(req.files)
     if idempotency_key is not None:
         if not _KEY_RE.fullmatch(idempotency_key):
             raise HTTPException(status_code=400, detail="请求编号格式不正确")

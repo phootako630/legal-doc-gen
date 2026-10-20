@@ -127,6 +127,7 @@ export async function analyzeCase(
         text: f.text,
         is_scanned: f.is_scanned,
         identified_type: f.identified_type,
+        detected_type: f.detected_type ?? null,
         pages: f.pages ?? [],
         file_id: f.file_id ?? null,
       })),

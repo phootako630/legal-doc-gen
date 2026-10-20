@@ -2,7 +2,7 @@
 //
 // 用法：node drive.cjs <输出目录> <文件1> [文件2 ...] [--resume]
 //   --resume：遇到断点（「提交并继续」）时按页面默认值提交并继续；不加则截图后停止，交给人判断。
-// 输出（输出目录下）：01-upload.png … 06-preview-full.png、04-pending-N.png、
+// 输出（输出目录下）：01-upload.png … 06-preview-full.png（02b-materials.png 为材料类型确认）、04-pending-N.png、
 //   analyze.json（/api/analyze 与 /api/resume 的最后一次响应）、complaint.txt（/api/generate 生成的全文）。
 // 文件名会影响材料类型识别：建议含「审批表」「合同」「检验报告 / 验收报告」等字样。
 const fs = require('fs');
@@ -63,7 +63,11 @@ const ANALYSIS_TIMEOUT_MS = 15 * 60 * 1000;
   );
   await page.waitForTimeout(1500);
   await shot('02-selected');
-  await page.getByRole('button', { name: '开始分析' }).click();
+  // 上传识别后停在「材料确认」：截图看每份文件的识别类型，再确认开始分析
+  await page.getByRole('button', { name: '上传并识别' }).click();
+  await page.getByText('请确认每份材料的类型').waitFor({ timeout: 300000 });
+  await shot('02b-materials');
+  await page.getByRole('button', { name: /开始分析|仍然分析/ }).click();
   await page.waitForTimeout(15000);
   await shot('03-processing');
 

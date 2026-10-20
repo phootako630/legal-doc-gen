@@ -7,9 +7,13 @@ export interface PageText {
 }
 
 /** 后端返回的单个文件解析结果 */
+/** 文件类型（上传页律师可改） */
+export type DocType = '审批表' | '合同' | '补充协议' | '验收报告' | '战略合同' | '未知';
+
 export interface ParsedFile {
   filename: string;
-  identified_type: '审批表' | '合同' | '验收报告' | '补充协议' | '未知';
+  identified_type: DocType;
+  detected_type?: DocType; // 系统原先识别的类型；与 identified_type 不同说明律师改过
   text: string;
   is_scanned: boolean;
   page_count: number;

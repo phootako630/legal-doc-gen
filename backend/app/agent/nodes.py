@@ -83,6 +83,22 @@ _ALL_CLAUSE_KEYS = [
     "handover_clause_text",  # 确认单（五）第 6 题：约定移交物业才写「移交物业」
     "contract_total_in_contract",  # 确认单（五）第 8 题：有补充协议时写原合同总价
 ]
+# 战略 / 框架合同只能补这些条款（且只补缺失的）：它不是本案合同，当事人、签约日期、合同名称、台数、
+# 工程地点、交货地点、签订地、本案金额都不能取自它（#55 评审）
+_STRATEGIC_CLAUSE_KEYS = {
+    "payment_clause_location",
+    "payment_clause_text",
+    "payment_clause_summary",
+    "breach_interest_clause_location",
+    "breach_interest_rate_text",
+    "breach_clause_text",
+    "dispute_clause_location",
+    "dispute_clause_text",
+    "arbitration_institution",
+    "warranty_period",
+    "retention_ratio",
+    "retention_clause_text",
+}
 # 以合同为准的字段：律师取合同盖章页/封面/协议书（签约日期、合同名称、合同台数、安装地址）。
 # OCR 合同后若取得这些值，覆盖此前从审批表/验收报告推测的值。
 _CONTRACT_AUTHORITATIVE_KEYS = [
@@ -257,6 +273,17 @@ async def validate_node(state: GraphState) -> dict:
     }
 
 
+def _clause_ocr_targets(files: list[dict]) -> list[dict]:
+    """
+    按需 OCR 找条款的扫描件：主合同在前，战略 / 框架合同排在后面（主合同找不全条款时才读到它）。
+    战略合同从前与主合同同归「合同」、按上传顺序读，单独成类后仍保留这条兜底路径。
+    """
+    scanned = [f for f in files if f.get("is_scanned") and f.get("file_id")]
+    return [f for f in scanned if f.get("identified_type") == "合同"] + [
+        f for f in scanned if f.get("identified_type") == "战略合同"
+    ]
+
+
 def _is_missing(fields: dict, key: str) -> bool:
     """字段是否缺失（value 为 None 或空串）。"""
     node = fields.get(key)
@@ -337,26 +364,14 @@ async def ocr_augment_node(state: GraphState) -> dict:
     if not missing and not need_signature and not need_warranty:
         return {}
 
-    contracts = [
-        f
-        for f in state.get("files", [])
-        if f.get("is_scanned")
-        and f.get("identified_type") == "合同"
-        and f.get("file_id")
-    ]
+    contracts = _clause_ocr_targets(state.get("files", []))
     if not contracts:
         return {}
 
     fields = copy.deepcopy(fields)
     files = copy.deepcopy(state.get("files", []))
     # 对深拷贝后的同名文件对象操作（保证返回的 files 带上 OCR 结果）
-    contracts = [
-        f
-        for f in files
-        if f.get("is_scanned")
-        and f.get("identified_type") == "合同"
-        and f.get("file_id")
-    ]
+    contracts = _clause_ocr_targets(files)
 
     budget = AGENT_MAX_OCR_PAGES
     did_ocr = False
@@ -371,8 +386,9 @@ async def ocr_augment_node(state: GraphState) -> dict:
         # 停止条件：付款、争议是起诉状必需的；违约条款常常没有（没有时律师用 LPR 常规话术），
         # 不因它继续翻页。只缺违约条款时才以它为目标。
         targets = (missing - {"breach"}) or missing
-        # 签约日期、合同乙方以签章页为准：还没从合同读到时，找到签章页才停
-        if need_signature:
+        strategic = f.get("identified_type") == "战略合同"
+        # 签约日期、合同乙方以签章页为准：还没从合同读到时，找到签章页才停（战略合同的签章页不是本案的）
+        if need_signature and not strategic:
             targets = targets | {"signature"}
         if need_warranty:
             targets = targets | {"warranty"}
@@ -401,11 +417,13 @@ async def ocr_augment_node(state: GraphState) -> dict:
         extracted = await _extract_clauses(f)
         filename = f.get("filename", "合同")
         for key in _ALL_CLAUSE_KEYS:
+            if strategic and key not in _STRATEGIC_CLAUSE_KEYS:
+                continue
             if _is_missing(fields, key):
                 node = extracted.get(key)
                 if isinstance(node, dict) and not _is_missing({key: node}, key):
                     fields[key] = _mark_ocr_src(node, filename)
-        for key in _CONTRACT_AUTHORITATIVE_KEYS:
+        for key in [] if strategic else _CONTRACT_AUTHORITATIVE_KEYS:
             node = extracted.get(key)
             if isinstance(node, dict) and not _is_missing({key: node}, key):
                 fields[key] = _mark_ocr_src(node, filename)
