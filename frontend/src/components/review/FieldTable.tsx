@@ -13,19 +13,37 @@ interface FieldTableProps {
   validations?: ValidationCheck[];
   /** 行内「反馈」按钮回调；不传则不显示 */
   onFeedback?: (field: ReviewField) => void;
+  /** 之前已做的修改（字段 key → 值）：从预览页返回时恢复 */
+  initialEdits?: Record<string, string>;
+  /** 每次修改后回报全部修改，由流程状态保存 */
+  onEditsChange?: (edits: Record<string, string>) => void;
+}
+
+function collectEdits(rows: ReviewField[]): Record<string, string> {
+  const edits: Record<string, string> = {};
+  for (const r of rows) if (r.editedValue !== undefined) edits[r.key] = r.editedValue;
+  return edits;
 }
 
 export const FieldTable = forwardRef<FieldTableHandle, FieldTableProps>(
-  function FieldTable({ extractedFields, validations = [], onFeedback }, ref) {
+  function FieldTable(
+    { extractedFields, validations = [], onFeedback, initialEdits, onEditsChange },
+    ref,
+  ) {
     const [rows, setRows] = useState<ReviewField[]>(() =>
-      buildReviewFields(extractedFields, validations),
+      buildReviewFields(extractedFields, validations).map((r) =>
+        initialEdits && r.key in initialEdits ? { ...r, editedValue: initialEdits[r.key] } : r,
+      ),
     );
 
-    const handleSave = useCallback((key: string, value: string) => {
-      setRows((prev) =>
-        prev.map((r) => (r.key === key ? { ...r, editedValue: value } : r)),
-      );
-    }, []);
+    const handleSave = useCallback(
+      (key: string, value: string) => {
+        const next = rows.map((r) => (r.key === key ? { ...r, editedValue: value } : r));
+        setRows(next);
+        onEditsChange?.(collectEdits(next));
+      },
+      [rows, onEditsChange],
+    );
 
     useImperativeHandle(ref, () => ({
       getEditedFields: () => applyEdits(extractedFields, rows),
