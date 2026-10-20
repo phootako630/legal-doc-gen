@@ -1,14 +1,15 @@
-// 拖拽/点击上传区域，支持 PDF 和 DOCX，单文件限 20MB
+// 拖拽/点击上传区域，支持 PDF 和 DOCX，单文件与合计大小限制见 lib/upload-limits.ts
 import { useRef, useState, useCallback } from 'react';
 import { cn } from '@/lib/utils';
 import { UploadCloud } from 'lucide-react';
+import { MAX_FILE_MB, MAX_TOTAL_MB } from '@/lib/upload-limits';
 
 const ACCEPTED_TYPES = new Set([
   'application/pdf',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 ]);
 const ACCEPTED_EXT = ['.pdf', '.docx'];
-const MAX_SIZE_MB = 20;
+const MAX_SIZE_MB = MAX_FILE_MB;
 const MAX_SIZE_BYTES = MAX_SIZE_MB * 1024 * 1024;
 
 interface FileDropzoneProps {
@@ -101,7 +102,7 @@ export function FileDropzone({ onFiles }: FileDropzoneProps) {
             {isDragging ? '松开即可上传' : '拖拽文件至此，或点击选择'}
           </p>
           <p className="mt-1.5 text-xs text-muted-foreground">
-            支持 PDF、DOCX 格式 &nbsp;·&nbsp; 单文件最大 {MAX_SIZE_MB} MB &nbsp;·&nbsp; 可多文件同时选择
+            支持 PDF、DOCX 格式 &nbsp;·&nbsp; 单文件最大 {MAX_SIZE_MB} MB、合计不超过 {MAX_TOTAL_MB} MB &nbsp;·&nbsp; 可多文件同时选择
           </p>
         </div>
 
