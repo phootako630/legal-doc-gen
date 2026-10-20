@@ -172,3 +172,24 @@ def test_unknown_main_location_cites_strategic_only(monkeypatch):
     fields.pop("dispute_clause_location")  # 主合同的转引条款号没读到
     f = asyncio.run(nodes_mod.ocr_augment_node({"extracted_fields": fields, "files": [strategic]}))["extracted_fields"]
     assert f["dispute_clause_location"]["value"] == "战略合同第三条"
+
+
+def test_guard_catches_strategic_source_when_llm_omits_filename(monkeypatch):
+    # 模型的 src 没写文件名（「合同签订页」）：锚定补上实际命中的战略合同，把关据此清空（#56 复审）
+    main_text = "电梯买卖合同\n甲方：虚构置业有限公司"
+    strategic_text = "电梯采购战略合同\n签订日期：2020年1月1日"
+    files = [
+        {"filename": "主合同.pdf", "identified_type": "合同", "is_scanned": False, "text": main_text,
+         "pages": [{"page": 1, "text": main_text}], "file_id": None},
+        {"filename": "战略合同.pdf", "identified_type": "战略合同", "is_scanned": False, "text": strategic_text,
+         "pages": [{"page": 1, "text": strategic_text}], "file_id": None},
+    ]
+    llm_fields = {
+        "contract_sign_date": {"value": "2020年1月1日", "src": "合同签订页"},
+        "contract_party_a": {"value": "虚构置业有限公司", "src": "合同首页"},
+    }
+    monkeypatch.setattr(nodes_mod, "chat", AsyncMock(return_value=llm_fields))
+    f = asyncio.run(nodes_mod.extract_node({"files": files, "checklist": {}}))["extracted_fields"]
+    assert f["contract_sign_date"]["value"] is None
+    assert f["contract_party_a"]["value"] == "虚构置业有限公司"
+    assert f["contract_party_a"]["src"] == "《主合同.pdf》合同首页"

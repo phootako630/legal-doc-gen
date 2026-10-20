@@ -252,6 +252,10 @@ def _with_verified_source(src: str, prov) -> str:
         src = f"《{prov.filename}》"
         if prov.channel == "ocr":
             src += "（OCR识别，请核实）"
+    elif cited is None:
+        # 模型没写文件名（如「合同签订页」）：补上实际命中的文件，出处可追溯，
+        # 战略合同把关等按文件判断的规则也能认出来源（#56 复审）
+        src = f"《{prov.filename}》{src}"
     return src
 
 
@@ -262,7 +266,7 @@ def enrich_provenance(data: Any, files: list[dict], key: str | None = None) -> N
       anchor  —— 命中片段（供前端高亮/反幻觉比对）
       channel —— 命中所在文件的来源通道（扫描件 ocr / 文本 text）
       confidence —— 由确定性软信号加权得出的 0-100 分（仅供 UI 排序/默认展开）
-      src     —— 改为实际命中的文件；原文找不到时追加「原文未找到，待核实」
+      src     —— 改为实际命中的文件（模型没写文件名时补上）；原文找不到时追加「原文未找到，待核实」
 
     值保守保留（不因未命中而硬删，避免误删有效值），但未命中一定标「待核实」：
     审核页与起诉状据此提醒律师，不会把模型编造的值当作「正常」写进文书。
