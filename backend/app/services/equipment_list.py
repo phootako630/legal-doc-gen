@@ -15,7 +15,7 @@ _TAG_RE = re.compile(r"<[^>]+>")
 _INT_RE = re.compile(r"\d+")
 
 
-def _table_rows(text: str) -> list[list[str]]:
+def table_rows(text: str) -> list[list[str]]:
     """把文本里的 Markdown 表格行与 HTML 表格行统一拆成单元格列表（按出现顺序）。"""
     rows: list[list[str]] = []
     for line in text.splitlines():
@@ -37,7 +37,7 @@ def count_vge_units(text: str) -> tuple[int, bool]:
         return 0, False
     total = 0
     model_idx = qty_idx = None
-    for cells in _table_rows(text):
+    for cells in table_rows(text):
         header_model = next((i for i, c in enumerate(cells) if "型号" in c), None)
         header_qty = next(
             (i for i, c in enumerate(cells) if "数量" in c or "台数" in c), None
