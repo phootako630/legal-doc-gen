@@ -87,7 +87,7 @@ flowchart TB
             RF["POST /api/feedback"]
 
             subgraph Agent["LangGraph 状态图"]
-                N1["intake 清点"] --> N2["extract 抽取"] --> N3["ocr_augment 扫描合同按需 OCR"]
+                N0["approval_ocr 扫描审批表 OCR"] --> N1["intake 清点"] --> N2["extract 抽取"] --> N3["ocr_augment 扫描合同按需 OCR"]
                 N3 --> N4["report_ocr 扫描报告 OCR"] --> N5["contract_scan 设备清单 / VGE"]
                 N5 --> N6["qty_check 台数断点"] --> N7["retention 质保金断点"] --> N8["validate 校验（冲突断点）"]
             end

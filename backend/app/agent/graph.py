@@ -9,6 +9,7 @@ from langgraph.graph import END, StateGraph
 from app.agent import checkpoint
 from app.agent.nodes import (
     after_checklist,
+    approval_ocr_node,
     checklist_node,
     contract_scan_node,
     extract_node,
@@ -32,6 +33,7 @@ async def get_graph():
     if _graph is None or _graph_saver is not saver:
         builder = StateGraph(GraphState)
         # 节点名不能与状态 key 同名（LangGraph 限制），故清点节点取名 intake
+        builder.add_node("approval_ocr", traced_node("approval_ocr", approval_ocr_node))
         builder.add_node("intake", traced_node("intake", checklist_node))
         builder.add_node("extract", traced_node("extract", extract_node))
         # 按需 OCR：缺条款且有扫描合同时，逐页 OCR 定向补齐（命中即停）
@@ -45,7 +47,8 @@ async def get_graph():
         builder.add_node("retention", traced_node("retention", retention_node))
         builder.add_node("validate", traced_node("validate", validate_node))
 
-        builder.set_entry_point("intake")
+        builder.set_entry_point("approval_ocr")
+        builder.add_edge("approval_ocr", "intake")
         builder.add_conditional_edges(
             "intake", after_checklist, {"extract": "extract", "end": END}
         )
