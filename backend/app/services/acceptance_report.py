@@ -37,6 +37,38 @@ def count_report_first_pages(pages: list[dict]) -> int:
     return sum(1 for page in pages if _FIRST_PAGE_RE.search(_plain(page.get("text") or "")))
 
 
+# 首页上的设备代码（每台电梯唯一）/ 报告编号：合并版与单份报告同时上传时据此去重
+# 编号须读完整：后面紧跟的不能还是编号字符（防止把 TJ2024(001) 截成 TJ2024 当标识，#81 评审）
+_FIRST_PAGE_DEVICE_RE = re.compile(r"设备代码[\s|｜:：]*([0-9A-Za-z]{10,})(?![0-9A-Za-z])")
+_FIRST_PAGE_REPORT_NO_RE = re.compile(
+    r"报告编号[\s|｜:：]*([0-9A-Za-z\-()（）]{6,})(?![0-9A-Za-z\-()（）])"
+)
+
+
+def _balanced(s: str) -> bool:
+    return s.count("(") + s.count("（") == s.count(")") + s.count("）")
+
+
+def report_first_page_ids(pages: list[dict]) -> list[frozenset[str]]:
+    """
+    每个报告首页的标识集合：设备代码与报告编号都留着（同一份报告的另一张照片可能只拍到其中一个，
+    #81 评审），都读不到（照片裁掉）为空集合，照常计数。括号不配对等读不完整的编号不当标识。
+    律师新案例（中交一公局）：「验收报告.pdf」是 5 份单份报告的合并版，同时上传会把首页数成 10 份。
+    """
+    ids: list[frozenset[str]] = []
+    for page in pages:
+        text = _plain(page.get("text") or "")
+        if not _FIRST_PAGE_RE.search(text):
+            continue
+        keys = set()
+        if m := _FIRST_PAGE_DEVICE_RE.search(text):
+            keys.add(f"设备代码:{m.group(1)}")
+        if (m := _FIRST_PAGE_REPORT_NO_RE.search(text)) and _balanced(m.group(1)):
+            keys.add(f"报告编号:{m.group(1)}")
+        ids.append(frozenset(keys))
+    return ids
+
+
 def latest_approved_date(pages: list[dict]) -> tuple[str, int | None] | None:
     """各页「批准」后的日期取最晚一个，返回 (「2022年12月26日」, 页码)；取不到返回 None。"""
     best: tuple[tuple[int, int, int], int | None] | None = None

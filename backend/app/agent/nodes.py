@@ -22,10 +22,10 @@ from app.config import (
 )
 from app.services import file_store, llm_progress, run_log
 from app.services.acceptance_report import (
-    count_report_first_pages,
-    first_pages_without_date,
     first_install_address,
+    first_pages_without_date,
     latest_approved_date,
+    report_first_page_ids,
 )
 from app.services.complaint_renderer import fill_status
 from app.services.doc_search import locate_clause_bodies
@@ -722,12 +722,24 @@ def _merge_acceptance_qty(
         else:
             total += counted[0]
             parts.append(f"文本报告 {counted[0]} 台")
+    seen_ids: set[str] = set()
     for f in ocr_files:
         name = f"《{f.get('filename', '验收报告')}》"
-        first_pages = count_report_first_pages(f.get("pages") or [])
-        if first_pages:
-            total += first_pages
-            parts.append(f"{name}按报告首页计数 {first_pages} 份")
+        ids = report_first_page_ids(f.get("pages") or [])
+        if ids:
+            # 同一设备代码 / 报告编号只算一份：合并版与单份报告同时上传、同一文件里重复的首页都不重复计数；
+            # 逐页更新已见标识（#81 评审）；读不到标识的首页照算
+            counted = 0
+            for keys in ids:
+                if keys and keys & seen_ids:
+                    seen_ids.update(keys)
+                    continue
+                seen_ids.update(keys)
+                counted += 1
+            total += counted
+            dup = len(ids) - counted
+            note = f"（其中 {dup} 份与其他报告的设备代码 / 报告编号重复，未重复计数）" if dup else ""
+            parts.append(f"{name}按报告首页计数 {counted} 份{note}")
             continue
         counted = count_acceptance_units([f])
         if counted is None:

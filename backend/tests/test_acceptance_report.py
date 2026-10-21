@@ -204,3 +204,71 @@ def test_pure_scanned_without_label_or_number_marks_incomplete(monkeypatch):
     state = {"extracted_fields": fields, "files": [_scanned_report(1)]}
     f = asyncio.run(nodes_mod.report_ocr_node(state))["extracted_fields"]
     assert "可能不全" in f["elevator_qty_by_acceptance"]["src"]
+
+
+
+def test_merged_and_single_scanned_reports_not_double_counted():
+    # 律师新案例（中交一公局）：合并版里是同一批报告首页，按设备代码去重，不算成两倍台数
+    def first_page(code: str) -> str:
+        return f"监督检验报告 设备品种：曳引驱动乘客电梯 设备代码 | {code} 批 准：某某 日期：2025年6月23日"
+
+    codes = ["31103101182025060054", "31103101182025060055", "31103101182025060056"]
+    files = []
+    for n, code in enumerate(codes):
+        f = _scanned_report(1)
+        f["filename"] = f"单份报告{n}.pdf"
+        f["pages"] = [{"page": 1, "text": first_page(code)}]
+        files.append(f)
+    merged = _scanned_report(len(codes))
+    merged["filename"] = "合并版验收报告.pdf"
+    merged["pages"] = [{"page": n + 1, "text": first_page(c)} for n, c in enumerate(codes)]
+    files.append(merged)
+    fields: dict = {}
+    nodes_mod._merge_acceptance_qty(fields, files, files, "")
+    node = fields["elevator_qty_by_acceptance"]
+    assert node["value"] == 3
+    assert "重复" in node["src"]
+
+
+def test_first_pages_without_ids_still_counted():
+    # 照片裁掉设备代码 / 报告编号：读不到标识的首页照常计数，不当成重复
+    f = _scanned_report(2)
+    f["pages"] = [{"page": n, "text": "监督检验报告 设备品种：曳引驱动乘客电梯"} for n in (1, 2)]
+    fields: dict = {}
+    nodes_mod._merge_acceptance_qty(fields, [f], [f], "")
+    assert fields["elevator_qty_by_acceptance"]["value"] == 2
+
+
+def _first(text: str) -> str:
+    return f"监督检验报告 设备品种：曳引驱动乘客电梯 {text}"
+
+
+def _qty(*page_lists: list[str]) -> int:
+    files = []
+    for n, texts in enumerate(page_lists):
+        f = _scanned_report(len(texts))
+        f["filename"] = f"报告{n}.pdf"
+        f["pages"] = [{"page": i + 1, "text": _first(t)} for i, t in enumerate(texts)]
+        files.append(f)
+    fields: dict = {}
+    nodes_mod._merge_acceptance_qty(fields, files, files, "")
+    return fields["elevator_qty_by_acceptance"]["value"]
+
+
+def test_report_numbers_with_brackets_are_not_truncated():
+    # 「TJ2024(001)」「TJ2024(002)」是两台，不能截成同一个前缀（#81 评审）
+    assert _qty(["报告编号：TJ2024(001)"], ["报告编号：TJ2024(002)"]) == 2
+
+
+def test_duplicate_first_pages_within_one_file_counted_once():
+    # 同一份合并 PDF 里重复的首页也只算一份（#81 评审）
+    code = "设备代码 | 31103101182025060054"
+    assert _qty([code, code, "设备代码 | 31103101182025060055"]) == 2
+
+
+def test_copy_with_only_report_number_matches_either_order():
+    # 一张拍到设备代码 + 报告编号，另一张只拍到同一报告编号：算一份，上传顺序不影响结果（#81 评审）
+    full = "设备代码 | 31103101182025060054 报告编号：JS202506001"
+    partial = "报告编号：JS202506001"
+    assert _qty([full], [partial]) == 1
+    assert _qty([partial], [full]) == 1
