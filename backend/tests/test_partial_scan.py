@@ -181,3 +181,132 @@ def test_partially_scanned_report_keeps_text_date_and_ocrs_scanned_pages(monkeyp
     assert [c.args[1] for c in ocr.await_args_list] == [2]
     assert out["extracted_fields"]["elevator_qty_by_acceptance"]["value"] == 2
     assert "6月23日" in out["extracted_fields"]["acceptance_latest_date"]["value"]
+
+
+# ── 第二批：战略协议分类、战略合同单独预算、审批表买卖 / 安装分栏 ─────────────────
+def test_strategic_supplement_filename_is_strategic_contract():
+    # 「战略协议补充协议」是战略合同的补充，不是本案合同的补充协议（律师新案例：徐州九里苏宁买卖）
+    assert file_parser._identify_type("某集团战略协议补充协议七-2019至2022年.pdf") == "战略合同"
+    assert file_parser._identify_type("某项目设备补充协议.pdf") == "补充协议"
+    assert file_parser._identify_type("x.pdf", "某集团战略合作协议书之\n补充协议（七）") == "战略合同"
+
+
+def test_strategic_contract_has_own_ocr_budget(monkeypatch):
+    # 主合同把 50 页用完后，战略合同仍按自己的页数上限读到仲裁条款
+    fid = file_store.put(b"%PDF-fake")
+    main = {"filename": "供货合同.pdf", "identified_type": "合同", "is_scanned": True, "text": "",
+            "pages": [], "page_count": 60, "file_id": fid}
+    strategic = {"filename": "战略协议补充协议.pdf", "identified_type": "战略合同", "is_scanned": True,
+                 "text": "", "pages": [], "page_count": 2, "file_id": fid}
+    clause = "第三条 争议：若协商不能达成一致意见的，应把争议事项提交某某仲裁委员会仲裁处理。"
+
+    async def fake(_pdf, n):
+        return clause if fake.calls >= 50 else "主合同其他条款页面"  # noqa: B023
+
+    fake.calls = 0
+
+    async def counting(pdf, n):
+        res = await fake(pdf, n)
+        fake.calls += 1
+        return res
+
+    monkeypatch.setattr(nodes_mod, "ocr_page", AsyncMock(side_effect=counting))
+    monkeypatch.setattr(nodes_mod, "chat", AsyncMock(return_value={
+        "dispute_clause_location": {"value": "第三条", "src": "《战略协议补充协议.pdf》"},
+        "dispute_clause_text": {"value": "应把争议事项提交某某仲裁委员会仲裁处理", "src": "《战略协议补充协议.pdf》"},
+    }))
+    state = {
+        "extracted_fields": {
+            "contract_sign_date": {"value": "2021年1月1日", "src": "《供货合同.pdf》盖章页"},
+            "contract_party_b": {"value": "某电梯公司", "src": "《供货合同.pdf》盖章页"},
+            "payment_clause_text": {"value": "验收后支付95%", "src": "《供货合同.pdf》"},
+            "dispute_clause_text": {"value": None, "src": ""},
+        },
+        "files": [main, strategic],
+    }
+    out = asyncio.run(nodes_mod.ocr_augment_node(state))
+    assert fake.calls == 52  # 主合同 50 页 + 战略合同 2 页
+    assert "仲裁" in out["extracted_fields"]["dispute_clause_text"]["value"]
+
+
+_DUAL_APPROVAL = (
+    "合同类型* 买卖附带安装合同 签约时间* 2021-01-01\n"
+    "买卖合同总额* 4,000,000.00 已付款金额* 3,600,000.00 未付款金额* 400,000.00\n"
+    "买卖合同未付款项 构成* 货款：验收后应付款 200000 元、 质保金 200000元（质保金付款期限）\n"
+    "安装合同总额* 1,000,000.00 已付款金额 900,000.00 未付款金额 100,000.00\n"
+    "安装合同未付款项 构成* 工程款：验收款 50000元、 质保金 50000元（质保金付款期限）、 附 加工程款 元\n"
+    "其他情况 货到工地时间"
+)
+
+
+def _dual_files(contract_name: str) -> list[dict]:
+    return [
+        {"filename": "某某诉讼审批流程.pdf", "identified_type": "审批表", "text": _DUAL_APPROVAL},
+        {"filename": contract_name, "identified_type": "合同", "text": ""},
+    ]
+
+
+def test_dual_approval_picks_install_section():
+    from app.services.extraction import apply_dual_contract_amounts
+
+    fields = {"total_amount": {"value": 5000000, "src": "审批表"}}
+    apply_dual_contract_amounts(fields, _dual_files("某项目电梯安装合同-盖章版.pdf"))
+    assert fields["total_amount"]["value"] == 1000000
+    assert fields["paid_amount"]["value"] == 900000
+    assert fields["unpaid_amount"]["value"] == 100000
+    assert fields["retention_unpaid_amount"]["value"] == 50000
+    assert fields["contract_type"]["value"] == "安装合同"
+
+
+def test_dual_approval_picks_sale_section():
+    from app.services.extraction import apply_dual_contract_amounts
+
+    fields: dict = {}
+    apply_dual_contract_amounts(fields, _dual_files("某项目电梯设计及供货合同.pdf"))
+    assert fields["total_amount"]["value"] == 4000000
+    assert fields["unpaid_amount"]["value"] == 400000
+    assert fields["retention_unpaid_amount"]["value"] == 200000
+    assert fields["contract_type"]["value"] == "买卖合同"
+
+
+def test_dual_approval_untouched_when_contract_kind_unclear():
+    from app.services.extraction import apply_dual_contract_amounts
+
+    fields = {"total_amount": {"value": 5000000, "src": "审批表"}}
+    apply_dual_contract_amounts(fields, _dual_files("合同扫描件0001.pdf"))
+    assert fields == {"total_amount": {"value": 5000000, "src": "审批表"}}
+
+
+def test_dual_approval_skips_when_title_mixes_sale_and_install():
+    # 文件名 001.pdf、标题「电梯设备安装合同」：同时有「设备」和「安装」，判断不了，不动（#80 评审）
+    from app.services.extraction import apply_dual_contract_amounts
+
+    files = _dual_files("001.pdf")
+    files[1]["text"] = "电梯设备安装合同\n甲方：虚构置业有限公司"
+    fields = {"unpaid_amount": {"value": 100000, "src": "审批表"}}
+    apply_dual_contract_amounts(fields, files)
+    assert fields == {"unpaid_amount": {"value": 100000, "src": "审批表"}}
+
+
+def test_dual_approval_clears_other_section_retention():
+    # 安装栏没写质保金：不能留着 LLM 先取的买卖栏质保金（#80 评审）
+    from app.services.extraction import apply_dual_contract_amounts
+
+    files = _dual_files("某项目电梯安装合同.pdf")
+    files[0]["text"] = _DUAL_APPROVAL.replace("质保金 50000元（质保金付款期限）、", "")
+    fields = {"retention_unpaid_amount": {"value": 200000, "src": "审批表"}}
+    apply_dual_contract_amounts(fields, files)
+    assert fields["retention_unpaid_amount"]["value"] is None
+    assert "核实" in fields["retention_unpaid_amount"]["src"]
+
+
+def test_dual_approval_keeps_ocr_warning_for_scanned_form():
+    # 扫描审批表 OCR 出的金额：重建字段后仍带待核实标记（#80 评审）
+    from app.services.extraction import apply_dual_contract_amounts
+
+    files = _dual_files("某项目电梯安装合同.pdf")
+    files[0]["is_scanned"] = True
+    fields: dict = {}
+    apply_dual_contract_amounts(fields, files)
+    for key in ("total_amount", "paid_amount", "unpaid_amount", "contract_type"):
+        assert "OCR" in fields[key]["src"] and fields[key]["channel"] == "ocr"

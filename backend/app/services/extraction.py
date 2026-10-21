@@ -9,7 +9,7 @@ from typing import Any
 from app.services.acceptance_report import latest_approved_date
 from app.services.confidence import ConfidenceSignals, compute_confidence
 from app.services.provenance import _src_filename, resolve_provenance
-from app.services.validators import ValidationCheck, parse_date
+from app.services.validators import ValidationCheck, parse_amount, parse_date
 
 
 def build_combined_text(files: list[dict]) -> str:
@@ -99,6 +99,76 @@ def mark_supplement_agreements(fields: dict, files: list[dict]) -> None:
             "value": "、".join(f"《{n}》" for n in names),
             "src": "上传材料中识别到补充协议（按文件名 / 标题），请律师核对其内容",
         }
+
+
+# 旧版 KA 审批表（合同类型「买卖附带安装合同」）一张表同时列买卖、安装两份合同的金额（律师新案例：徐州九里苏宁）
+_AMT = r"\*?([\d,]+(?:\.\d+)?)"
+_DUAL_SECTION_RE = {
+    "买卖": re.compile(f"买卖合同总额{_AMT}已付款金额{_AMT}未付款金额{_AMT}(.*?)(?=安装合同总额|其他情况|$)"),
+    "安装": re.compile(f"安装合同总额{_AMT}已付款金额{_AMT}未付款金额{_AMT}(.*?)(?=买卖合同总额|其他情况|$)"),
+}
+_SECTION_RETENTION_RE = re.compile(r"质保金([\d,]+(?:\.\d+)?)元")
+_SALE_TITLE_RE = re.compile(r"供货|买卖|设备|采购|购销")
+
+
+def _case_contract_kind(files: list[dict]) -> str | None:
+    """
+    本案合同是买卖还是安装：文件名与正文标题一起看，只出现一类字样才判；两类都有（「电梯设备安装合同」
+    「设计、供应及安装」）或都没有、合同不止一份时返回 None，不动审批表金额（#80 评审）。
+    """
+    contracts = [f for f in files if f.get("identified_type") == "合同"]
+    if len(contracts) != 1:
+        return None
+    f = contracts[0]
+    title = f"{f.get('filename', '')}{(f.get('text') or '')[:60]}"
+    sale, install = bool(_SALE_TITLE_RE.search(title)), "安装" in title
+    if sale == install:
+        return None
+    return "买卖" if sale else "安装"
+
+
+def apply_dual_contract_amounts(fields: dict, files: list[dict]) -> None:
+    """
+    审批表同时列了买卖、安装两份合同时，按本案合同取对应一栏的合同总额 / 已付 / 未付 / 未付质保金，
+    合同类型改为本案的那一种（LLM 会把两栏加总，或都取买卖栏）。判断不了本案是哪份合同时不动，留给律师。
+    """
+    approval = next(
+        (f for f in files if f.get("identified_type") == "审批表"
+         and "买卖合同总额" in re.sub(r"\s+", "", f.get("text") or "")
+         and "安装合同总额" in re.sub(r"\s+", "", f.get("text") or "")),
+        None,
+    )
+    kind = _case_contract_kind(files) if approval else None
+    if not approval or not kind:
+        return
+    m = _DUAL_SECTION_RE[kind].search(re.sub(r"\s+", "", approval["text"]))
+    if not m:
+        return
+    name = approval.get("filename", "审批表")
+    # 扫描审批表 OCR 出来的金额仍须带待核实标记：审核页与起诉状按 src 判断状态（#80 评审）
+    ocr = "（OCR识别，请核实）" if approval.get("is_scanned") else ""
+    channel = {"channel": "ocr"} if ocr else {}
+    note = f"《{name}》{kind}合同栏（审批表同时列买卖、安装两份合同，按本案{kind}合同取）"
+    for key, raw in zip(("total_amount", "paid_amount", "unpaid_amount"), m.groups()[:3]):
+        value = parse_amount(raw)
+        if value is not None:
+            fields[key] = {"value": value, "src": note + ocr, **channel}
+    retention = _SECTION_RETENTION_RE.search(m.group(4))
+    amount = parse_amount(retention.group(1)) if retention else None
+    if amount is not None:
+        fields["retention_unpaid_amount"] = {
+            "value": amount, "src": f"{note}未付款项构成-质保金{ocr}", **channel
+        }
+    else:
+        # 本栏没写质保金：不能沿用另一栏的值，也不凭空记 0，交律师核实（#80 评审）
+        fields["retention_unpaid_amount"] = {
+            "value": None, "src": f"{note}未列质保金，请律师核实"
+        }
+    fields["contract_type"] = {
+        "value": f"{kind}合同",
+        "src": f"《{name}》合同类型「买卖附带安装合同」，本案为{kind}合同{ocr}",
+        **channel,
+    }
 
 
 def apply_acceptance_count(fields: dict, files: list[dict]) -> None:

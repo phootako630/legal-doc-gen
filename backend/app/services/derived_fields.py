@@ -72,7 +72,13 @@ _PLAINTIFF_SIDE = "原告|乙方|承包方|承包人|卖方|供方|出卖人"
 _DEFENDANT_SIDE = "被告|甲方|发包方|发包人|买方|需方"
 _PLAINTIFF_SEAT_RE = re.compile(f"(?:{_PLAINTIFF_SIDE})(?:所在地|住所地)")
 _DEFENDANT_SEAT_RE = re.compile(f"(?:{_DEFENDANT_SIDE})(?:所在地|住所地)")
-_SITE_RE = re.compile(r"工程所在地|项目所在地|合同履行地|履行地|交货地")
+# 「合同施工安装地人民法院」也是工程所在地（律师新案例：山东裕景安装）
+_SITE_RE = re.compile(r"工程所在地|项目所在地|合同履行地|履行地|交货地|施工安装地|安装地|施工地")
+# 点名的基层法院：「提交肥城市人民法院诉讼」→ 肥城市。前面须有提交 / 向 / 由等动词，防止把前文吞进法院名；
+# 「中级人民法院」不匹配（不考虑中级法院，仍交律师）
+_NAMED_BASIC_COURT_RE = re.compile(f"(?:提交|提请|向|由|至|在)([{_CJK}]{{2,12}}?[市区县])人民法院")
+# 仲裁机构名（合同附录里写「仲裁机构：上海国际经济贸易仲裁委员会」，正文争议条款只写「按附录」）
+_ARBITRATION_BODY_NAME_RE = re.compile(r"(?:仲裁委员会|仲裁院|仲裁中心)$")
 _DELIVERY_RE = re.compile(r"交货地")
 _SIGN_PLACE_RE = re.compile(r"合同签订地|签订地")
 _PERCENT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%")
@@ -1311,10 +1317,19 @@ def _jurisdiction(fields: dict) -> tuple[str, str | None, str]:
     dispute = re.sub(r"\s+", "", _str_value(fields, "dispute_clause_text") or "")
     if "仲裁" in dispute:
         return "arbitration", None, "合同约定仲裁，改为仲裁申请书，待核实"
+    # 仲裁机构只写在合同附录里、争议条款正文没出现「仲裁」二字（律师新案例：徐州九里苏宁安装，
+    # 分包合同专用条件第 19 条 + 附录一「仲裁机构」）
+    body = _compact(_str_value(fields, "arbitration_institution")) or ""
+    if _ARBITRATION_BODY_NAME_RE.search(body) and "法院" not in dispute:
+        return "arbitration", None, f"合同约定仲裁机构「{body}」，改为仲裁申请书，待核实"
     if _NAMED_COURT_RE.search(dispute) and not (
         _PLAINTIFF_SEAT_RE.search(dispute) or _DEFENDANT_SEAT_RE.search(dispute)
     ):
-        # 点名了具体法院：从文字里截出法院名不可靠，交律师填写（宁缺勿造）
+        court = _named_basic_court(dispute)
+        if court:
+            # 点名的基层法院直接采用（律师新案例：山东裕景买卖「提交肥城市人民法院诉讼」），待核实
+            return "named", court, f"争议条款约定由「{court}人民法院」管辖，待核实"
+        # 截不出法院名（如点名中级法院）：交律师填写（宁缺勿造）
         return "named", None, "争议条款约定了具体法院，请律师填写"
     if _PLAINTIFF_SEAT_RE.search(dispute):
         addr = _str_value(fields, "plaintiff_address")
@@ -1339,6 +1354,23 @@ def _jurisdiction(fields: dict) -> tuple[str, str | None, str]:
     if _SITE_RE.search(dispute) or not dispute:
         return _site_jurisdiction(fields, delivery=bool(_DELIVERY_RE.search(dispute)))
     return ("general", *_defendant_seat_court(fields, "未约定具体地点"))
+
+
+# 动词后常见的介词 / 修饰语：「提交至」「向有管辖权的」
+_COURT_LEAD_RE = re.compile(r"^(?:至|到|给|于|该|由|向|在|有管辖权的|具有管辖权的)+")
+# 截出来的名字里还有这些字，说明边界不可靠（「甲方所在地」「当地」等），宁可交律师
+_COURT_NAME_BAD_RE = re.compile(r"[的之所在地向由至到]|管辖|当地|本地")
+
+
+def _named_basic_court(dispute: str) -> str | None:
+    """争议条款点名的基层法院辖区（「提交至肥城市人民法院」→ 肥城市）；边界不可靠时返回 None（#80 评审）。"""
+    m = _NAMED_BASIC_COURT_RE.search(dispute)
+    if not m:
+        return None
+    name = _COURT_LEAD_RE.sub("", m.group(1))
+    if len(name) < 3 or _COURT_NAME_BAD_RE.search(name):
+        return None
+    return name
 
 
 def _sign_place(fields: dict) -> tuple[str | None, str | None]:
