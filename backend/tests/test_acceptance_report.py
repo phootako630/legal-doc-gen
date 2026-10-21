@@ -87,7 +87,9 @@ def test_report_ocr_skipped_when_no_unread_scanned_report(monkeypatch):
     ocr = AsyncMock()
     monkeypatch.setattr(nodes_mod, "ocr_page", ocr)
     report = _scanned_report(3)
-    report["text"] = "已 OCR 过的文本"
+    # 已 OCR 过：三页都有文字（按页判断读没读完，只有 text 不算，#79 评审）
+    report["pages"] = [{"page": n, "text": f"已 OCR 过的第{n}页文本，长度足够算作有文字的页"} for n in (1, 2, 3)]
+    report["text"] = "\n\n".join(p["text"] for p in report["pages"])
     out = asyncio.run(nodes_mod.report_ocr_node({"extracted_fields": {}, "files": [report]}))
     assert out == {} and ocr.await_count == 0
 

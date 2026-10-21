@@ -118,7 +118,8 @@ def apply_acceptance_date(fields: dict, files: list[dict]) -> None:
     """
     best: tuple[tuple[int, int, int], str, str, int | None] | None = None
     for f in files:
-        if f.get("identified_type") != "验收报告" or f.get("is_scanned") or not f.get("text"):
+        # 部分扫描的报告（is_scanned 但有文字层）也用文字页取日期；纯扫描报告此时还没有 text（#79 评审）
+        if f.get("identified_type") != "验收报告" or not f.get("text"):
             continue
         pages = f.get("pages") or [{"page": None, "text": f["text"]}]
         found = latest_approved_date(pages)

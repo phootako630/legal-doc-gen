@@ -182,20 +182,58 @@ async def approval_ocr_node(state: GraphState) -> dict:
     律师反馈的山东裕景两案审批表是截图转的 PDF，没有文字层，不读就全缺。放在清点之前，清点和抽取都能看到。
     """
     files = copy.deepcopy(state.get("files", []))
+    budget = AGENT_MAX_APPROVAL_OCR_PAGES  # 整个案件共用（多份审批表不成倍放大费用，#79 评审）
     did = False
     for f in files:
-        if not (f.get("identified_type") == "审批表" and f.get("is_scanned") and not f.get("text")):
+        if not (f.get("identified_type") == "审批表" and f.get("is_scanned")):
             continue
         pdf = file_store.get(f.get("file_id")) if f.get("file_id") else None
         if pdf is None:
             continue
-        total = min(f.get("page_count") or pdf_page_count(pdf), AGENT_MAX_APPROVAL_OCR_PAGES)
-        pages = await _ocr_batch(pdf, list(range(1, total + 1)))
-        if pages:
-            f["pages"] = pages
-            f["text"] = "\n\n".join(p["text"] for p in pages if p["text"])
+        unread = _unread_pages(f, pdf)
+        todo = unread[: max(budget, 0)]
+        if len(todo) < len(unread):
+            run_log.log_event("approval_ocr_truncated", unread=len(unread), read=len(todo))
+        got = await _ocr_in_batches(pdf, todo)
+        budget -= len(todo)
+        if got:
+            _merge_pages(f, got)
             did = True
     return {"files": files} if did else {}
+
+
+def _known_pages(f: dict) -> dict[int, dict]:
+    """已有文字（文字层或已 OCR）的页：页码 → 页。"""
+    return {
+        p["page"]: p
+        for p in f.get("pages") or []
+        if len((p.get("text") or "").strip()) >= SCANNED_PAGE_TEXT_THRESHOLD
+    }
+
+
+def _unread_pages(f: dict, pdf: bytes) -> list[int]:
+    """还没有文字的页码。部分扫描的文件 text 不为空，不能拿 text 是否为空判断读没读完（#79 评审）。"""
+    known = _known_pages(f)
+    total = f.get("page_count") or pdf_page_count(pdf)
+    return [n for n in range(1, total + 1) if n not in known]
+
+
+def _merge_pages(f: dict, new_pages: list[dict]) -> None:
+    """把新读到的页与已有文字页按页码合并，回填 pages / text。"""
+    merged = {**_known_pages(f), **{p["page"]: p for p in new_pages}}
+    f["pages"] = [merged[n] for n in sorted(merged)]
+    f["text"] = "\n\n".join(p["text"] for p in f["pages"] if p["text"])
+
+
+async def _ocr_in_batches(pdf: bytes, page_nums: list[int]) -> list[dict]:
+    """按 OCR_MAX_CONCURRENCY 分批 OCR；整批失败即停（OCR 不可用，优雅降级）。"""
+    pages: list[dict] = []
+    for start in range(0, len(page_nums), OCR_MAX_CONCURRENCY):
+        got = await _ocr_batch(pdf, page_nums[start : start + OCR_MAX_CONCURRENCY])
+        if not got:
+            break
+        pages.extend(got)
+    return pages
 
 
 async def checklist_node(state: GraphState) -> dict:
@@ -400,11 +438,7 @@ async def _ocr_for_targets(
     按批并发 OCR（每批 OCR_MAX_CONCURRENCY 页），找到目标条款正文即停；返回逐页文本、剩余预算、是否 OCR 过。
     部分扫描的 PDF 已有文字层的页直接用、不 OCR、不占预算；预算用完后仍继续看后面有文字层的页。
     """
-    known = {
-        p["page"]: p
-        for p in f.get("pages") or []
-        if len((p.get("text") or "").strip()) >= SCANNED_PAGE_TEXT_THRESHOLD
-    }
+    known = _known_pages(f)
     page_total = f.get("page_count") or pdf_page_count(pdf)
     ocr_pages: list[dict] = []
     got = False
@@ -424,6 +458,10 @@ async def _ocr_for_targets(
         got = True
         if targets <= locate_clause_bodies(ocr_pages):
             break
+    # 提前停止时，后面没遍历到的文字层页也一并返回：调用方用返回值覆盖 pages，不能丢掉已有文本（#79 评审）
+    seen = {p["page"] for p in ocr_pages}
+    ocr_pages.extend(p for n, p in sorted(known.items()) if n not in seen)
+    ocr_pages.sort(key=lambda p: p["page"])
     return ocr_pages, budget, got
 
 
@@ -557,8 +595,14 @@ async def report_ocr_node(state: GraphState) -> dict:
     fields = state.get("extracted_fields", {})
     files = copy.deepcopy(state.get("files", []))
     reports = [f for f in files if f.get("identified_type") == "验收报告"]
+    # 还有没读过的页就补读（部分扫描的报告 text 不为空，按页判断，#79 评审）
     scanned = [
-        f for f in reports if f.get("is_scanned") and f.get("file_id") and not f.get("text")
+        f
+        for f in reports
+        if f.get("is_scanned")
+        and f.get("file_id")
+        and (pdf := file_store.get(f["file_id"])) is not None
+        and _unread_pages(f, pdf)
     ]
     if not scanned:
         return {}
@@ -571,13 +615,13 @@ async def report_ocr_node(state: GraphState) -> dict:
         if pdf is None or budget <= 0:
             incomplete = True
             continue
-        page_count = f.get("page_count") or pdf_page_count(pdf)
-        total = min(page_count, budget)
-        if total < page_count:
+        unread = _unread_pages(f, pdf)
+        todo = unread[:budget]
+        if len(todo) < len(unread):
             incomplete = True  # 预算不够读完这份报告
         pages: list[dict] = []
-        for start in range(1, total + 1, OCR_MAX_CONCURRENCY):
-            batch = list(range(start, min(start + OCR_MAX_CONCURRENCY, total + 1)))
+        for start in range(0, len(todo), OCR_MAX_CONCURRENCY):
+            batch = todo[start : start + OCR_MAX_CONCURRENCY]
             got = await _ocr_batch(pdf, batch)
             budget -= len(batch)
             if len(got) < len(batch):
@@ -587,9 +631,8 @@ async def report_ocr_node(state: GraphState) -> dict:
             pages.extend(got)
         if not pages:
             continue
-        f["pages"] = pages
-        f["text"] = "\n\n".join(p["text"] for p in pages if p["text"])
-        ocr_reports.append((f.get("filename", "验收报告"), pages))
+        _merge_pages(f, pages)  # 文字层的页一起参与日期 / 台数 / 安装地点汇总
+        ocr_reports.append((f.get("filename", "验收报告"), f["pages"]))
         ocr_files.append(f)
     if not ocr_reports:
         return {}

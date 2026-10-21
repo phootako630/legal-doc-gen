@@ -107,3 +107,77 @@ def test_approval_ocr_noop_for_text_forms(monkeypatch):
               "text": "合同号 AH000", "pages": []}]
     assert asyncio.run(nodes_mod.approval_ocr_node({"files": files})) == {}
     ocr.assert_not_awaited()
+
+
+# ── #79 评审补充 ───────────────────────────────────────────────────────────────
+_LONG = "电子版文字层页面，内容足够长，判定为已有文字的页。签订日期：2024年3月1日"
+
+
+def test_approval_budget_shared_and_batched(monkeypatch):
+    # 两份各 8 页的扫描审批表：整个案件合计只读 AGENT_MAX_APPROVAL_OCR_PAGES 页，且并发不超过上限
+    fid = file_store.put(b"%PDF-fake")
+    files = [
+        {"filename": f"审批表{i}.pdf", "identified_type": "审批表", "is_scanned": True,
+         "text": "", "pages": [], "page_count": 8, "file_id": fid}
+        for i in (1, 2)
+    ]
+    inflight = peak = 0
+
+    async def fake(_pdf, n):
+        nonlocal inflight, peak
+        inflight += 1
+        peak = max(peak, inflight)
+        await asyncio.sleep(0)
+        inflight -= 1
+        return f"第{n}页审批表内容，足够长的识别文本"
+
+    ocr = AsyncMock(side_effect=fake)
+    monkeypatch.setattr(nodes_mod, "ocr_page", ocr)
+    asyncio.run(nodes_mod.approval_ocr_node({"files": files}))
+    assert ocr.await_count == nodes_mod.AGENT_MAX_APPROVAL_OCR_PAGES
+    assert peak <= nodes_mod.OCR_MAX_CONCURRENCY
+
+
+def test_partially_scanned_approval_reads_only_scanned_pages(monkeypatch):
+    # 1 页电子封面 + 2 页扫描页：text 不为空也要补读扫描页，封面保留
+    fid = file_store.put(b"%PDF-fake")
+    f = {"filename": "审批表.pdf", "identified_type": "审批表", "is_scanned": True,
+         "text": _LONG, "pages": [{"page": 1, "text": _LONG}], "page_count": 3, "file_id": fid}
+    ocr = AsyncMock(side_effect=lambda _pdf, n: f"扫描页{n}：未付款金额 45,180.00 元，足够长")
+    monkeypatch.setattr(nodes_mod, "ocr_page", ocr)
+    out = asyncio.run(nodes_mod.approval_ocr_node({"files": [f]}))
+    assert sorted(c.args[1] for c in ocr.await_args_list) == [2, 3]
+    assert [p["page"] for p in out["files"][0]["pages"]] == [1, 2, 3]
+
+
+def test_early_stop_keeps_later_text_layer_pages(monkeypatch):
+    # 第 1 批 OCR 就找到目标，第 10 页的文字层不能被丢掉（签约日期锚在这页）
+    fid = file_store.put(b"%PDF-fake")
+    f = {"page_count": 10, "file_id": fid, "pages": [{"page": 10, "text": _LONG}]}
+    clause = "第七条 争议：提交某某仲裁委员会仲裁。"
+    monkeypatch.setattr(nodes_mod, "ocr_page", AsyncMock(return_value=clause))
+    pages, _budget, _got = asyncio.run(nodes_mod._ocr_for_targets(b"x", f, 50, {"dispute"}))
+    assert pages[-1]["page"] == 10 and "签订日期" in pages[-1]["text"]
+    assert max(p["page"] for p in pages if p["page"] < 10) <= 5  # 第 1 批即停
+
+
+def test_partially_scanned_report_keeps_text_date_and_ocrs_scanned_pages(monkeypatch):
+    from app.services.extraction import apply_acceptance_date
+
+    fid = file_store.put(b"%PDF-fake")
+    text_page = "监督检验报告 设备品种：曳引驱动乘客电梯 批 准：某某 日期：2025年6月23日 文字层页面"
+    report = {"filename": "验收报告.pdf", "identified_type": "验收报告", "is_scanned": True,
+              "text": text_page, "pages": [{"page": 1, "text": text_page}], "page_count": 2,
+              "file_id": fid}
+    # 抽取阶段：文字层的批准日期照常由代码取
+    fields: dict = {}
+    apply_acceptance_date(fields, [report])
+    assert fields["acceptance_latest_date"]["value"].startswith("2025")
+    # 补读阶段：只 OCR 第 2 页，汇总时文字页也参与（台数按首页数为 2）
+    second = "监督检验报告 设备品种：曳引驱动乘客电梯 批 准：某某 日期：2025年6月20日"
+    ocr = AsyncMock(return_value=second)
+    monkeypatch.setattr(nodes_mod, "ocr_page", ocr)
+    out = asyncio.run(nodes_mod.report_ocr_node({"extracted_fields": fields, "files": [report]}))
+    assert [c.args[1] for c in ocr.await_args_list] == [2]
+    assert out["extracted_fields"]["elevator_qty_by_acceptance"]["value"] == 2
+    assert "6月23日" in out["extracted_fields"]["acceptance_latest_date"]["value"]
