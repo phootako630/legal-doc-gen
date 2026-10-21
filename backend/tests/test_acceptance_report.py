@@ -237,3 +237,38 @@ def test_first_pages_without_ids_still_counted():
     fields: dict = {}
     nodes_mod._merge_acceptance_qty(fields, [f], [f], "")
     assert fields["elevator_qty_by_acceptance"]["value"] == 2
+
+
+def _first(text: str) -> str:
+    return f"监督检验报告 设备品种：曳引驱动乘客电梯 {text}"
+
+
+def _qty(*page_lists: list[str]) -> int:
+    files = []
+    for n, texts in enumerate(page_lists):
+        f = _scanned_report(len(texts))
+        f["filename"] = f"报告{n}.pdf"
+        f["pages"] = [{"page": i + 1, "text": _first(t)} for i, t in enumerate(texts)]
+        files.append(f)
+    fields: dict = {}
+    nodes_mod._merge_acceptance_qty(fields, files, files, "")
+    return fields["elevator_qty_by_acceptance"]["value"]
+
+
+def test_report_numbers_with_brackets_are_not_truncated():
+    # 「TJ2024(001)」「TJ2024(002)」是两台，不能截成同一个前缀（#81 评审）
+    assert _qty(["报告编号：TJ2024(001)"], ["报告编号：TJ2024(002)"]) == 2
+
+
+def test_duplicate_first_pages_within_one_file_counted_once():
+    # 同一份合并 PDF 里重复的首页也只算一份（#81 评审）
+    code = "设备代码 | 31103101182025060054"
+    assert _qty([code, code, "设备代码 | 31103101182025060055"]) == 2
+
+
+def test_copy_with_only_report_number_matches_either_order():
+    # 一张拍到设备代码 + 报告编号，另一张只拍到同一报告编号：算一份，上传顺序不影响结果（#81 评审）
+    full = "设备代码 | 31103101182025060054 报告编号：JS202506001"
+    partial = "报告编号：JS202506001"
+    assert _qty([full], [partial]) == 1
+    assert _qty([partial], [full]) == 1

@@ -727,13 +727,19 @@ def _merge_acceptance_qty(
         name = f"《{f.get('filename', '验收报告')}》"
         ids = report_first_page_ids(f.get("pages") or [])
         if ids:
-            # 同一设备代码 / 报告编号只算一份：合并版与单份报告同时上传时不重复计数；读不到标识的照算
-            new = [i for i in ids if i is None or i not in seen_ids]
-            seen_ids.update(i for i in ids if i)
-            total += len(new)
-            dup = len(ids) - len(new)
+            # 同一设备代码 / 报告编号只算一份：合并版与单份报告同时上传、同一文件里重复的首页都不重复计数；
+            # 逐页更新已见标识（#81 评审）；读不到标识的首页照算
+            counted = 0
+            for keys in ids:
+                if keys and keys & seen_ids:
+                    seen_ids.update(keys)
+                    continue
+                seen_ids.update(keys)
+                counted += 1
+            total += counted
+            dup = len(ids) - counted
             note = f"（其中 {dup} 份与其他报告的设备代码 / 报告编号重复，未重复计数）" if dup else ""
-            parts.append(f"{name}按报告首页计数 {len(new)} 份{note}")
+            parts.append(f"{name}按报告首页计数 {counted} 份{note}")
             continue
         counted = count_acceptance_units([f])
         if counted is None:
