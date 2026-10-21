@@ -16,6 +16,7 @@ from app.config import (
     AGENT_MAX_APPROVAL_OCR_PAGES,
     AGENT_MAX_OCR_PAGES,
     AGENT_MAX_REPORT_OCR_PAGES,
+    AGENT_MAX_STRATEGIC_OCR_PAGES,
     OCR_MAX_CONCURRENCY,
     SCANNED_PAGE_TEXT_THRESHOLD,
 )
@@ -35,6 +36,7 @@ from app.services.extraction import (
     count_acceptance_units,
     STRATEGIC_CLAUSE_KEYS,
     STRATEGIC_LABEL,
+    apply_dual_contract_amounts,
     apply_rule_guards,
     apply_strategic_guards,
     build_combined_text,
@@ -285,6 +287,8 @@ async def extract_node(state: GraphState) -> dict:
     apply_acceptance_date(fields, state.get("files", []))
     # 确认单（五）第 8 题：有补充协议时记下，起诉状加一句并提醒律师
     mark_supplement_agreements(fields, state.get("files", []))
+    # 一张审批表同时列买卖、安装两份合同：按本案合同取对应一栏的金额（律师新案例：徐州九里苏宁）
+    apply_dual_contract_amounts(fields, state.get("files", []))
     # 律师规则把关：被告住址只用工商登记信息、AI 归纳的付款条款标待核实
     apply_rule_guards(fields)
     # 战略 / 框架合同只提供条款；主合同争议条款只转引战略合同时，留给按需读取去战略合同找
@@ -519,6 +523,7 @@ async def ocr_augment_node(state: GraphState) -> dict:
     contracts = _clause_ocr_targets(files)
 
     budget = AGENT_MAX_OCR_PAGES
+    strategic_budget = AGENT_MAX_STRATEGIC_OCR_PAGES  # 战略合同单独计，不被主合同用完
     did_ocr = False
 
     for f in contracts:
@@ -532,14 +537,19 @@ async def ocr_augment_node(state: GraphState) -> dict:
             ocr_pages = list(f.get("pages") or []) or [{"page": 1, "text": f.get("text") or ""}]
             did_ocr = True
         else:
-            if budget <= 0:
+            left = strategic_budget if strategic else budget
+            if left <= 0:
                 continue
             pdf = file_store.get(f.get("file_id"))
             if pdf is None:
                 continue  # 字节已淘汰/丢失 → 跳过（条款保持缺失）
-            ocr_pages, budget, got = await _ocr_for_targets(
-                pdf, f, budget, _ocr_targets(missing, need_signature and not strategic, need_warranty)
+            ocr_pages, left, got = await _ocr_for_targets(
+                pdf, f, left, _ocr_targets(missing, need_signature and not strategic, need_warranty)
             )
+            if strategic:
+                strategic_budget = left
+            else:
+                budget = left
             did_ocr = did_ocr or got
 
         if not ocr_pages:
