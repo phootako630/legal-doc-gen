@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from fastapi import UploadFile
 
-from app.config import SCANNED_PDF_TEXT_THRESHOLD
+from app.config import SCANNED_PAGE_TEXT_THRESHOLD, SCANNED_PDF_TEXT_THRESHOLD
 from app.services import file_store, ocr_engine
 
 # 文件类型取值（上传页律师可改；分析接口按此校验）
@@ -108,6 +108,21 @@ async def _parse_pdf(
     pages = [{"page": i + 1, "text": t} for i, t in enumerate(per_page)]
 
     is_scanned = len(text.strip()) < SCANNED_PDF_TEXT_THRESHOLD
+    blank_pages = sum(1 for t in per_page if len(t.strip()) < SCANNED_PAGE_TEXT_THRESHOLD)
+    if not is_scanned and page_count >= 2 and blank_pages * 2 >= page_count:
+        # 大部分页是扫描页、少数页有文字层（如合同正文扫描、附件是电子版）：按扫描件交给 agent 按需 OCR，
+        # 有文字层的页先放进 pages，OCR 时直接用、不占页数预算
+        if identified_type == "未知":
+            identified_type = _identify_type(filename, text)
+        return {
+            "filename": filename,
+            "identified_type": identified_type,
+            "text": text,
+            "is_scanned": True,
+            "page_count": page_count,
+            "pages": [p for p in pages if len(p["text"].strip()) >= SCANNED_PAGE_TEXT_THRESHOLD],
+            "file_id": file_store.put(content),
+        }
     if is_scanned:
         # 扫描件不再在上传时整份 OCR（成本高、且多数条款字段可由审批表/验收报告补全）。
         # 只暂存原始字节并返回 file_id，交给 agent 在缺条款字段时按需逐页 OCR。

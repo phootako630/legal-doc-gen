@@ -13,9 +13,11 @@ from langgraph.types import interrupt
 
 from app.agent.state import GraphState
 from app.config import (
+    AGENT_MAX_APPROVAL_OCR_PAGES,
     AGENT_MAX_OCR_PAGES,
     AGENT_MAX_REPORT_OCR_PAGES,
     OCR_MAX_CONCURRENCY,
+    SCANNED_PAGE_TEXT_THRESHOLD,
 )
 from app.services import file_store, llm_progress, run_log
 from app.services.acceptance_report import (
@@ -174,6 +176,28 @@ async def _validate_prose(
 
 
 # ── 节点 ──────────────────────────────────────────────────────────────────────
+async def approval_ocr_node(state: GraphState) -> dict:
+    """
+    扫描审批表整份 OCR（上限 AGENT_MAX_APPROVAL_OCR_PAGES 页）：审批表是金额、合同类型、联系人的主数据源，
+    律师反馈的山东裕景两案审批表是截图转的 PDF，没有文字层，不读就全缺。放在清点之前，清点和抽取都能看到。
+    """
+    files = copy.deepcopy(state.get("files", []))
+    did = False
+    for f in files:
+        if not (f.get("identified_type") == "审批表" and f.get("is_scanned") and not f.get("text")):
+            continue
+        pdf = file_store.get(f.get("file_id")) if f.get("file_id") else None
+        if pdf is None:
+            continue
+        total = min(f.get("page_count") or pdf_page_count(pdf), AGENT_MAX_APPROVAL_OCR_PAGES)
+        pages = await _ocr_batch(pdf, list(range(1, total + 1)))
+        if pages:
+            f["pages"] = pages
+            f["text"] = "\n\n".join(p["text"] for p in pages if p["text"])
+            did = True
+    return {"files": files} if did else {}
+
+
 async def checklist_node(state: GraphState) -> dict:
     """材料清点：LLM 判断三类材料是否齐全；不足则设 pending（missing）并终止。"""
     llm_progress.start_stage("材料清点", 1)
@@ -372,17 +396,31 @@ def _ocr_targets(missing: set[str], need_signature: bool, need_warranty: bool) -
 async def _ocr_for_targets(
     pdf: bytes, f: dict, budget: int, targets: set[str]
 ) -> tuple[list[dict], int, bool]:
-    """按批并发 OCR（每批 OCR_MAX_CONCURRENCY 页），找到目标条款正文即停；返回逐页文本、剩余预算、是否 OCR 过。"""
-    total_pages = min(f.get("page_count") or pdf_page_count(pdf), budget)
+    """
+    按批并发 OCR（每批 OCR_MAX_CONCURRENCY 页），找到目标条款正文即停；返回逐页文本、剩余预算、是否 OCR 过。
+    部分扫描的 PDF 已有文字层的页直接用、不 OCR、不占预算；预算用完后仍继续看后面有文字层的页。
+    """
+    known = {
+        p["page"]: p
+        for p in f.get("pages") or []
+        if len((p.get("text") or "").strip()) >= SCANNED_PAGE_TEXT_THRESHOLD
+    }
+    page_total = f.get("page_count") or pdf_page_count(pdf)
     ocr_pages: list[dict] = []
     got = False
-    for start in range(1, total_pages + 1, OCR_MAX_CONCURRENCY):
-        batch = list(range(start, min(start + OCR_MAX_CONCURRENCY, total_pages + 1)))
-        pages = await _ocr_batch(pdf, batch)
-        budget -= len(batch)
-        ocr_pages.extend(pages)
-        if not pages:
+    for start in range(1, page_total + 1, OCR_MAX_CONCURRENCY):
+        chunk = range(start, min(start + OCR_MAX_CONCURRENCY, page_total + 1))
+        reused = [known[n] for n in chunk if n in known]
+        to_ocr = [n for n in chunk if n not in known][: max(budget, 0)]
+        if not reused and not to_ocr:
+            if not known or start > max(known):
+                break  # 预算用完，后面也没有文字层的页
+            continue
+        pages = await _ocr_batch(pdf, to_ocr) if to_ocr else []
+        budget -= len(to_ocr)
+        if to_ocr and not pages:
             break  # 整批失败 → OCR 不可用，停止，优雅降级
+        ocr_pages.extend(sorted(reused + pages, key=lambda p: p["page"]))
         got = True
         if targets <= locate_clause_bodies(ocr_pages):
             break

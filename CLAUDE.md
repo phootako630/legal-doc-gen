@@ -155,7 +155,9 @@ POST /api/upload
   输入：multipart/form-data（多个文件）
   处理：parse_file 逐个解析 → 可解析 PDF 用 PyMuPDF → Word 用 python-docx
         扫描件此处不整份 OCR，仅标记 is_scanned，留待 agent 按需 ocr_page；文件名认不出类型的扫描件
-        只 OCR 第 1 页、按标题再认一次（`file_parser._identify_scanned_by_title`，失败仍为「未知」，文字不保留）
+        只 OCR 第 1 页、按标题再认一次（`file_parser._identify_scanned_by_title`，失败仍为「未知」，文字不保留）；
+        半数以上页没有文字层的 PDF（合同正文扫描、附件电子版）也按扫描件处理，有文字层的页先放进 pages，
+        按需 OCR 时直接用、不占页数预算（`SCANNED_PAGE_TEXT_THRESHOLD`）
   输出：{
     files: [{ filename, identified_type, text, is_scanned, page_count }],
     can_proceed, missing_materials, warnings
@@ -498,6 +500,7 @@ Step 4: 预览下载
     │
     ▼
 POST /api/analyze → 启动 LangGraph agent
+    ├── 扫描审批表整份 OCR（approval_ocr，上限 AGENT_MAX_APPROVAL_OCR_PAGES）
     ├── 清点节点（Prompt A-1）→ 缺材料 → interrupt 问律师
     ├── 抽取节点（Prompt A-2，结构化输出）
     │     ├── 主取审批表结构字段
@@ -874,12 +877,15 @@ OCR_TIMEOUT = 120  # 秒
 
 # 扫描件判断阈值：PyMuPDF 提取文字少于此字数 → 判定为扫描件
 SCANNED_PDF_TEXT_THRESHOLD = 50
+SCANNED_PAGE_TEXT_THRESHOLD = 20  # 单页少于此字数算扫描页；半数以上页是扫描页的 PDF 按扫描件处理
 
 # Agent 护栏
 AGENT_MAX_STEPS = 12          # 单次运行最大工具/循环步数
 AGENT_MAX_OCR_PAGES = 50      # 扫描合同按需 OCR 的页数上限（条款 / 签章页 / 质保期找到即停；contract_scan 补读设备清单时已读页也计入，合计不超过 50）
 AGENT_MAX_REPORT_OCR_PAGES = 30  # 扫描验收报告按需 OCR 的页数上限（与合同分开计）
-# 另：上传时文件名认不出类型的扫描件各 OCR 第 1 页认标题（不计入上面两个上限）。单案最多约 50 + 30 + 认标题页数
+AGENT_MAX_APPROVAL_OCR_PAGES = 8  # 扫描审批表在清点前整份 OCR 的页数上限（`approval_ocr` 节点）
+# 另：上传时文件名认不出类型的扫描件各 OCR 第 1 页认标题（不计入上面的上限）。单案最多约 50 + 30 + 8 + 认标题页数；
+# 部分扫描 PDF 有文字层的页不 OCR、不计入
 
 # 可信度阈值
 CONFIDENCE_UNCERTAIN_BELOW = 60   # 低于此值标记为"待核实"

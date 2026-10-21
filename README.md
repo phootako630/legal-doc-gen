@@ -96,7 +96,7 @@ flowchart TB
             RF["POST /api/feedback"]
 
             subgraph Agent["LangGraph state graph"]
-                N1["intake"] --> N2["extract"] --> N3["ocr_augment: on-demand contract OCR"]
+                N0["approval_ocr: scanned approval form OCR"] --> N1["intake"] --> N2["extract"] --> N3["ocr_augment: on-demand contract OCR"]
                 N3 --> N4["report_ocr: scanned reports"] --> N5["contract_scan: equipment list / VGE"]
                 N5 --> N6["qty_check: count breakpoint"] --> N7["retention: retention breakpoint"] --> N8["validate (conflict breakpoint)"]
             end
