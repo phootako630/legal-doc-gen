@@ -1325,10 +1325,10 @@ def _jurisdiction(fields: dict) -> tuple[str, str | None, str]:
     if _NAMED_COURT_RE.search(dispute) and not (
         _PLAINTIFF_SEAT_RE.search(dispute) or _DEFENDANT_SEAT_RE.search(dispute)
     ):
-        named = _NAMED_BASIC_COURT_RE.search(dispute)
-        if named:
+        court = _named_basic_court(dispute)
+        if court:
             # 点名的基层法院直接采用（律师新案例：山东裕景买卖「提交肥城市人民法院诉讼」），待核实
-            return "named", named.group(1), f"争议条款约定由「{named.group(1)}人民法院」管辖，待核实"
+            return "named", court, f"争议条款约定由「{court}人民法院」管辖，待核实"
         # 截不出法院名（如点名中级法院）：交律师填写（宁缺勿造）
         return "named", None, "争议条款约定了具体法院，请律师填写"
     if _PLAINTIFF_SEAT_RE.search(dispute):
@@ -1354,6 +1354,23 @@ def _jurisdiction(fields: dict) -> tuple[str, str | None, str]:
     if _SITE_RE.search(dispute) or not dispute:
         return _site_jurisdiction(fields, delivery=bool(_DELIVERY_RE.search(dispute)))
     return ("general", *_defendant_seat_court(fields, "未约定具体地点"))
+
+
+# 动词后常见的介词 / 修饰语：「提交至」「向有管辖权的」
+_COURT_LEAD_RE = re.compile(r"^(?:至|到|给|于|该|由|向|在|有管辖权的|具有管辖权的)+")
+# 截出来的名字里还有这些字，说明边界不可靠（「甲方所在地」「当地」等），宁可交律师
+_COURT_NAME_BAD_RE = re.compile(r"[的之所在地向由至到]|管辖|当地|本地")
+
+
+def _named_basic_court(dispute: str) -> str | None:
+    """争议条款点名的基层法院辖区（「提交至肥城市人民法院」→ 肥城市）；边界不可靠时返回 None（#80 评审）。"""
+    m = _NAMED_BASIC_COURT_RE.search(dispute)
+    if not m:
+        return None
+    name = _COURT_LEAD_RE.sub("", m.group(1))
+    if len(name) < 3 or _COURT_NAME_BAD_RE.search(name):
+        return None
+    return name
 
 
 def _sign_place(fields: dict) -> tuple[str | None, str | None]:

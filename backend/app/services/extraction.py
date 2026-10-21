@@ -112,15 +112,19 @@ _SALE_TITLE_RE = re.compile(r"供货|买卖|设备|采购|购销")
 
 
 def _case_contract_kind(files: list[dict]) -> str | None:
-    """本案合同是买卖还是安装：看合同文件名 / 标题；只有一份合同、写法明确时才判，否则 None。"""
+    """
+    本案合同是买卖还是安装：文件名与正文标题一起看，只出现一类字样才判；两类都有（「电梯设备安装合同」
+    「设计、供应及安装」）或都没有、合同不止一份时返回 None，不动审批表金额（#80 评审）。
+    """
     contracts = [f for f in files if f.get("identified_type") == "合同"]
     if len(contracts) != 1:
         return None
     f = contracts[0]
     title = f"{f.get('filename', '')}{(f.get('text') or '')[:60]}"
-    if _SALE_TITLE_RE.search(title):
-        return "买卖" if "安装" not in f.get("filename", "") else None
-    return "安装" if "安装" in title else None
+    sale, install = bool(_SALE_TITLE_RE.search(title)), "安装" in title
+    if sale == install:
+        return None
+    return "买卖" if sale else "安装"
 
 
 def apply_dual_contract_amounts(fields: dict, files: list[dict]) -> None:
@@ -141,18 +145,30 @@ def apply_dual_contract_amounts(fields: dict, files: list[dict]) -> None:
     if not m:
         return
     name = approval.get("filename", "审批表")
+    # 扫描审批表 OCR 出来的金额仍须带待核实标记：审核页与起诉状按 src 判断状态（#80 评审）
+    ocr = "（OCR识别，请核实）" if approval.get("is_scanned") else ""
+    channel = {"channel": "ocr"} if ocr else {}
     note = f"《{name}》{kind}合同栏（审批表同时列买卖、安装两份合同，按本案{kind}合同取）"
     for key, raw in zip(("total_amount", "paid_amount", "unpaid_amount"), m.groups()[:3]):
         value = parse_amount(raw)
         if value is not None:
-            fields[key] = {"value": value, "src": note}
+            fields[key] = {"value": value, "src": note + ocr, **channel}
     retention = _SECTION_RETENTION_RE.search(m.group(4))
-    if retention and parse_amount(retention.group(1)) is not None:
+    amount = parse_amount(retention.group(1)) if retention else None
+    if amount is not None:
         fields["retention_unpaid_amount"] = {
-            "value": parse_amount(retention.group(1)),
-            "src": f"{note}未付款项构成-质保金",
+            "value": amount, "src": f"{note}未付款项构成-质保金{ocr}", **channel
         }
-    fields["contract_type"] = {"value": f"{kind}合同", "src": f"《{name}》合同类型「买卖附带安装合同」，本案为{kind}合同"}
+    else:
+        # 本栏没写质保金：不能沿用另一栏的值，也不凭空记 0，交律师核实（#80 评审）
+        fields["retention_unpaid_amount"] = {
+            "value": None, "src": f"{note}未列质保金，请律师核实"
+        }
+    fields["contract_type"] = {
+        "value": f"{kind}合同",
+        "src": f"《{name}》合同类型「买卖附带安装合同」，本案为{kind}合同{ocr}",
+        **channel,
+    }
 
 
 def apply_acceptance_count(fields: dict, files: list[dict]) -> None:

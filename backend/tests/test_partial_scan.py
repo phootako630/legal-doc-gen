@@ -275,3 +275,38 @@ def test_dual_approval_untouched_when_contract_kind_unclear():
     fields = {"total_amount": {"value": 5000000, "src": "审批表"}}
     apply_dual_contract_amounts(fields, _dual_files("合同扫描件0001.pdf"))
     assert fields == {"total_amount": {"value": 5000000, "src": "审批表"}}
+
+
+def test_dual_approval_skips_when_title_mixes_sale_and_install():
+    # 文件名 001.pdf、标题「电梯设备安装合同」：同时有「设备」和「安装」，判断不了，不动（#80 评审）
+    from app.services.extraction import apply_dual_contract_amounts
+
+    files = _dual_files("001.pdf")
+    files[1]["text"] = "电梯设备安装合同\n甲方：虚构置业有限公司"
+    fields = {"unpaid_amount": {"value": 100000, "src": "审批表"}}
+    apply_dual_contract_amounts(fields, files)
+    assert fields == {"unpaid_amount": {"value": 100000, "src": "审批表"}}
+
+
+def test_dual_approval_clears_other_section_retention():
+    # 安装栏没写质保金：不能留着 LLM 先取的买卖栏质保金（#80 评审）
+    from app.services.extraction import apply_dual_contract_amounts
+
+    files = _dual_files("某项目电梯安装合同.pdf")
+    files[0]["text"] = _DUAL_APPROVAL.replace("质保金 50000元（质保金付款期限）、", "")
+    fields = {"retention_unpaid_amount": {"value": 200000, "src": "审批表"}}
+    apply_dual_contract_amounts(fields, files)
+    assert fields["retention_unpaid_amount"]["value"] is None
+    assert "核实" in fields["retention_unpaid_amount"]["src"]
+
+
+def test_dual_approval_keeps_ocr_warning_for_scanned_form():
+    # 扫描审批表 OCR 出的金额：重建字段后仍带待核实标记（#80 评审）
+    from app.services.extraction import apply_dual_contract_amounts
+
+    files = _dual_files("某项目电梯安装合同.pdf")
+    files[0]["is_scanned"] = True
+    fields: dict = {}
+    apply_dual_contract_amounts(fields, files)
+    for key in ("total_amount", "paid_amount", "unpaid_amount", "contract_type"):
+        assert "OCR" in fields[key]["src"] and fields[key]["channel"] == "ocr"
