@@ -204,3 +204,36 @@ def test_pure_scanned_without_label_or_number_marks_incomplete(monkeypatch):
     state = {"extracted_fields": fields, "files": [_scanned_report(1)]}
     f = asyncio.run(nodes_mod.report_ocr_node(state))["extracted_fields"]
     assert "可能不全" in f["elevator_qty_by_acceptance"]["src"]
+
+
+
+def test_merged_and_single_scanned_reports_not_double_counted():
+    # 律师新案例（中交一公局）：合并版里是同一批报告首页，按设备代码去重，不算成两倍台数
+    def first_page(code: str) -> str:
+        return f"监督检验报告 设备品种：曳引驱动乘客电梯 设备代码 | {code} 批 准：某某 日期：2025年6月23日"
+
+    codes = ["31103101182025060054", "31103101182025060055", "31103101182025060056"]
+    files = []
+    for n, code in enumerate(codes):
+        f = _scanned_report(1)
+        f["filename"] = f"单份报告{n}.pdf"
+        f["pages"] = [{"page": 1, "text": first_page(code)}]
+        files.append(f)
+    merged = _scanned_report(len(codes))
+    merged["filename"] = "合并版验收报告.pdf"
+    merged["pages"] = [{"page": n + 1, "text": first_page(c)} for n, c in enumerate(codes)]
+    files.append(merged)
+    fields: dict = {}
+    nodes_mod._merge_acceptance_qty(fields, files, files, "")
+    node = fields["elevator_qty_by_acceptance"]
+    assert node["value"] == 3
+    assert "重复" in node["src"]
+
+
+def test_first_pages_without_ids_still_counted():
+    # 照片裁掉设备代码 / 报告编号：读不到标识的首页照常计数，不当成重复
+    f = _scanned_report(2)
+    f["pages"] = [{"page": n, "text": "监督检验报告 设备品种：曳引驱动乘客电梯"} for n in (1, 2)]
+    fields: dict = {}
+    nodes_mod._merge_acceptance_qty(fields, [f], [f], "")
+    assert fields["elevator_qty_by_acceptance"]["value"] == 2

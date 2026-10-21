@@ -37,6 +37,26 @@ def count_report_first_pages(pages: list[dict]) -> int:
     return sum(1 for page in pages if _FIRST_PAGE_RE.search(_plain(page.get("text") or "")))
 
 
+# 首页上的设备代码（每台电梯唯一）/ 报告编号：合并版与单份报告同时上传时据此去重
+_FIRST_PAGE_DEVICE_RE = re.compile(r"设备代码[\s|｜:：]*([0-9A-Za-z]{10,})")
+_FIRST_PAGE_REPORT_NO_RE = re.compile(r"报告编号[\s|｜:：]*([0-9A-Za-z\-]{6,})")
+
+
+def report_first_page_ids(pages: list[dict]) -> list[str | None]:
+    """
+    每个报告首页一个标识：优先设备代码，其次报告编号，都读不到（照片裁掉）为 None。
+    律师新案例（中交一公局）：「验收报告.pdf」是 5 份单份报告的合并版，同时上传会把首页数成 10 份。
+    """
+    ids: list[str | None] = []
+    for page in pages:
+        text = _plain(page.get("text") or "")
+        if not _FIRST_PAGE_RE.search(text):
+            continue
+        m = _FIRST_PAGE_DEVICE_RE.search(text) or _FIRST_PAGE_REPORT_NO_RE.search(text)
+        ids.append(m.group(1) if m else None)
+    return ids
+
+
 def latest_approved_date(pages: list[dict]) -> tuple[str, int | None] | None:
     """各页「批准」后的日期取最晚一个，返回 (「2022年12月26日」, 页码)；取不到返回 None。"""
     best: tuple[tuple[int, int, int], int | None] | None = None
