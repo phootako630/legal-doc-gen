@@ -76,6 +76,8 @@ async def run_case(case_dir: str, mode: str = "replay", strict: bool = False) ->
             while case.pending and len(pauses) < MAX_RESUMES:
                 answered = {k: decisions[k] for k in case.pending.field_keys if k in decisions}
                 pauses.append(_pause_record(case.pending, answered))
+                if not answered:
+                    break  # expected.json 没给这个断点的答案：停在断点（记为 stuck），不提交空决定
                 case = await run_resume(case.run_id, answered)
         result["pauses"] = pauses
         result["stuck"] = case.pending is not None  # 轮数用完仍在断点
