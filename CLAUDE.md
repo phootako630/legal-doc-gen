@@ -141,7 +141,7 @@ LLM 调用：     OpenAI SDK（兼容 DeepSeek API），启用 function calling 
 ### Agent 循环与 human-in-the-loop
 
 - agent 在抽取节点可多轮：抽取 → 自校验（值回原文命中？）→ 命中失败标待核实 → 缺关键字段则 `search_in_docs` / `ocr_page` 定向补齐。
-- 护栏：循环次数上限、成本上限、"连续两轮无进展 → 暂停问律师"。
+- 护栏：成本上限（全案 OCR 总页数 `AGENT_MAX_TOTAL_OCR_PAGES`，用完时在出处注明可能未读到）。
 - **interrupt 断点**：材料缺失、字段冲突、需联网确认名称时，agent 通过 LangGraph `interrupt` 暂停，把决策抛到前端审核页；律师给出选择后 `resume` 继续。Step 3 审核页即此断点的 UI 呈现，支持多次往返。
 
 ---
@@ -440,7 +440,7 @@ legal-doc-app/
 - OCR：timeout 120s，失败返回 `{ error: "OCR 处理失败：具体原因" }`
 - 文件解析：不支持格式返回明确错误，不静默失败
 - JSON 解析：优先用结构化输出；仍需兜底去除 markdown 代码块标记后重试
-- Agent：循环/成本超限 → 停止并暂停问律师，不静默烧钱
+- Agent：成本超限（OCR 总页数用完）→ 停止 OCR，并在相关字段出处与起诉状里注明「OCR 页数已达上限」，不静默烧钱、不静默降级
 - 前端所有用户提示一律中文
 - 后端日志统一用 `logging`（`main.py` 配置，输出到 stdout），不用 `print`；stdout 与运行日志都不写案件字段取值或 OCR 原文
 
@@ -882,13 +882,14 @@ SCANNED_PDF_TEXT_THRESHOLD = 50
 SCANNED_PAGE_TEXT_THRESHOLD = 20  # 单页少于此字数算扫描页；半数以上页是扫描页的 PDF 按扫描件处理
 
 # Agent 护栏
-AGENT_MAX_STEPS = 12          # 单次运行最大工具/循环步数
 AGENT_MAX_OCR_PAGES = 50      # 扫描合同按需 OCR 的页数上限（条款 / 签章页 / 质保期找到即停；contract_scan 补读设备清单时已读页也计入，合计不超过 50）
 AGENT_MAX_REPORT_OCR_PAGES = 30  # 扫描验收报告按需 OCR 的页数上限（与合同分开计）
 AGENT_MAX_APPROVAL_OCR_PAGES = 8  # 扫描审批表在清点前整份 OCR 的页数上限（`approval_ocr` 节点，全案共用）
 AGENT_MAX_STRATEGIC_OCR_PAGES = 10  # 扫描战略 / 框架合同另给的页数上限（不被主合同的 50 页用完）
-# 另：上传时文件名认不出类型的扫描件各 OCR 第 1 页认标题（不计入上面的上限）。单案最多约 50 + 30 + 8 + 10 + 认标题页数；
-# 部分扫描 PDF 有文字层的页不 OCR、不计入
+AGENT_MAX_TOTAL_OCR_PAGES = 80  # 单次分析所有按需 OCR 合计上限（上面各项是子上限，共用这 80 页；state.ocr_pages_used 计数）
+# 依据：11 个真实案卷每案 5–56 页。合同页数用完仍缺条款时，出处与起诉状【待补充】后注明「OCR 页数已达上限，合同可能未读完」，
+# 不当作合同没约定（不加断点，律师看提示自行查原件）。
+# 另：上传时文件名认不出类型的扫描件各 OCR 第 1 页认标题（不计入上面的上限）；部分扫描 PDF 有文字层的页不 OCR、不计入
 
 # 可信度阈值
 CONFIDENCE_UNCERTAIN_BELOW = 60   # 低于此值标记为"待核实"

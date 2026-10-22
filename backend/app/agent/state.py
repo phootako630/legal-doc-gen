@@ -25,6 +25,7 @@ class GraphState(TypedDict, total=False):
     highlight_list: str
     readiness: int                 # 起诉状就绪度 0–100
     pending: dict | None           # 命中的待决断点（None 表示无）
+    ocr_pages_used: int            # 本次分析已送 OCR 的页数（各 OCR 节点共用总上限）
 
 
 # ── 对外 API 契约（Pydantic）─────────────────────────────────────────────────

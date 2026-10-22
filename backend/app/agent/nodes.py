@@ -17,6 +17,7 @@ from app.config import (
     AGENT_MAX_OCR_PAGES,
     AGENT_MAX_REPORT_OCR_PAGES,
     AGENT_MAX_STRATEGIC_OCR_PAGES,
+    AGENT_MAX_TOTAL_OCR_PAGES,
     OCR_MAX_CONCURRENCY,
     SCANNED_PAGE_TEXT_THRESHOLD,
 )
@@ -27,7 +28,7 @@ from app.services.acceptance_report import (
     latest_approved_date,
     report_first_page_ids,
 )
-from app.services.complaint_renderer import fill_status
+from app.services.complaint_renderer import OCR_BUDGET_HINT, fill_status
 from app.services.doc_search import locate_clause_bodies
 from app.services.equipment_list import count_vge_units
 from app.services.extraction import (
@@ -184,7 +185,9 @@ async def approval_ocr_node(state: GraphState) -> dict:
     律师反馈的山东裕景两案审批表是截图转的 PDF，没有文字层，不读就全缺。放在清点之前，清点和抽取都能看到。
     """
     files = copy.deepcopy(state.get("files", []))
-    budget = AGENT_MAX_APPROVAL_OCR_PAGES  # 整个案件共用（多份审批表不成倍放大费用，#79 评审）
+    used = state.get("ocr_pages_used") or 0
+    # 整个案件共用（多份审批表不成倍放大费用，#79 评审），且不超过全案 OCR 总上限
+    budget = min(AGENT_MAX_APPROVAL_OCR_PAGES, _total_left(used))
     did = False
     for f in files:
         if not (f.get("identified_type") == "审批表" and f.get("is_scanned")):
@@ -198,10 +201,18 @@ async def approval_ocr_node(state: GraphState) -> dict:
             run_log.log_event("approval_ocr_truncated", unread=len(unread), read=len(todo))
         got = await _ocr_in_batches(pdf, todo)
         budget -= len(todo)
+        used += len(todo)
         if got:
             _merge_pages(f, got)
             did = True
-    return {"files": files} if did else {}
+    if did:
+        return {"files": files, "ocr_pages_used": used}
+    return {"ocr_pages_used": used} if used != (state.get("ocr_pages_used") or 0) else {}
+
+
+def _total_left(used: int) -> int:
+    """全案 OCR 总上限还剩多少页（AGENT_MAX_TOTAL_OCR_PAGES，各 OCR 节点共用）。"""
+    return max(AGENT_MAX_TOTAL_OCR_PAGES - used, 0)
 
 
 def _known_pages(f: dict) -> dict[int, dict]:
@@ -524,7 +535,9 @@ async def ocr_augment_node(state: GraphState) -> dict:
 
     budget = AGENT_MAX_OCR_PAGES
     strategic_budget = AGENT_MAX_STRATEGIC_OCR_PAGES  # 战略合同单独计，不被主合同用完
+    used = state.get("ocr_pages_used") or 0  # 两者都还受全案总上限约束
     did_ocr = False
+    hit_limit = False  # 有扫描合同因页数上限没读完
 
     for f in contracts:
         if not (missing or need_signature or need_warranty):
@@ -537,20 +550,28 @@ async def ocr_augment_node(state: GraphState) -> dict:
             ocr_pages = list(f.get("pages") or []) or [{"page": 1, "text": f.get("text") or ""}]
             did_ocr = True
         else:
-            left = strategic_budget if strategic else budget
-            if left <= 0:
-                continue
             pdf = file_store.get(f.get("file_id"))
             if pdf is None:
                 continue  # 字节已淘汰/丢失 → 跳过（条款保持缺失）
+            cap = min(strategic_budget if strategic else budget, _total_left(used))
+            if cap <= 0:
+                hit_limit = hit_limit or bool(_unread_pages(f, pdf))
+                continue
             ocr_pages, left, got = await _ocr_for_targets(
-                pdf, f, left, _ocr_targets(missing, need_signature and not strategic, need_warranty)
+                pdf, f, cap, _ocr_targets(missing, need_signature and not strategic, need_warranty)
             )
+            spent = cap - left
+            used += spent
             if strategic:
-                strategic_budget = left
+                strategic_budget -= spent
             else:
-                budget = left
+                budget -= spent
             did_ocr = did_ocr or got
+            if left <= 0:
+                # 上限用完时还有没读的页：目标若仍没找到，不能当作「合同没约定」
+                known = {p["page"] for p in ocr_pages if (p.get("text") or "").strip()}
+                total = f.get("page_count") or pdf_page_count(pdf)
+                hit_limit = hit_limit or any(n not in known for n in range(1, total + 1))
 
         if not ocr_pages:
             continue
@@ -580,12 +601,35 @@ async def ocr_augment_node(state: GraphState) -> dict:
         need_signature = need_signature and _needs_signature_page(fields)
         need_warranty = needs_warranty_period(fields)
 
-    if not did_ocr:
+    if did_ocr:
+        # 有新 OCR 文本：重新逐页锚定，令条款字段拿到真实页码 + channel=ocr
+        enrich_provenance(fields, files)
+        apply_strategic_guards(fields, files)  # 按锚定后的实际来源再把关
+    if hit_limit:
+        _mark_ocr_budget_hit(fields, missing, need_warranty)
+    if not did_ocr and not hit_limit:
         return {}
-    # 有新 OCR 文本：重新逐页锚定，令条款字段拿到真实页码 + channel=ocr
-    enrich_provenance(fields, files)
-    apply_strategic_guards(fields, files)  # 按锚定后的实际来源再把关
-    return {"extracted_fields": fields, "files": files}
+    update: dict = {"extracted_fields": fields, "ocr_pages_used": used}
+    if did_ocr:
+        update["files"] = files
+    return update
+
+
+def _mark_ocr_budget_hit(fields: dict, missing: set[str], need_warranty: bool) -> None:
+    """
+    OCR 页数上限用完、目标条款仍缺失：出处写明原因（审核页可见，起诉状【待补充】后也带上），
+    不让律师误以为合同没有约定（#71；CLAUDE.md「成本超限 → 告知律师，不静默降级」）。
+    """
+    keys = [_CLAUSE_INDICATOR[c] for c in missing]
+    if need_warranty:
+        keys.append("warranty_period")
+    for key in keys:
+        if not _is_missing(fields, key):
+            continue
+        node = dict(fields.get(key) or {})
+        node["value"] = None
+        node["src"] = f"{OCR_BUDGET_HINT}，未读到此条款，请查看合同原件"
+        fields[key] = node
 
 
 def _acceptance_from_approval(fields: dict) -> bool:
@@ -616,7 +660,8 @@ async def report_ocr_node(state: GraphState) -> dict:
     ]
     if not scanned:
         return {}
-    budget = AGENT_MAX_REPORT_OCR_PAGES
+    used = state.get("ocr_pages_used") or 0
+    budget = min(AGENT_MAX_REPORT_OCR_PAGES, _total_left(used))
     incomplete = False
     ocr_reports: list[tuple[str, list[dict]]] = []
     ocr_files: list[dict] = []
@@ -634,6 +679,7 @@ async def report_ocr_node(state: GraphState) -> dict:
             batch = todo[start : start + OCR_MAX_CONCURRENCY]
             got = await _ocr_batch(pdf, batch)
             budget -= len(batch)
+            used += len(batch)
             if len(got) < len(batch):
                 incomplete = True  # 有页超时 / 失败
             if not got:
@@ -645,7 +691,7 @@ async def report_ocr_node(state: GraphState) -> dict:
         ocr_reports.append((f.get("filename", "验收报告"), f["pages"]))
         ocr_files.append(f)
     if not ocr_reports:
-        return {}
+        return {"ocr_pages_used": used}
 
     fields = copy.deepcopy(fields)
     partial = "；部分扫描报告未识别，可能不全，待核实" if incomplete else ""
@@ -663,7 +709,7 @@ async def report_ocr_node(state: GraphState) -> dict:
                     "channel": "ocr",
                 }
                 break
-    return {"extracted_fields": fields, "files": files}
+    return {"extracted_fields": fields, "files": files, "ocr_pages_used": used}
 
 
 def _merge_acceptance_date(
@@ -787,9 +833,13 @@ def _qty_mismatch(fields: dict) -> tuple[int, int] | None:
     return contract, acceptance
 
 
-async def _ocr_rest_of_contracts(files: list[dict]) -> bool:
-    """把扫描合同尚未 OCR 的页补读完（受 AGENT_MAX_OCR_PAGES 约束），就地更新 files。"""
+async def _ocr_rest_of_contracts(files: list[dict], total_left: int) -> tuple[bool, int]:
+    """
+    把扫描合同尚未 OCR 的页补读完（受 AGENT_MAX_OCR_PAGES 与全案剩余总页数 total_left 约束），
+    就地更新 files；返回（是否读到新页，送 OCR 的页数）。
+    """
     did = False
+    spent = 0
     budget = AGENT_MAX_OCR_PAGES
     for f in files:
         if not (f.get("is_scanned") and f.get("identified_type") == "合同"):
@@ -800,7 +850,9 @@ async def _ocr_rest_of_contracts(files: list[dict]) -> bool:
         done = {p.get("page") for p in f.get("pages") or []}
         budget -= len(done)
         total = f.get("page_count") or pdf_page_count(pdf)
-        todo = [n for n in range(1, total + 1) if n not in done][: max(budget, 0)]
+        todo = [n for n in range(1, total + 1) if n not in done][
+            : max(min(budget, total_left - spent), 0)
+        ]
         pages = list(f.get("pages") or [])
         for start in range(0, len(todo), OCR_MAX_CONCURRENCY):
             got = await _ocr_batch(pdf, todo[start : start + OCR_MAX_CONCURRENCY])
@@ -809,10 +861,11 @@ async def _ocr_rest_of_contracts(files: list[dict]) -> bool:
             pages.extend(got)
             did = True
         budget -= len(todo)
+        spent += len(todo)
         pages.sort(key=lambda p: p.get("page") or 0)
         f["pages"] = pages
         f["text"] = "\n\n".join(p["text"] for p in pages if p.get("text"))
-    return did
+    return did, spent
 
 
 async def contract_scan_node(state: GraphState) -> dict:
@@ -825,7 +878,8 @@ async def contract_scan_node(state: GraphState) -> dict:
     if _qty_mismatch(fields) is None:
         return {}
     files = copy.deepcopy(state.get("files", []))
-    did_ocr = await _ocr_rest_of_contracts(files)
+    used = state.get("ocr_pages_used") or 0
+    did_ocr, spent = await _ocr_rest_of_contracts(files, _total_left(used))
     text = "\n".join(
         f.get("text") or "" for f in files if f.get("identified_type") == "合同"
     )
@@ -838,7 +892,7 @@ async def contract_scan_node(state: GraphState) -> dict:
             if vge
             else "合同中出现 VGE 型号，但设备清单台数未能自动识别，待核实",
         }
-    update: dict = {"extracted_fields": fields}
+    update: dict = {"extracted_fields": fields, "ocr_pages_used": used + spent}
     if did_ocr:
         update["files"] = files
     return update
