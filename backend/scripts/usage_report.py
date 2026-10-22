@@ -41,7 +41,8 @@ def summarize(lines: list[str], since: datetime | None) -> dict[tuple[str, str],
         event = rec.get("event")
         if event == "run_start":
             row["analyze"] += 1
-        elif event == "lawyer_edits":
+        elif event in ("lawyer_edits", "lawyer_edits_unavailable"):
+            # 每次生成起诉状记其中一条（会话已过期、算不出改动时是后者）
             row["generate"] += 1
         elif event == "resume":
             row["resume"] += 1

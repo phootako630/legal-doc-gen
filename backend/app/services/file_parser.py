@@ -173,7 +173,8 @@ async def _identify_scanned_by_title(filename: str, content: bytes) -> DocType:
     try:
         first_page = await ocr_engine.ocr_page(content, 1)
     except (RuntimeError, TimeoutError) as exc:
-        logger.warning("扫描件首页识别失败，类型留给律师选择：%s — %s", filename, exc)
+        # 不记文件名与异常原文：案卷名常含当事人名称（#84 评审）
+        logger.warning("扫描件首页识别失败（%s），类型留给律师选择", type(exc).__name__)
         return "未知"
     return _identify_type(filename, first_page or "")
 

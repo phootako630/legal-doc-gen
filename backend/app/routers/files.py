@@ -69,7 +69,8 @@ async def upload(
             except Exception as e:
                 # 解析失败（含 OCR 失败）在旧版本里只进了 warnings、从不打印，
                 # 排查时后端日志完全看不出原因——必须打印，否则只能靠猜
-                logger.warning("文件解析失败：%s — %s", upload_file.filename, e)
+                # 不记文件名与异常原文：案卷名常含当事人名称，异常里可能带原文（#84 评审）
+                logger.warning("第 %d 份文件解析失败：%s", idx, type(e).__name__)
                 warnings.append(f"{upload_file.filename}：解析失败 — {e}")
 
     identified_types = {f.identified_type for f in parsed}

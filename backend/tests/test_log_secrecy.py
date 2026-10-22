@@ -4,6 +4,7 @@
 # 以后谁在日志里加了字段取值，本测试就会失败（test_detector_catches_leak 证明检查本身有效）。
 import asyncio
 import json
+import logging
 from unittest.mock import AsyncMock
 
 from app.agent import nodes as nodes_mod
@@ -79,3 +80,37 @@ def test_detector_catches_leak(monkeypatch, tmp_path):
     path = _use_log(monkeypatch, tmp_path)
     run_log.log_event("oops", value=_SECRETS["defendant_name"])
     assert _leaks(path.read_text(encoding="utf-8")) == [_SECRETS["defendant_name"]]
+
+
+def test_upload_failure_logs_no_filename(caplog):
+    # 案卷文件名常含当事人名称：解析失败的 stdout 日志只记序号与异常类型（#84 评审）
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    name = f"{_SECRETS['defendant_name']}安装合同.pdf"
+    with caplog.at_level(logging.WARNING):
+        res = TestClient(app).post(
+            "/api/upload", files=[("files", (name, b"not a pdf", "application/pdf"))]
+        )
+    assert res.status_code == 200
+    assert "解析失败" in caplog.text
+    assert _SECRETS["defendant_name"] not in caplog.text
+
+
+def test_title_ocr_failure_logs_no_filename_or_error_text(monkeypatch, caplog):
+    from app.services import file_parser, ocr_engine
+
+    secret_err = _SECRETS["payment_clause_text"]
+    monkeypatch.setattr(
+        ocr_engine, "ocr_page", AsyncMock(side_effect=RuntimeError(secret_err))
+    )
+    name = f"{_SECRETS['plaintiff_name_final']}.pdf"
+    with caplog.at_level(logging.WARNING):
+        kind = asyncio.run(file_parser._identify_scanned_by_title(name, b"%PDF"))
+    assert kind == "未知"
+    assert "RuntimeError" in caplog.text
+    assert (
+        _SECRETS["plaintiff_name_final"] not in caplog.text
+        and secret_err not in caplog.text
+    )

@@ -127,3 +127,15 @@ def test_usage_report_missing_log(tmp_path):
         text=True,
     )
     assert res.returncode == 1 and "找不到运行日志" in res.stdout
+
+
+def test_generate_counted_when_edits_unavailable():
+    # 会话已过期时 generate 只记 lawyer_edits_unavailable，生成次数照算（#84 评审）
+    from scripts import usage_report
+
+    lines = [
+        _line("2026-10-02T01:06:00+00:00", "lawyer_edits", "lawyer01", edited=0),
+        _line("2026-10-02T01:07:00+00:00", "lawyer_edits_unavailable", "lawyer01"),
+    ]
+    stats = usage_report.summarize(lines, None)
+    assert stats[("lawyer01", "2026-10-02")]["generate"] == 2
