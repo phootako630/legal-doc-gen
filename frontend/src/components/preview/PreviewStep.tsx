@@ -5,7 +5,9 @@ import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Loader2, Download, TriangleAlert, ArrowLeft, RotateCcw } from 'lucide-react';
 import { ComplaintPreview } from './ComplaintPreview';
+import { ResetConfirmDialog } from './ResetConfirmDialog';
 import { buildComplaintHtml, downloadAsWord } from '@/lib/html-doc-generator';
+import { complaintFileName } from '@/lib/complaint-filename';
 
 interface PreviewStepProps {
   complaintText: string;
@@ -15,6 +17,7 @@ interface PreviewStepProps {
 
 export function PreviewStep({ complaintText, onBack, onReset }: PreviewStepProps) {
   const [downloading, setDownloading] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
 
   // 缺失标记与 ComplaintPreview 的「缺失」着色口径一致：渲染器输出【待补充】，
   // 【高亮缺失：…】为旧版标记（兼容保留）。旧实现数的是 v1 的 XXX，模板渲染后永远为 0
@@ -23,13 +26,12 @@ export function PreviewStep({ complaintText, onBack, onReset }: PreviewStepProps
   const handleDownload = () => {
     setDownloading(true);
     try {
-      // TODO: headerText 目前用固定文案占位；若后续把当事人姓名/案号一路传到本组件，
-      // 可以在这里换成真实案件名（如"XX诉XX安装合同纠纷"）
       // 合同约定仲裁时渲染器输出的是仲裁申请书（首行「仲 裁 申 请 书」）
       const isArbitration = complaintText.trimStart().startsWith('仲 裁');
       const docName = isArbitration ? '仲裁申请书' : '民事起诉状';
       const html = buildComplaintHtml(complaintText, { headerText: docName });
-      downloadAsWord(html, isArbitration ? '仲裁申请书.doc' : '起诉状.doc');
+      // 文件名带当事人和日期（「原告诉被告起诉状_20261022.doc」），律师下载多份时不会混
+      downloadAsWord(html, complaintFileName(complaintText));
     } finally {
       setDownloading(false);
     }
@@ -77,7 +79,7 @@ export function PreviewStep({ complaintText, onBack, onReset }: PreviewStepProps
             <ArrowLeft className="h-4 w-4" />
             返回修改
           </Button>
-          <Button variant="ghost" onClick={onReset} disabled={downloading} className="gap-2 text-muted-foreground hover:text-foreground">
+          <Button variant="ghost" onClick={() => setConfirmReset(true)} disabled={downloading} className="gap-2 text-muted-foreground hover:text-foreground">
             <RotateCcw className="h-3.5 w-3.5" />
             重新开始
           </Button>
@@ -102,6 +104,7 @@ export function PreviewStep({ complaintText, onBack, onReset }: PreviewStepProps
           )}
         </Button>
       </div>
+      <ResetConfirmDialog open={confirmReset} onOpenChange={setConfirmReset} onConfirm={onReset} />
     </div>
   );
 }

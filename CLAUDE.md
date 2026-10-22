@@ -486,8 +486,9 @@ Step 3: 审核确认 ⭐ 核心页面（agent 断点的 UI）
 
 Step 4: 预览下载
   - 起诉状全文预览（标注保留）
-  - "下载 Word"（docx-js 模板填槽）
+  - "下载 Word"（docx-js 模板填槽），文件名「原告诉被告起诉状_YYYYMMDD.doc」（仲裁为「…仲裁申请书_…」，当事人名称还是【待补充】时退回「起诉状_日期.doc」，`lib/complaint-filename.ts`）
   - "返回修改" → POST /api/generate
+  - "重新开始" 先弹确认（会清空审核修改与生成的文书）
 ```
 
 ### 技术视角（数据流）

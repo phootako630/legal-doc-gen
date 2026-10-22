@@ -4,7 +4,6 @@ import { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
 import { Loader2, TriangleAlert, ArrowLeft, Check } from 'lucide-react';
 import { fieldNameMap } from '@/lib/field-map';
 import type { ExtractedFields, PendingDecision } from '@/lib/types';
@@ -79,11 +78,9 @@ export function PendingResolver({
         <div className="space-y-4">
           {pending.field_keys.map((key) => (
             <div key={key} className="space-y-1.5">
-              <label className="flex items-center gap-2 text-sm font-medium text-foreground">
-                {fieldNameMap[key] ?? key}
-                <Badge variant="outline" className="font-normal text-[11px] text-muted-foreground">
-                  {key}
-                </Badge>
+              {/* 只显示中文字段名：律师不看英文字段 key（UX 审计 P2-8） */}
+              <label className="text-sm font-medium text-foreground">
+                {fieldNameMap[key] ?? '待确认字段'}
               </label>
               <Input
                 value={values[key] ?? ''}
