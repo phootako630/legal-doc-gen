@@ -1,4 +1,5 @@
 # 配置中心：从 .env 读取所有环境变量和运行时常量
+import logging
 import os
 from dotenv import load_dotenv
 
@@ -34,21 +35,16 @@ QWEN_OCR_MODEL = os.getenv("QWEN_OCR_MODEL", "qwen3.8-flash")
 # 关闭思考模式：OCR 只需照录原文，推理既增加耗时/费用，也可能让模型"纠正"原文（违背宁缺勿造）。
 QWEN_OCR_ENABLE_THINKING = False
 
-# 启动时打印密钥诊断（仅显示首尾4位，保护安全）
+# 启动时记录密钥是否已配置（只显示末4位与长度，便于核对换没换 key，不泄露密钥）
+_logger = logging.getLogger(__name__)
 if DASHSCOPE_API_KEY:
     _k = DASHSCOPE_API_KEY.strip()
-    print(
-        f"[CONFIG] DASHSCOPE_API_KEY loaded: {_k[:8]}...{_k[-4:]} (len={len(_k)})",
-        flush=True,
-    )
+    _logger.info("DASHSCOPE_API_KEY 已配置：…%s（%d 位）", _k[-4:], len(_k))
 else:
-    print("[CONFIG] WARNING: DASHSCOPE_API_KEY not set!", flush=True)
+    _logger.warning("DASHSCOPE_API_KEY 未配置，扫描件无法识别")
 if DASHSCOPE_API_KEY_BACKUP:
     _b = DASHSCOPE_API_KEY_BACKUP.strip()
-    print(
-        f"[CONFIG] DASHSCOPE_API_KEY_BACKUP loaded: {_b[:8]}...{_b[-4:]} (len={len(_b)})",
-        flush=True,
-    )
+    _logger.info("DASHSCOPE_API_KEY_BACKUP 已配置：…%s（%d 位）", _b[-4:], len(_b))
 
 # ── LLM 备用模型 ─────────────────────────────────────────────────────────────
 # DeepSeek 服务不可用（超时 / 连不上 / 5xx / 限流 429 / 余额不足 402）时改用通义千问，
@@ -129,6 +125,10 @@ ADMIN_TOKEN = os.getenv("ADMIN_TOKEN")
 # RUN_LOG_ENABLED=0 可关闭；日志在 backend/data/ 下，与原告信息表一样不进 git。
 RUN_LOG_ENABLED = os.getenv("RUN_LOG_ENABLED", "1") != "0"
 RUN_LOG_PATH = os.getenv("RUN_LOG_PATH", os.path.join(_DATA_DIR, "run_log.jsonl"))
+# 按天切分，切分文件保留天数。日志不含案件内容（只有字段 key、耗时、token、账号名、run_id），
+# 用于统计使用量与律师改动率，故比案件数据（CASE_RETENTION_DAYS，含原文）保留得久；
+# run_id 在案件数据清除后就对不上任何案件。
+RUN_LOG_RETENTION_DAYS = int(os.getenv("RUN_LOG_RETENTION_DAYS", "90"))
 
 # ── 登录（账号 + 会话）─────────────────────────────────────────────────────────
 # 部署时（docker-compose.yml）开启：除登录接口外所有 /api 都要求先登录。

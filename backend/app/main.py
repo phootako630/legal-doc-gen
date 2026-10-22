@@ -8,6 +8,16 @@ import sys
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 
+import logging  # noqa: E402
+
+# 后端统一用 logging 输出到 stdout（docker 日志驱动按大小切分，见 docker-compose.yml）；
+# 先于其他模块 import 配置好，config.py 加载期的提示也能输出
+logging.basicConfig(
+    level=logging.INFO,
+    stream=sys.stdout,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+
 # 以下 import 必须在上面的 stdout 重设之后，故豁免 E402
 import asyncio  # noqa: E402
 from contextlib import asynccontextmanager, suppress  # noqa: E402
@@ -31,15 +41,18 @@ from app.routers import (  # noqa: E402
     resume,
 )
 
+logger = logging.getLogger(__name__)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """启动时建好 checkpoint 库（尽早暴露路径/权限问题）并开始定时清理过期案件数据，关闭时收尾。"""
     if config.AUTH_ENABLED:
         users = await asyncio.to_thread(auth_store.list_users)  # 顺带建好账号库
         if not users:
-            print("[AUTH] 已开启登录，但还没有任何账号：用 scripts/manage_users.py add 创建", flush=True)
+            logger.warning("已开启登录，但还没有任何账号：用 scripts/manage_users.py add 创建")
     else:
-        print("[AUTH] 未开启登录（AUTH_ENABLED!=1）：所有接口无需登录，仅限本地开发", flush=True)
+        logger.warning("未开启登录（AUTH_ENABLED!=1）：所有接口无需登录，仅限本地开发")
     await get_graph()
     purge_task = asyncio.create_task(retention_loop())
     yield

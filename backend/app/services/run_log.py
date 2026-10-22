@@ -1,18 +1,23 @@
 # 运行日志：agent 每次运行的结构化事件，追加写入本地 JSONL，供复盘耗时/成本/律师改动率
 #
-# 保密约束：案件材料是客户机密，日志只记字段 key、数量、耗时、token，绝不记字段取值或原文。
-# 日志写入失败一律吞掉——可观测性不能影响主流程。
+# 保密约束：案件材料是客户机密，日志只记字段 key、数量、耗时、token，绝不记字段取值或原文
+# （tests/test_log_secrecy.py 跑完整流程守着这条）。日志写入失败一律吞掉——可观测性不能影响主流程。
+#
+# 切分与保留：按天切分，跨天后的第一次写入把旧文件改名为 run_log-YYYY-MM-DD.jsonl（UTC 日期），
+# 超过 RUN_LOG_RETENTION_DAYS 的切分文件由 purge_old 删除（服务的定时清理循环调用）。
 from __future__ import annotations
 
 import functools
+import glob
 import json
+import os
 import threading
 import time
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
-from app.config import RUN_LOG_ENABLED, RUN_LOG_PATH
+from app.config import RUN_LOG_ENABLED, RUN_LOG_PATH, RUN_LOG_RETENTION_DAYS
 
 # 当前协程所属的 run_id；runner 入口设置，节点/LLM 调用无需逐层传参
 _run_id: ContextVar[str | None] = ContextVar("run_id", default=None)
@@ -20,9 +25,6 @@ _run_id: ContextVar[str | None] = ContextVar("run_id", default=None)
 # 只记账号名，用于统计谁在什么时候用了几次，不涉及案件内容
 _user: ContextVar[str | None] = ContextVar("user", default=None)
 _lock = threading.Lock()
-# 每个 run 最近一次交给律师的字段值（仅内存，用来在 generate 时算律师改动），上限防泄漏
-_last_fields: dict[str, dict[str, Any]] = {}
-_LAST_FIELDS_CAP = 50
 
 
 def set_run_id(run_id: str | None) -> None:
@@ -49,10 +51,70 @@ def log_event(event: str, run_id: str | None = None, **data: Any) -> None:
     try:
         line = json.dumps(record, ensure_ascii=False, default=str)
         with _lock:
+            _rotate_if_new_day(RUN_LOG_PATH)
             with open(RUN_LOG_PATH, "a", encoding="utf-8") as f:
                 f.write(line + "\n")
     except (OSError, TypeError, ValueError):
         pass
+
+
+def _rotated_path(path: str, day: date) -> str:
+    stem, ext = os.path.splitext(path)
+    return f"{stem}-{day.isoformat()}{ext}"
+
+
+def _utc_day(ts: float) -> date:
+    return datetime.fromtimestamp(ts, timezone.utc).date()
+
+
+def _rotate_if_new_day(path: str) -> None:
+    """当前文件最后写入是在前一天（UTC）→ 改名为带日期的切分文件，今天另起新文件。"""
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return  # 还没有日志文件
+    day = _utc_day(mtime)
+    if day == _utc_day(time.time()):
+        return
+    target = _rotated_path(path, day)
+    if os.path.exists(target):  # 同一天已切过（如时钟回拨）：追加，不覆盖
+        with (
+            open(path, encoding="utf-8") as src,
+            open(target, "a", encoding="utf-8") as dst,
+        ):
+            dst.write(src.read())
+        os.remove(path)
+    else:
+        os.replace(path, target)
+
+
+def log_files(path: str | None = None) -> list[str]:
+    """当前日志及全部切分文件，按时间从旧到新（统计脚本读全部）。"""
+    path = path or RUN_LOG_PATH
+    stem, ext = os.path.splitext(path)
+    rotated = sorted(glob.glob(f"{glob.escape(stem)}-????-??-??{glob.escape(ext)}"))
+    return rotated + ([path] if os.path.exists(path) else [])
+
+
+def purge_old(retention_days: float | None = None, path: str | None = None) -> int:
+    """删除超过保留期的切分文件，返回删除数量；当天的日志文件不动。"""
+    path = path or RUN_LOG_PATH
+    days = RUN_LOG_RETENTION_DAYS if retention_days is None else retention_days
+    cutoff = _utc_day(time.time()) - timedelta(days=days)
+    removed = 0
+    with _lock:
+        _rotate_if_new_day(path)
+        for f in log_files(path):
+            if f == path:
+                continue
+            try:
+                day = date.fromisoformat(os.path.splitext(f)[0][-10:])
+            except ValueError:
+                continue
+            if day < cutoff:
+                os.remove(f)
+                removed += 1
+    return removed
 
 
 def _interrupt_info(exc: BaseException) -> dict[str, Any]:
@@ -117,21 +179,20 @@ def field_summary(fields: dict[str, Any]) -> dict[str, Any]:
     return {"filled": len(filled), "missing_keys": missing, "ocr_keys": ocr}
 
 
-def remember_fields(run_id: str, fields: dict[str, Any]) -> None:
-    """记下本次交给律师的字段取值，供 generate 时对比。"""
-    snap = {k: v.get("value") for k, v in fields.items() if isinstance(v, dict)}
-    with _lock:
-        _last_fields[run_id] = snap
-        while len(_last_fields) > _LAST_FIELDS_CAP:
-            _last_fields.pop(next(iter(_last_fields)))
-
-
-def log_lawyer_edits(run_id: str, final_fields: dict[str, Any]) -> None:
-    """对比 agent 交付值与律师最终值，只记 key 与改动类型（filled/cleared/modified）。"""
-    with _lock:
-        before = _last_fields.get(run_id)
-    if before is None:
+def log_lawyer_edits(
+    run_id: str,
+    delivered: dict[str, Any] | None,
+    final_fields: dict[str, Any],
+) -> None:
+    """
+    对比 agent 交付值与律师最终值，只记 key 与改动类型（filled/cleared/modified）。
+    delivered 取自该会话 checkpoint 里交给律师时的字段（runner.delivered_fields），
+    服务重启后仍在；会话已过期 / 不存在时为 None，记一条 lawyer_edits_unavailable，不静默丢失。
+    """
+    if delivered is None:
+        log_event("lawyer_edits_unavailable", run_id=run_id)
         return
+    before = {k: v.get("value") for k, v in delivered.items() if isinstance(v, dict)}
     edits: dict[str, str] = {}
     for key, node in final_fields.items():
         if not isinstance(node, dict) or key not in before:

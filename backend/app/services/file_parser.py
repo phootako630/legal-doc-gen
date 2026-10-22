@@ -1,6 +1,7 @@
 # 文件解析调度：根据文件类型选择 PyMuPDF / python-docx / PaddleOCR
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any, Literal
 
@@ -8,6 +9,8 @@ from fastapi import UploadFile
 
 from app.config import SCANNED_PAGE_TEXT_THRESHOLD, SCANNED_PDF_TEXT_THRESHOLD
 from app.services import file_store, ocr_engine
+
+logger = logging.getLogger(__name__)
 
 # 文件类型取值（上传页律师可改；分析接口按此校验）
 DocType = Literal["审批表", "合同", "补充协议", "验收报告", "战略合同", "未知"]
@@ -170,7 +173,7 @@ async def _identify_scanned_by_title(filename: str, content: bytes) -> DocType:
     try:
         first_page = await ocr_engine.ocr_page(content, 1)
     except (RuntimeError, TimeoutError) as exc:
-        print(f"[UPLOAD] 扫描件首页识别失败，类型留给律师选择：{filename} — {exc}", flush=True)
+        logger.warning("扫描件首页识别失败，类型留给律师选择：%s — %s", filename, exc)
         return "未知"
     return _identify_type(filename, first_page or "")
 

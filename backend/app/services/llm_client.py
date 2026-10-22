@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import time
 from contextvars import ContextVar
@@ -30,6 +31,8 @@ from app.config import (
     LLM_TOTAL_TIMEOUT,
 )
 from app.services import run_log
+
+logger = logging.getLogger(__name__)
 
 # 单例客户端，避免重复创建连接
 _client: AsyncOpenAI | None = None
@@ -197,10 +200,12 @@ async def _complete(
 
             # 每次调用记录 finish_reason 和 token 用量，空返回等问题才有排查依据
             usage = response.usage
-            print(
-                f"[LLM] model={model} finish_reason={choice.finish_reason} content_len={len(content)}"
-                + (f" tokens={usage.completion_tokens}/{usage.total_tokens}" if usage else ""),
-                flush=True,
+            logger.info(
+                "model=%s finish_reason=%s content_len=%d%s",
+                model,
+                choice.finish_reason,
+                len(content),
+                f" tokens={usage.completion_tokens}/{usage.total_tokens}" if usage else "",
             )
             run_log.log_event(
                 "llm_call",
@@ -336,10 +341,11 @@ async def chat(
         if not _fallback_ready():
             raise _translate_error(u.exc) from u.exc
         _primary_down_until = time.monotonic() + LLM_FALLBACK_COOLDOWN_S
-        print(
-            f"[LLM] DeepSeek 不可用（{type(u.exc).__name__}），"
-            f"{LLM_FALLBACK_COOLDOWN_S // 60} 分钟内改用备用模型 {LLM_FALLBACK_MODEL}",
-            flush=True,
+        logger.warning(
+            "DeepSeek 不可用（%s），%d 分钟内改用备用模型 %s",
+            type(u.exc).__name__,
+            LLM_FALLBACK_COOLDOWN_S // 60,
+            LLM_FALLBACK_MODEL,
         )
         run_log.log_event("llm_fallback", reason=type(u.exc).__name__, model=LLM_FALLBACK_MODEL)
         return await _chat_fallback(messages, json_mode)

@@ -6,6 +6,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from app.agent.runner import delivered_fields
 from app.services import run_log
 from app.services.complaint_renderer import render_complaint
 
@@ -26,7 +27,11 @@ class GenerateResponse(BaseModel):
 async def generate(req: GenerateRequest) -> GenerateResponse:
     """将律师确认的字段模板填槽为起诉状全文（确定性渲染，非 LLM）。"""
     if req.run_id:
-        run_log.log_lawyer_edits(req.run_id, req.validated_json)
+        try:
+            delivered = await delivered_fields(req.run_id)
+        except Exception:  # noqa: BLE001 — 统计改动是尽力而为，不能挡住生成起诉状
+            delivered = None
+        run_log.log_lawyer_edits(req.run_id, delivered, req.validated_json)
     try:
         complaint_text = render_complaint(req.validated_json, mark_fills=True)
     except FileNotFoundError as e:

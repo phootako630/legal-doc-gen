@@ -396,7 +396,7 @@ legal-doc-app/
 │   │   │   ├── anchoring.py         # 值回原文命中/定位
 │   │   │   ├── auth_store.py        # 账号与会话（SQLite，scrypt 哈希；令牌只存摘要）
 │   │   │   ├── login_guard.py       # 登录输错锁定
-│   │   │   ├── run_log.py           # 运行日志（JSONL：节点耗时/断点/LLM token/OCR 页数/律师改动/登录账号名；只记 key 不记取值；`scripts/usage_report.py` 按账号统计）
+│   │   │   ├── run_log.py           # 运行日志（JSONL：节点耗时/断点/LLM token/OCR 页数/律师改动/登录账号名；只记 key 不记取值，`tests/test_log_secrecy.py` 守着；按天切分、保留 `RUN_LOG_RETENTION_DAYS`；律师改动对比 checkpoint 里交给律师时的字段，重启不丢；`scripts/usage_report.py` 按账号统计）
 │   │   │   └── company_lookup.py    # 联网企业信息查询
 │   │   └── config.py
 │   ├── scripts/                     # 运维脚本（账号管理、反馈查看）+ 案件 eval（eval_cases.py、case_eval/）
@@ -442,6 +442,7 @@ legal-doc-app/
 - JSON 解析：优先用结构化输出；仍需兜底去除 markdown 代码块标记后重试
 - Agent：循环/成本超限 → 停止并暂停问律师，不静默烧钱
 - 前端所有用户提示一律中文
+- 后端日志统一用 `logging`（`main.py` 配置，输出到 stdout），不用 `print`；stdout 与运行日志都不写案件字段取值或 OCR 原文
 
 ### Documentation Best Practices
 
@@ -914,6 +915,8 @@ DASHSCOPE_API_KEY=sk-xxxxxxxxxxxxxxxx
 ADMIN_TOKEN=
 # 运行日志（backend/data/run_log.jsonl，不进 git）；设为 0 关闭
 RUN_LOG_ENABLED=1
+# 运行日志按天切分，旧日志保留天数（不含案件内容，故比案件数据保留得久）
+RUN_LOG_RETENTION_DAYS=90
 # 案件数据保留天数（checkpoint + 上传文件），超期自动清除
 CASE_RETENTION_DAYS=7
 ```
