@@ -406,7 +406,7 @@ legal-doc-app/
 │   ├── requirements.txt
 │   └── .env.example                 # DEEPSEEK_API_KEY, DASHSCOPE_API_KEY
 │
-├── deploy/                          # nginx 配置（http/https）、cert.sh（Let's Encrypt 证书）、deploy.sh（部署 + 失败回滚，GitHub Actions 审批后调用；先构建，再暂停接收新分析、等进行中的分析结束（最多 `DEPLOY_DRAIN_TIMEOUT` 秒）再重启）、中文部署指南
+├── deploy/                          # nginx 配置（http/https）、cert.sh（Let's Encrypt 证书）、deploy.sh（部署 + 失败回滚，GitHub Actions 审批后调用；先构建，再暂停接收新分析、等进行中的分析结束（最多 `DEPLOY_DRAIN_TIMEOUT` 秒）再重启）、backup.sh（原告信息表 + 账号库每日备份与恢复演练，不备份案件数据）、中文部署指南
 └── docker-compose.yml               # 一键部署：backend（不对外，含登录校验）+ web（nginx 静态页 + 反代 + HTTPS）
 ```
 
