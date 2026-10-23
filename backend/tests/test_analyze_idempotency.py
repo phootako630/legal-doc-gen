@@ -227,6 +227,15 @@ def test_get_case_returns_current_state_and_404s(monkeypatch):
     assert client.get(f"/api/case/{run_id}").status_code == 404
 
 
+async def _wait_until(cond, timeout: float = 5.0) -> None:
+    """轮询到条件成立（CI 上首次建库较慢，不能靠固定 sleep 猜时间）。"""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while not cond():
+        assert loop.time() < deadline, "等待超时"
+        await asyncio.sleep(0.01)
+
+
 def test_result_by_key_joins_running_analysis(monkeypatch):
     # 处理页刷新后按编号接回：还在跑就等同一个任务，不另起分析；/busy 期间计数为 1
     gate = asyncio.Event()
@@ -240,10 +249,10 @@ def test_result_by_key_joins_running_analysis(monkeypatch):
 
     async def scenario():
         first = asyncio.create_task(run_analyze_once("key-rejoin-0001", _FILES, True))
-        await asyncio.sleep(0.05)
+        await _wait_until(lambda: "key-rejoin-0001" in runner._inflight)
         assert runner.active_runs() == 1
         joined = asyncio.create_task(runner.analyze_result("key-rejoin-0001"))
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0)  # 让接回请求先挂上任务
         gate.set()
         return await first, await joined
 
@@ -284,7 +293,7 @@ def test_drain_rejects_new_runs_but_lets_running_finish(monkeypatch):
 
     async def scenario():
         running = asyncio.create_task(run_analyze_once("key-drain-00001", _FILES, True))
-        await asyncio.sleep(0.05)
+        await _wait_until(lambda: "key-drain-00001" in runner._inflight)
         runner.start_draining()
         with pytest.raises(runner.Draining):
             await run_analyze_once(
@@ -318,7 +327,10 @@ def test_busy_covers_saving_the_key(monkeypatch):
     gate = asyncio.Event()
     orig_save = checkpoint.save_analyze_key
 
+    saving = asyncio.Event()
+
     async def slow_save(*args):
+        saving.set()
         await gate.wait()
         await orig_save(*args)
 
@@ -326,11 +338,7 @@ def test_busy_covers_saving_the_key(monkeypatch):
 
     async def scenario():
         task = asyncio.create_task(run_analyze_once("key-saving-0001", _FILES, True))
-        for _ in range(200):  # 等分析跑到落盘这一步
-            await asyncio.sleep(0.01)
-            if nodes_mod.chat.await_count == 3:
-                break
-        await asyncio.sleep(0.05)
+        await _wait_until(lambda: saving.is_set())  # 分析已跑完、卡在落盘这一步
         during_save = runner.active_runs()
         gate.set()
         await task
@@ -352,9 +360,9 @@ def test_result_by_key_when_joined_task_fails(monkeypatch):
 
     async def scenario():
         first = asyncio.create_task(run_analyze_once("key-joinfail-01", _FILES, True))
-        await asyncio.sleep(0.05)
+        await _wait_until(lambda: "key-joinfail-01" in runner._inflight)
         joined = asyncio.create_task(runner.analyze_result("key-joinfail-01"))
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0)  # 让接回请求先挂上任务，确实走「接上后失败」这条路
         gate.set()
         with pytest.raises(RuntimeError):
             await first
