@@ -264,5 +264,101 @@ def test_result_by_key_after_done_and_unknown(monkeypatch):
     client = TestClient(app)
     res = client.get("/api/analyze/result", params={"key": "key-never-started"})
     assert res.status_code == 404 and "重新上传" in res.json()["detail"]
-    assert client.get("/api/analyze/result", params={"key": "bad key!"}).status_code == 400
-    assert client.get("/busy").json() == {"running": 0}
+    assert (
+        client.get("/api/analyze/result", params={"key": "bad key!"}).status_code == 400
+    )
+    assert client.get("/busy").json() == {"running": 0, "draining": False}
+
+
+def test_drain_rejects_new_runs_but_lets_running_finish(monkeypatch):
+    # 部署排空：先关入口再等归零——进入排空后新分析 / 恢复 503，进行中的照常跑完（#86 评审）
+    gate = asyncio.Event()
+    replies = iter(_one_run())
+
+    async def slow_chat(*_a, **_k):
+        await gate.wait()
+        return next(replies)
+
+    monkeypatch.setattr(nodes_mod, "chat", slow_chat)
+    monkeypatch.setattr(runner, "_draining", False)
+
+    async def scenario():
+        running = asyncio.create_task(run_analyze_once("key-drain-00001", _FILES, True))
+        await asyncio.sleep(0.05)
+        runner.start_draining()
+        with pytest.raises(runner.Draining):
+            await run_analyze_once(
+                "key-drain-00002", _FILES, True
+            )  # 「读到 0 后又发起」也被挡住
+        with pytest.raises(runner.Draining):
+            await runner.run_resume("0" * 32, {})
+        assert runner.active_runs() == 1
+        gate.set()
+        return await running
+
+    case = asyncio.run(scenario())
+    assert case.run_id and runner.active_runs() == 0
+
+    from app.main import app
+
+    client = TestClient(app)
+    res = client.post(
+        "/api/analyze",
+        json={"files": _FILES},
+        headers={"Idempotency-Key": "key-drain-00003"},
+    )
+    assert res.status_code == 503 and "系统正在更新" in res.json()["detail"]
+    assert client.post("/api/resume", json={"run_id": "0" * 32}).status_code == 503
+    assert client.get("/busy").json() == {"running": 0, "draining": True}
+
+
+def test_busy_covers_saving_the_key(monkeypatch):
+    # 分析跑完、请求编号还没落盘时仍算「进行中」：此时重启，刷新后就找不回这次分析（#86 评审）
+    _patch_chat(monkeypatch, _one_run())
+    gate = asyncio.Event()
+    orig_save = checkpoint.save_analyze_key
+
+    async def slow_save(*args):
+        await gate.wait()
+        await orig_save(*args)
+
+    monkeypatch.setattr(checkpoint, "save_analyze_key", slow_save)
+
+    async def scenario():
+        task = asyncio.create_task(run_analyze_once("key-saving-0001", _FILES, True))
+        for _ in range(200):  # 等分析跑到落盘这一步
+            await asyncio.sleep(0.01)
+            if nodes_mod.chat.await_count == 3:
+                break
+        await asyncio.sleep(0.05)
+        during_save = runner.active_runs()
+        gate.set()
+        await task
+        return during_save
+
+    assert asyncio.run(scenario()) == 1
+    assert runner.active_runs() == 0
+
+
+def test_result_by_key_when_joined_task_fails(monkeypatch):
+    # 已接上的分析随后失败：与找不到一样返回 None（接口 404，提示重新上传），不是 500（#86 评审）
+    gate = asyncio.Event()
+
+    async def failing_chat(*_a, **_k):
+        await gate.wait()
+        raise RuntimeError("虚构的模型故障")
+
+    monkeypatch.setattr(nodes_mod, "chat", failing_chat)
+
+    async def scenario():
+        first = asyncio.create_task(run_analyze_once("key-joinfail-01", _FILES, True))
+        await asyncio.sleep(0.05)
+        joined = asyncio.create_task(runner.analyze_result("key-joinfail-01"))
+        await asyncio.sleep(0.05)
+        gate.set()
+        with pytest.raises(RuntimeError):
+            await first
+        return await joined
+
+    assert asyncio.run(scenario()) is None
+    assert runner.active_runs() == 0

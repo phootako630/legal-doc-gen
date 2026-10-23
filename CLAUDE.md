@@ -185,7 +185,7 @@ POST /api/resume             # 律师在断点处给出决定后恢复 agent
 
 GET /api/case/{run_id}       # 取回会话当前状态（刷新页面后「继续上次的案件」）；过期 / 不存在 404
 GET /api/analyze/result?key=<请求编号>  # 处理页刷新后接回同一次分析：还在跑就等它跑完，已跑完直接返回；失败 / 重启 / 过期 404
-GET /busy（不在 /api 下，nginx 不转发）   # 正在执行的分析 / 断点恢复数，deploy.sh 重启前等它归零
+POST /drain、GET /busy（不在 /api 下，nginx 不转发）  # deploy.sh 重启前先 drain（新的分析 / 恢复 503「系统正在更新」），再等 busy 归零（含编号落盘）
 
 POST /api/generate
   输入：{ validated_state: CaseState }
@@ -406,7 +406,7 @@ legal-doc-app/
 │   ├── requirements.txt
 │   └── .env.example                 # DEEPSEEK_API_KEY, DASHSCOPE_API_KEY
 │
-├── deploy/                          # nginx 配置（http/https）、cert.sh（Let's Encrypt 证书）、deploy.sh（部署 + 失败回滚，GitHub Actions 审批后调用；先构建，等进行中的分析结束（最多 `DEPLOY_DRAIN_TIMEOUT` 秒）再重启）、中文部署指南
+├── deploy/                          # nginx 配置（http/https）、cert.sh（Let's Encrypt 证书）、deploy.sh（部署 + 失败回滚，GitHub Actions 审批后调用；先构建，再暂停接收新分析、等进行中的分析结束（最多 `DEPLOY_DRAIN_TIMEOUT` 秒）再重启）、中文部署指南
 └── docker-compose.yml               # 一键部署：backend（不对外，含登录校验）+ web（nginx 静态页 + 反代 + HTTPS）
 ```
 

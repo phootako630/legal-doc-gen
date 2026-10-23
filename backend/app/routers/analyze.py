@@ -8,7 +8,13 @@ import re
 from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel
 
-from app.agent.runner import IdempotencyConflict, analyze_result, run_analyze, run_analyze_once
+from app.agent.runner import (
+    Draining,
+    IdempotencyConflict,
+    analyze_result,
+    run_analyze,
+    run_analyze_once,
+)
 from app.agent.state import CaseState
 from app.services import llm_progress, run_log
 from app.services.file_parser import DocType
@@ -49,6 +55,9 @@ class LlmProgress(BaseModel):
     stage_elapsed_s: int
 
 
+# 部署排空期间（重启前最多几分钟）拒绝新任务时给律师的提示
+DRAINING_DETAIL = "系统正在更新，请一两分钟后再试"
+
 # 请求编号只允许字母、数字、- 和 _（UUID 即可），长度 8–128，避免把任意内容写进库里
 _KEY_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 
@@ -78,6 +87,8 @@ async def analyze(
         try:
             # 进度记录在 run_analyze_once 的任务里做：重复请求不会把进度条重置
             return await run_analyze_once(idempotency_key, files, req.internet_allowed)
+        except Draining as e:
+            raise HTTPException(status_code=503, detail=DRAINING_DETAIL) from e
         except IdempotencyConflict as e:
             raise HTTPException(
                 status_code=409,
@@ -89,6 +100,8 @@ async def analyze(
     # 不带请求编号的旧客户端：照常分析，但没有 id 可挂进度，故不记录进度
     try:
         return await run_analyze(files, req.internet_allowed)
+    except Draining as e:
+        raise HTTPException(status_code=503, detail=DRAINING_DETAIL) from e
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=f"分析失败：{e}") from e
 

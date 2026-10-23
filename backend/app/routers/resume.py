@@ -6,7 +6,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from app.agent.runner import get_case, run_resume
+from app.agent.runner import Draining, get_case, run_resume
+from app.routers.analyze import DRAINING_DETAIL
 from app.agent.state import CaseState
 from app.services import llm_progress
 
@@ -35,6 +36,8 @@ async def resume(req: ResumeRequest) -> CaseState:
             raise HTTPException(
                 status_code=404, detail="会话不存在或已过期，请重新分析"
             ) from e
+        except Draining as e:
+            raise HTTPException(status_code=503, detail=DRAINING_DETAIL) from e
         except RuntimeError as e:
             raise HTTPException(status_code=500, detail=f"恢复失败：{e}") from e
 
