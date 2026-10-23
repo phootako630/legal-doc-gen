@@ -486,6 +486,9 @@ def elevator_qty_field(fields: dict) -> dict | None:
     ):
         node["channel"] = "ocr"
         node["src"] = f"{src}（{base.get('src') or '扫描验收报告'}；OCR识别，请核实）"
+    elif isinstance(base, dict) and "可能不全" in str(base.get("src") or ""):
+        # 扫描报告没读到、台数只来自文字版报告：沿用「可能不全，待核实」（#85 评审）
+        node["src"] = f"{src}（{base.get('src')}）"
     return node
 
 
@@ -527,6 +530,22 @@ def handover_text_field(fields: dict) -> dict:
     return {"value": f"已全部移交{target}", "src": f"{basis}；合同付款条件未约定结算"}
 
 
+# 按需 OCR 页数用完仍没读到的字段，出处里带这句（agent/nodes.py 写入）：派生规则据此不下
+# 「合同未约定」的结论，起诉状【待补充】后写明原因（#71）
+OCR_BUDGET_HINT = "扫描识别页数已达上限"
+
+
+def unread_by_budget(fields: dict, *keys: str) -> bool:
+    """这些字段都没有值，且至少一个是因扫描识别页数用完才没读到的（不等于合同没约定）。"""
+    nodes = [_node(fields, k) for k in keys]
+    if any(n.get("value") not in (None, "") for n in nodes):
+        return False
+    return any(OCR_BUDGET_HINT in str(n.get("src") or "") for n in nodes)
+
+
+_BREACH_UNREAD_SRC = f"{OCR_BUDGET_HINT}，合同违约条款未读到，不能认定合同未约定，请查看合同原件"
+
+
 # ── 逾期利息 / 违约金 ─────────────────────────────────────────────────────────
 def _breach_is_penalty(fields: dict) -> bool:
     """合同的甲方逾期付款条款写的是「违约金」（而非利息）。"""
@@ -543,6 +562,8 @@ def interest_term_field(fields: dict) -> dict:
     """
     if _breach_is_penalty(fields):
         return {"value": "违约金", "src": "合同甲方逾期付款条款约定为违约金"}
+    if unread_by_budget(fields, "breach_interest_rate_text", "breach_clause_text"):
+        return {"value": None, "src": _BREACH_UNREAD_SRC}  # 没读到 ≠ 没约定，留给律师
     return {"value": "逾期付款利息", "src": "合同未约定甲方逾期付款违约金"}
 
 
@@ -665,6 +686,8 @@ def interest_basis_field(fields: dict) -> dict:
             "src": "按律师规则：合同约定了甲方逾期付款利率，采用合同约定，待核实",
             "channel": "text",
         }
+    if unread_by_budget(fields, "breach_interest_rate_text", "breach_clause_text"):
+        return {"value": None, "src": _BREACH_UNREAD_SRC}  # 不套用 LPR
     return {
         "value": LPR_INTEREST_BASIS,
         "src": "常规话术（合同未约定甲方逾期付款利率）",
@@ -1689,11 +1712,20 @@ def payment_cite_location_field(fields: dict) -> dict | None:
     if not labels:
         # 匹配不上，或付款条款本身没有分项编号：沿用抽取的付款条款位置
         node = _node(fields, "payment_clause_location")
-        return dict(node) if node.get("value") else None
+        if node.get("value"):
+            return dict(node)
+        return _payment_unread_by_budget(fields)
     return {
         "value": "、".join(labels),
         "src": "按律师规则：欠款对应的付款节点" + _source_risk_note(fields, "payment_clause_text", "付款条款"),
     }
+
+
+def _payment_unread_by_budget(fields: dict) -> dict | None:
+    """付款条款因扫描识别页数用完没读到：起诉状付款段落的【待补充】带上原因（#85 评审）。"""
+    if unread_by_budget(fields, "payment_clause_text", "payment_clause_summary"):
+        return {"value": None, "src": f"{OCR_BUDGET_HINT}，付款条款未读到，请查看合同原件"}
+    return None
 
 
 _STAGE_TITLE_RE = re.compile(r"^[^，,。；;：:]{1,12}[：:]")
@@ -1710,7 +1742,7 @@ def payment_cite_text_field(fields: dict) -> dict | None:
             node = _node(fields, key)
             if node.get("value"):
                 return dict(node)
-        return None
+        return _payment_unread_by_budget(fields)
     # 去掉节点开头的小标题（「结算款及质保保函：」「验收款：」），其余照抄
     texts = list(dict.fromkeys(_STAGE_TITLE_RE.sub("", s.text).rstrip("。.") for s in owed))
     return {

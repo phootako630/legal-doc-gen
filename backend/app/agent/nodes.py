@@ -28,7 +28,7 @@ from app.services.acceptance_report import (
     latest_approved_date,
     report_first_page_ids,
 )
-from app.services.complaint_renderer import OCR_BUDGET_HINT, fill_status
+from app.services.complaint_renderer import fill_status
 from app.services.doc_search import locate_clause_bodies
 from app.services.equipment_list import count_vge_units
 from app.services.extraction import (
@@ -47,6 +47,7 @@ from app.services.extraction import (
     mark_supplement_agreements,
 )
 from app.services.derived_fields import (
+    OCR_BUDGET_HINT,
     apply_derived_fields,
     needs_warranty_period,
     parse_percent,
@@ -628,7 +629,7 @@ def _mark_ocr_budget_hit(fields: dict, missing: set[str], need_warranty: bool) -
             continue
         node = dict(fields.get(key) or {})
         node["value"] = None
-        node["src"] = f"{OCR_BUDGET_HINT}，未读到此条款，请查看合同原件"
+        node["src"] = f"{OCR_BUDGET_HINT}，合同可能未读完，未读到此条款，请查看合同原件"
         fields[key] = node
 
 
@@ -663,17 +664,19 @@ async def report_ocr_node(state: GraphState) -> dict:
     used = state.get("ocr_pages_used") or 0
     budget = min(AGENT_MAX_REPORT_OCR_PAGES, _total_left(used))
     incomplete = False
+    budget_hit = False  # 因页数上限没读完（区别于 OCR 本身失败）
     ocr_reports: list[tuple[str, list[dict]]] = []
     ocr_files: list[dict] = []
     for f in scanned:
         pdf = file_store.get(f.get("file_id"))
         if pdf is None or budget <= 0:
             incomplete = True
+            budget_hit = budget_hit or pdf is not None
             continue
         unread = _unread_pages(f, pdf)
         todo = unread[:budget]
         if len(todo) < len(unread):
-            incomplete = True  # 预算不够读完这份报告
+            incomplete = budget_hit = True  # 预算不够读完这份报告
         pages: list[dict] = []
         for start in range(0, len(todo), OCR_MAX_CONCURRENCY):
             batch = todo[start : start + OCR_MAX_CONCURRENCY]
@@ -691,7 +694,16 @@ async def report_ocr_node(state: GraphState) -> dict:
         ocr_reports.append((f.get("filename", "验收报告"), f["pages"]))
         ocr_files.append(f)
     if not ocr_reports:
-        return {"ocr_pages_used": used}
+        if not incomplete:
+            return {"ocr_pages_used": used}
+        # 一页扫描报告都没读到（页数已用完或 OCR 不可用）：已有的验收日期 / 台数只来自其余材料，
+        # 出处注明可能不全，不当作全案结论（#85 评审）
+        fields = copy.deepcopy(fields)
+        reason = f"{OCR_BUDGET_HINT}，" if budget_hit else ""
+        note = f"扫描验收报告未识别（{reason}可能不全），待核实"
+        for key in ("acceptance_latest_date", "elevator_qty_by_acceptance", "elevator_qty"):
+            _note_incomplete(fields, key, note)
+        return {"extracted_fields": fields, "ocr_pages_used": used}
 
     fields = copy.deepcopy(fields)
     partial = "；部分扫描报告未识别，可能不全，待核实" if incomplete else ""
@@ -710,6 +722,17 @@ async def report_ocr_node(state: GraphState) -> dict:
                 }
                 break
     return {"extracted_fields": fields, "files": files, "ocr_pages_used": used}
+
+
+def _note_incomplete(fields: dict, key: str, note: str) -> None:
+    """在字段出处后追加「可能不全」说明；没有值的字段出处直接写说明。"""
+    node = dict(fields.get(key) or {})
+    if _is_missing(fields, key):
+        node["value"] = None
+        node["src"] = note
+    else:
+        node["src"] = f"{node.get('src') or ''}；{note}".lstrip("；")
+    fields[key] = node
 
 
 def _merge_acceptance_date(

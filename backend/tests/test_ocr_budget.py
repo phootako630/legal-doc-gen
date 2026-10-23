@@ -4,7 +4,7 @@ import asyncio
 from unittest.mock import AsyncMock
 
 from app.agent import nodes as nodes_mod
-from app.services import file_store
+from app.services import derived_fields, file_store
 from app.services.complaint_renderer import OCR_BUDGET_HINT, render_complaint
 
 
@@ -78,9 +78,21 @@ def test_budget_hit_marks_missing_clauses(monkeypatch):
     for key in ("payment_clause_text", "dispute_clause_text"):
         node = out["extracted_fields"][key]
         assert node["value"] is None and OCR_BUDGET_HINT in node["src"]
-    # 起诉状：【待补充】后写明原因，不当作「合同没约定」
+    # 起诉状：付款段落、违约金段落都写明原因，不当作「合同没约定」（#85 评审）
     text = render_complaint(out["extracted_fields"])
-    assert f"【待补充】（{OCR_BUDGET_HINT}，请查看合同原件）" in text
+    hint = f"【待补充】（{OCR_BUDGET_HINT}，可能未读到，请查看原件）"
+    payment_line = next(
+        ln for ln in text.splitlines() if ln.startswith("上述合同签订后")
+    )
+    assert (
+        payment_line
+        == f"上述合同签订后，原告积极履行合同项下的义务。依据合同{hint}约定，{hint}。"
+    )
+    breach_line = next(
+        ln for ln in text.splitlines() if "被告逾期支付合同款已构成违约" in ln
+    )
+    assert "逾期付款利息" not in breach_line and "贷款市场报价利率" not in breach_line
+    assert breach_line.count(hint) == 2  # 违约金 / 利息措辞与计算标准都留给律师
 
 
 def test_budget_already_used_up_still_marks(monkeypatch):
@@ -107,3 +119,53 @@ def test_contract_fully_read_is_not_marked(monkeypatch):
     assert out["ocr_pages_used"] == 6
     src = str(out["extracted_fields"].get("payment_clause_text", {}).get("src") or "")
     assert OCR_BUDGET_HINT not in src
+
+
+def test_unread_breach_does_not_fall_back_to_lpr():
+    # 违约条款因页数上限没读到：不写「合同未约定」、不套 LPR；真没约定（合同读完）照旧
+    unread = {
+        "breach_interest_rate_text": {
+            "value": None,
+            "src": f"{OCR_BUDGET_HINT}，合同可能未读完，未读到此条款，请查看合同原件",
+        }
+    }
+    assert derived_fields.interest_term_field(unread)["value"] is None
+    assert derived_fields.interest_basis_field(unread)["value"] is None
+    read = {"breach_interest_rate_text": {"value": None, "src": "合同未约定"}}
+    assert derived_fields.interest_term_field(read)["value"] == "逾期付款利息"
+    assert (
+        derived_fields.interest_basis_field(read)["value"]
+        == derived_fields.LPR_INTEREST_BASIS
+    )
+
+
+def test_no_report_page_read_marks_acceptance_incomplete(monkeypatch):
+    # 前面节点已用满总上限：扫描报告一页没读，文字版报告得出的日期 / 台数注明可能不全（#85 评审）
+    ocr = AsyncMock(return_value="不应调用")
+    monkeypatch.setattr(nodes_mod, "ocr_page", ocr)
+    monkeypatch.setattr(nodes_mod, "AGENT_MAX_TOTAL_OCR_PAGES", 10)
+    state = {
+        "files": [_scanned("监检报告2.pdf", "验收报告", 4)],
+        "extracted_fields": {
+            "acceptance_latest_date": {
+                "value": "2024-03-01",
+                "src": "《监检报告1.pdf》批准",
+            },
+            "elevator_qty_by_acceptance": {
+                "value": "2",
+                "src": "《监检报告1.pdf》设备代码计数",
+            },
+        },
+        "ocr_pages_used": 10,
+    }
+    out = asyncio.run(nodes_mod.report_ocr_node(state))
+    ocr.assert_not_called()
+    f = out["extracted_fields"]
+    for key in ("acceptance_latest_date", "elevator_qty_by_acceptance"):
+        assert "可能不全" in f[key]["src"] and OCR_BUDGET_HINT in f[key]["src"]
+    assert f["acceptance_latest_date"]["value"] == "2024-03-01"  # 值保留，只加提示
+    # 写进起诉状的台数沿用提示，起诉状标待核实
+    qty = derived_fields.elevator_qty_field(f)
+    assert qty["value"] == 2 and "可能不全" in qty["src"]
+    text = render_complaint(f)
+    assert "⚠️ 待核实：2024年3月1日" in text
