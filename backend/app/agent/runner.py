@@ -96,8 +96,54 @@ async def retention_loop(interval_s: float = _PURGE_INTERVAL_S) -> None:
         await asyncio.sleep(interval_s)
 
 
+# ── 部署排空 ──────────────────────────────────────────────────────────────────
+# 部署脚本重启前先 POST /drain：此后不再接新的分析 / 断点恢复（503「系统正在更新」），
+# 再轮询 GET /busy 等进行中的归零才重启。先关入口再等归零，避免「读到 0 后又有人开始分析、
+# 随即被重启打断」（#86 评审）。重启后是新进程，自然恢复接单。
+_active_runs = 0
+_draining = False
+
+
+class Draining(Exception):
+    """服务准备重启，暂不接新的分析 / 断点恢复。"""
+
+
+def active_runs() -> int:
+    return _active_runs
+
+
+def is_draining() -> bool:
+    return _draining
+
+
+def start_draining() -> None:
+    global _draining
+    _draining = True
+
+
+def _begin_run() -> None:
+    """登记一个运行；排空中拒绝。与 _end_run 成对。"""
+    global _active_runs
+    if _draining:
+        raise Draining()
+    _active_runs += 1
+
+
+def _end_run() -> None:
+    global _active_runs
+    _active_runs -= 1
+
+
 async def run_analyze(files: list[dict], internet_allowed: bool) -> CaseState:
     """启动一次 agent 会话，返回结果 CaseState（可能带 pending 断点）。"""
+    _begin_run()
+    try:
+        return await _run_analyze(files, internet_allowed)
+    finally:
+        _end_run()
+
+
+async def _run_analyze(files: list[dict], internet_allowed: bool) -> CaseState:
     run_id = uuid.uuid4().hex
     config = _config(run_id)
     run_log.set_run_id(run_id)
@@ -123,6 +169,14 @@ async def run_analyze(files: list[dict], internet_allowed: bool) -> CaseState:
 
 async def run_resume(run_id: str, decisions: dict) -> CaseState:
     """在断点处提交律师决定并恢复 agent。run_id 未知则抛 KeyError。"""
+    _begin_run()
+    try:
+        return await _run_resume(run_id, decisions)
+    finally:
+        _end_run()
+
+
+async def _run_resume(run_id: str, decisions: dict) -> CaseState:
     config = _config(run_id)
     graph = await get_graph()
     if await checkpoint.is_expired(run_id):
@@ -219,9 +273,26 @@ async def _analyze_and_remember(
     重复请求接上同一个任务时共用这条进度，不会把进度条重置，也不会串到别人的分析。
     """
     with llm_progress.track(key, total_stages=3):
-        case = await run_analyze(files, internet_allowed)
+        case = await _run_analyze(files, internet_allowed)
+    # 运行计数要覆盖到这里：编号落盘前重启，刷新后的页面就找不回这次分析（#86 评审）
     await checkpoint.save_analyze_key(key, fingerprint, case.run_id)
     return case
+
+
+async def analyze_result(key: str) -> CaseState | None:
+    """
+    按请求编号取分析结果（前端在处理页刷新后接回）：还在跑就等它跑完，已跑完返回会话当前状态；
+    没有这次分析（失败、服务重启、已过期）返回 None，失败的任务抛出原异常。
+    只凭编号、不比对材料：编号是前端随机生成的，与 run_id 一样只有发起的标签页知道。
+    """
+    entry = _inflight.get(key)
+    if entry is not None:
+        try:
+            return await asyncio.shield(entry[1])  # 同 run_analyze_once：请求断开不取消分析
+        except Exception:  # noqa: BLE001 — 接上的分析失败：与「找不到」同样处理（404，重新上传）
+            return None
+    saved = await checkpoint.find_analyze_key(key)
+    return await get_case(saved[1]) if saved is not None else None
 
 
 async def run_analyze_once(
@@ -247,12 +318,16 @@ async def run_analyze_once(
         task = _running_task(key, fingerprint)
 
     if task is None:
+        # 建任务前同步登记（排空中直接拒绝），任务结束（含编号落盘）才注销：中间没有 await，
+        # /busy 不会在任务刚建好、还没开始跑时读到 0
+        _begin_run()
         task = asyncio.create_task(
             _analyze_and_remember(key, fingerprint, files, internet_allowed)
         )
         _inflight[key] = (fingerprint, task)
 
         def _forget(done: asyncio.Task[CaseState], key: str = key) -> None:
+            _end_run()
             if _inflight.get(key, (None, None))[1] is done:
                 _inflight.pop(key, None)
 

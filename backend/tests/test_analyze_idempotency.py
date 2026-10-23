@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from app.agent import checkpoint
 from app.agent import nodes as nodes_mod
 from app.agent.graph import reset_graph
+from app.agent import runner
 from app.agent.runner import IdempotencyConflict, run_analyze_once
 
 _FILES = [{"filename": "审批表.pdf", "text": "虚构审批表"}]
@@ -224,3 +225,148 @@ def test_get_case_returns_current_state_and_404s(monkeypatch):
 
     asyncio.run(checkpoint.purge_expired(retention_days=-1))
     assert client.get(f"/api/case/{run_id}").status_code == 404
+
+
+async def _wait_until(cond, timeout: float = 5.0) -> None:
+    """轮询到条件成立（CI 上首次建库较慢，不能靠固定 sleep 猜时间）。"""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while not cond():
+        assert loop.time() < deadline, "等待超时"
+        await asyncio.sleep(0.01)
+
+
+def test_result_by_key_joins_running_analysis(monkeypatch):
+    # 处理页刷新后按编号接回：还在跑就等同一个任务，不另起分析；/busy 期间计数为 1
+    gate = asyncio.Event()
+    replies = iter(_one_run())
+
+    async def slow_chat(*_a, **_k):
+        await gate.wait()
+        return next(replies)
+
+    monkeypatch.setattr(nodes_mod, "chat", slow_chat)
+
+    async def scenario():
+        first = asyncio.create_task(run_analyze_once("key-rejoin-0001", _FILES, True))
+        await _wait_until(lambda: "key-rejoin-0001" in runner._inflight)
+        assert runner.active_runs() == 1
+        joined = asyncio.create_task(runner.analyze_result("key-rejoin-0001"))
+        await asyncio.sleep(0)  # 让接回请求先挂上任务
+        gate.set()
+        return await first, await joined
+
+    first, joined = asyncio.run(scenario())
+    assert joined.run_id == first.run_id
+    assert runner.active_runs() == 0
+
+
+def test_result_by_key_after_done_and_unknown(monkeypatch):
+    _patch_chat(monkeypatch, _one_run())
+    first = asyncio.run(run_analyze_once("key-rejoin-0002", _FILES, True))
+    again = asyncio.run(runner.analyze_result("key-rejoin-0002"))
+    assert again.run_id == first.run_id  # 已跑完：返回会话状态，不重跑
+    assert asyncio.run(runner.analyze_result("key-never-started")) is None
+
+    from app.main import app
+
+    client = TestClient(app)
+    res = client.get("/api/analyze/result", params={"key": "key-never-started"})
+    assert res.status_code == 404 and "重新上传" in res.json()["detail"]
+    assert (
+        client.get("/api/analyze/result", params={"key": "bad key!"}).status_code == 400
+    )
+    assert client.get("/busy").json() == {"running": 0, "draining": False}
+
+
+def test_drain_rejects_new_runs_but_lets_running_finish(monkeypatch):
+    # 部署排空：先关入口再等归零——进入排空后新分析 / 恢复 503，进行中的照常跑完（#86 评审）
+    gate = asyncio.Event()
+    replies = iter(_one_run())
+
+    async def slow_chat(*_a, **_k):
+        await gate.wait()
+        return next(replies)
+
+    monkeypatch.setattr(nodes_mod, "chat", slow_chat)
+    monkeypatch.setattr(runner, "_draining", False)
+
+    async def scenario():
+        running = asyncio.create_task(run_analyze_once("key-drain-00001", _FILES, True))
+        await _wait_until(lambda: "key-drain-00001" in runner._inflight)
+        runner.start_draining()
+        with pytest.raises(runner.Draining):
+            await run_analyze_once(
+                "key-drain-00002", _FILES, True
+            )  # 「读到 0 后又发起」也被挡住
+        with pytest.raises(runner.Draining):
+            await runner.run_resume("0" * 32, {})
+        assert runner.active_runs() == 1
+        gate.set()
+        return await running
+
+    case = asyncio.run(scenario())
+    assert case.run_id and runner.active_runs() == 0
+
+    from app.main import app
+
+    client = TestClient(app)
+    res = client.post(
+        "/api/analyze",
+        json={"files": _FILES},
+        headers={"Idempotency-Key": "key-drain-00003"},
+    )
+    assert res.status_code == 503 and "系统正在更新" in res.json()["detail"]
+    assert client.post("/api/resume", json={"run_id": "0" * 32}).status_code == 503
+    assert client.get("/busy").json() == {"running": 0, "draining": True}
+
+
+def test_busy_covers_saving_the_key(monkeypatch):
+    # 分析跑完、请求编号还没落盘时仍算「进行中」：此时重启，刷新后就找不回这次分析（#86 评审）
+    _patch_chat(monkeypatch, _one_run())
+    gate = asyncio.Event()
+    orig_save = checkpoint.save_analyze_key
+
+    saving = asyncio.Event()
+
+    async def slow_save(*args):
+        saving.set()
+        await gate.wait()
+        await orig_save(*args)
+
+    monkeypatch.setattr(checkpoint, "save_analyze_key", slow_save)
+
+    async def scenario():
+        task = asyncio.create_task(run_analyze_once("key-saving-0001", _FILES, True))
+        await _wait_until(lambda: saving.is_set())  # 分析已跑完、卡在落盘这一步
+        during_save = runner.active_runs()
+        gate.set()
+        await task
+        return during_save
+
+    assert asyncio.run(scenario()) == 1
+    assert runner.active_runs() == 0
+
+
+def test_result_by_key_when_joined_task_fails(monkeypatch):
+    # 已接上的分析随后失败：与找不到一样返回 None（接口 404，提示重新上传），不是 500（#86 评审）
+    gate = asyncio.Event()
+
+    async def failing_chat(*_a, **_k):
+        await gate.wait()
+        raise RuntimeError("虚构的模型故障")
+
+    monkeypatch.setattr(nodes_mod, "chat", failing_chat)
+
+    async def scenario():
+        first = asyncio.create_task(run_analyze_once("key-joinfail-01", _FILES, True))
+        await _wait_until(lambda: "key-joinfail-01" in runner._inflight)
+        joined = asyncio.create_task(runner.analyze_result("key-joinfail-01"))
+        await asyncio.sleep(0)  # 让接回请求先挂上任务，确实走「接上后失败」这条路
+        gate.set()
+        with pytest.raises(RuntimeError):
+            await first
+        return await joined
+
+    assert asyncio.run(scenario()) is None
+    assert runner.active_runs() == 0

@@ -26,7 +26,7 @@ from fastapi import FastAPI  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
 from app.agent.graph import get_graph, reset_graph  # noqa: E402
-from app.agent.runner import retention_loop  # noqa: E402
+from app.agent.runner import active_runs, is_draining, retention_loop, start_draining  # noqa: E402
 from app import config  # noqa: E402
 from app.config import CORS_ORIGINS  # noqa: E402
 from app.services import auth_store  # noqa: E402
@@ -83,6 +83,21 @@ app.include_router(generate.router, prefix="/api")
 app.include_router(branches.router, prefix="/api")
 app.include_router(feedback.router, prefix="/api")
 
+
+
+# 部署排空（deploy/deploy.sh）：不在 /api 下，nginx 只转发 /api，这两个接口只有容器内部访问得到；
+# 只涉及数量，不含案件信息
+@app.post("/drain")
+async def drain() -> dict:
+    """进入排空：此后新的分析 / 断点恢复返回 503，进行中的照常跑完。重启后的新进程恢复正常。"""
+    start_draining()
+    return {"draining": True, "running": active_runs()}
+
+
+@app.get("/busy")
+async def busy() -> dict:
+    """正在执行的分析 / 断点恢复数（含分析结束后把请求编号落盘），部署脚本等它归零再重启。"""
+    return {"running": active_runs(), "draining": is_draining()}
 
 
 @app.get("/")

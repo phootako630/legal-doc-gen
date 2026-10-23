@@ -78,12 +78,49 @@ check() {
   return 1
 }
 
+# 等后端正在执行的分析 / 断点恢复结束再重启，免得律师的分析中途被打断。先 POST /drain 关掉入口
+# （此后新的分析 / 恢复返回 503「系统正在更新」），再轮询 GET /busy 等归零——先关入口再等，
+# 读到 0 之后就不会再冒出新任务。两个接口都只在容器内部可访问。
+# 最多等 DEPLOY_DRAIN_TIMEOUT 秒（默认 600，一次分析通常 2–3 分钟）。
+# 后端没在运行（首次部署、回滚时已挂掉）或是还没有这两个接口的旧版本时直接继续
+backend_call() {
+  docker compose exec -T backend python -c \
+    "import json, sys, urllib.request; req = urllib.request.Request('http://127.0.0.1:8000/' + sys.argv[1], method=sys.argv[2]); print(json.load(urllib.request.urlopen(req, timeout=4)).get('running', 0))" \
+    "$1" "$2" 2>/dev/null
+}
+
+wait_idle() {
+  local timeout="${DEPLOY_DRAIN_TIMEOUT:-600}" waited=0 running
+  if ! backend_call drain POST >/dev/null; then
+    return 0
+  fi
+  echo "   已暂停接收新的分析，等进行中的分析结束"
+  while :; do
+    running="$(backend_call busy GET || echo 0)"
+    if ! [ "$running" -gt 0 ] 2>/dev/null; then
+      return 0
+    fi
+    if [ "$waited" -ge "$timeout" ]; then
+      echo "!! 等了 ${timeout} 秒仍有 ${running} 个分析在进行，继续重启（这些分析会中断，律师重新点「开始分析」即可）" >&2
+      return 0
+    fi
+    echo "   有 ${running} 个分析正在进行，等它结束再重启（已等 ${waited} 秒）"
+    sleep 10
+    waited=$((waited + 10))
+  done
+}
+
+# 先构建新镜像（旧服务照常运行），再等分析结束，最后才替换容器，律师感受到的停机只有重启那几秒。
+# --force-recreate：后端已进入排空，即使这次只改了前端、后端镜像没变，也必须换成新进程，
+# 否则它会一直拒绝新分析
 up() {
-  docker compose up -d --build --wait --wait-timeout 300
+  docker compose build &&
+    wait_idle &&
+    docker compose up -d --force-recreate --wait --wait-timeout 300
 }
 
 git reset --quiet --hard "$target"
-echo "== 构建并启动（约几分钟；进行中的分析会中断，律师重新点「开始分析」即可）"
+echo "== 构建新版本（约几分钟，期间服务照常可用），等进行中的分析结束后重启"
 if up && check; then
   echo "== 部署成功：${target:0:7}"
   docker image prune -f >/dev/null || true
