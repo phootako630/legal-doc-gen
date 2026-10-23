@@ -155,11 +155,7 @@ docker compose exec backend python scripts/manage_users.py disable lawyer01  # �
 - 案件会话与扫描件超过 `CASE_RETENTION_DAYS`（默认 7 天）自动清除，反馈随会话一并清除。
 - 运行日志按天切分（UTC 日期），切分出的旧日志保留 `RUN_LOG_RETENTION_DAYS`（默认 90 天）后自动删除。它不含案件内容，用于统计使用量与律师改动率，所以比案件数据保留得久；案件清除后日志里的会话 ID 就对不上任何案件。
 - 容器自身的 stdout 日志（`docker compose logs`）每个服务最多保留 5 个 10MB 文件。
-- 备份原告信息表：
-
-```bash
-docker compose cp backend:/srv/backend/data/branch_info.json ./branch_info.backup.json
-```
+- 备份与恢复：见下方「6.2 备份与恢复」。
 
 - 查看律师在审核页提交的反馈（只读）：
 
@@ -212,6 +208,58 @@ sudo sh -c 'cat "$(ls -d /srv/eval-cases/_runs/*/ | tail -1)report.md"'   # 看�
 - eval 用临时目录存会话与扫描件，不写线上 `data/`，也不记运行日志；原告信息表读线上那份。
 
 ---
+
+### 6.2 备份与恢复
+
+**备份什么**：`deploy/backup.sh` 备份原告信息表（当前版 + 全部历史版本）和账号库（只带账号与密码哈希，不带登录会话，恢复后要重新登录）。
+
+**不备份什么**：
+- 案件会话和上传的扫描件（`checkpoints.sqlite`、`uploads/`）。按约定 7 天后清除，备份会让它们留得更久；丢了只是律师重新分析一次。
+- 运行日志。不含案件内容，丢了不影响使用。
+
+**每天自动备份**（在服务器上执行一次 `crontab -e`，加一行；路径按实际仓库位置改）：
+
+```cron
+17 3 * * * cd $HOME/legal-doc-gen && deploy/backup.sh >> $HOME/legal-doc-backup.log 2>&1
+```
+
+- 备份存到 `/srv/legal-doc-backups`（`BACKUP_DIR` 可改）：目录 0700、文件 0600，只有执行备份的用户能读；第一次需要 `sudo mkdir -p /srv/legal-doc-backups && sudo chown $USER /srv/legal-doc-backups`。
+- 默认保留 30 天（`BACKUP_RETENTION_DAYS`），每次备份时自动删除更早的。
+- 每份备份写完先自动做一遍恢复检查，通过了才保存；失败时脚本报错退出，不留半截文件，日志里能看到。
+- 备份在同一台服务器上，服务器整个坏了就一起没了。建议另外开云盘快照（见下），或定期把最新一份拷到别处（拷贝的位置同样要限制访问）。
+
+**恢复演练**（不碰线上数据，随时可以做）：
+
+```bash
+deploy/backup.sh verify /srv/legal-doc-backups/legal-doc-<日期>.tar.gz
+```
+
+解压到临时目录逐项检查后删除，只打印数量，例如「原告信息表：可读，N 行」「历史版本：N 份」「账号库：完整性 ok，N 个账号」「恢复演练通过」。
+
+**真的需要恢复时**（会覆盖线上的原告信息表 / 账号，先确认要恢复哪一份）：
+
+```bash
+mkdir -m 700 /tmp/restore && tar -xzf /srv/legal-doc-backups/legal-doc-<日期>.tar.gz -C /tmp/restore
+docker compose cp /tmp/restore/branch_info.json backend:/srv/backend/data/branch_info.json
+docker compose cp /tmp/restore/branch_history backend:/srv/backend/data/       # 需要历史版本时
+docker compose stop backend                                                     # 换账号库前先停后端
+docker compose cp /tmp/restore/auth.sqlite backend:/srv/backend/data/auth.sqlite
+docker compose start backend
+docker compose exec -u root backend chown -R app:app /srv/backend/data         # cp 进去的文件属主改回 app
+rm -rf /tmp/restore
+```
+
+原告信息表也可以不动服务器：在「原告信息表」页面用管理员口令「恢复历史版本」，或者上传 Excel。
+
+**云盘快照（需要在云控制台核对）**：
+- 服务器的云盘快照会连案件数据一起拍下。如果开了快照，保留期请设成不超过 7 天，和案件保留期一致；否则快照里的案件会留得比承诺的久。
+- 核对结果和演练记录写在下面，只写非敏感信息，不写密码、下载链接、案件内容。
+
+| 项目 | 结果 |
+|---|---|
+| 云盘快照是否开启 / 频率 / 保留期 | （待核对） |
+| `deploy/backup.sh` 定时任务是否已加 | （待核对） |
+| 最近一次恢复演练：日期 / 结果 | （待填写） |
 
 ## 7. 上线前自检
 
