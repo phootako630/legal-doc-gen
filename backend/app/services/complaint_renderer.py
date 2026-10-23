@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 
 from app.services.derived_fields import (
+    OCR_BUDGET_HINT,
     apply_derived_fields,
     is_daily_amount_penalty,
     is_lump_sum_penalty,
@@ -280,6 +281,9 @@ def _annotate(key: str, fields: dict, conflict_keys: set[str]) -> str:
     if value is None or (isinstance(value, str) and value.strip() == ""):
         if key in _OPTIONAL_KEYS:
             return ""  # 规则判定此句不需要
+        if OCR_BUDGET_HINT in src:
+            # 页数用完没读到：说明原因，免得律师当成「合同没约定」（#71）
+            return f"{_MISSING_MARK}（{OCR_BUDGET_HINT}，可能未读到，请查看原件）"
         return _MISSING_MARK  # 缺失：字面提示，留给律师手填
 
     base = _base_display(key, value)
