@@ -26,7 +26,7 @@ from fastapi import FastAPI  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
 from app.agent.graph import get_graph, reset_graph  # noqa: E402
-from app.agent.runner import retention_loop  # noqa: E402
+from app.agent.runner import active_runs, retention_loop  # noqa: E402
 from app import config  # noqa: E402
 from app.config import CORS_ORIGINS  # noqa: E402
 from app.services import auth_store  # noqa: E402
@@ -83,6 +83,15 @@ app.include_router(generate.router, prefix="/api")
 app.include_router(branches.router, prefix="/api")
 app.include_router(feedback.router, prefix="/api")
 
+
+
+@app.get("/busy")
+async def busy() -> dict:
+    """
+    正在执行的分析 / 断点恢复数，部署脚本重启前等它归零（deploy/deploy.sh）。不在 /api 下：
+    nginx 只转发 /api，这个接口只有容器内部访问得到；只返回数量，不含案件信息。
+    """
+    return {"running": active_runs()}
 
 
 @app.get("/")

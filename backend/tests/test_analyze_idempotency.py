@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from app.agent import checkpoint
 from app.agent import nodes as nodes_mod
 from app.agent.graph import reset_graph
+from app.agent import runner
 from app.agent.runner import IdempotencyConflict, run_analyze_once
 
 _FILES = [{"filename": "审批表.pdf", "text": "虚构审批表"}]
@@ -224,3 +225,44 @@ def test_get_case_returns_current_state_and_404s(monkeypatch):
 
     asyncio.run(checkpoint.purge_expired(retention_days=-1))
     assert client.get(f"/api/case/{run_id}").status_code == 404
+
+
+def test_result_by_key_joins_running_analysis(monkeypatch):
+    # 处理页刷新后按编号接回：还在跑就等同一个任务，不另起分析；/busy 期间计数为 1
+    gate = asyncio.Event()
+    replies = iter(_one_run())
+
+    async def slow_chat(*_a, **_k):
+        await gate.wait()
+        return next(replies)
+
+    monkeypatch.setattr(nodes_mod, "chat", slow_chat)
+
+    async def scenario():
+        first = asyncio.create_task(run_analyze_once("key-rejoin-0001", _FILES, True))
+        await asyncio.sleep(0.05)
+        assert runner.active_runs() == 1
+        joined = asyncio.create_task(runner.analyze_result("key-rejoin-0001"))
+        await asyncio.sleep(0.05)
+        gate.set()
+        return await first, await joined
+
+    first, joined = asyncio.run(scenario())
+    assert joined.run_id == first.run_id
+    assert runner.active_runs() == 0
+
+
+def test_result_by_key_after_done_and_unknown(monkeypatch):
+    _patch_chat(monkeypatch, _one_run())
+    first = asyncio.run(run_analyze_once("key-rejoin-0002", _FILES, True))
+    again = asyncio.run(runner.analyze_result("key-rejoin-0002"))
+    assert again.run_id == first.run_id  # 已跑完：返回会话状态，不重跑
+    assert asyncio.run(runner.analyze_result("key-never-started")) is None
+
+    from app.main import app
+
+    client = TestClient(app)
+    res = client.get("/api/analyze/result", params={"key": "key-never-started"})
+    assert res.status_code == 404 and "重新上传" in res.json()["detail"]
+    assert client.get("/api/analyze/result", params={"key": "bad key!"}).status_code == 400
+    assert client.get("/busy").json() == {"running": 0}

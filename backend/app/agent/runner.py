@@ -96,8 +96,25 @@ async def retention_loop(interval_s: float = _PURGE_INTERVAL_S) -> None:
         await asyncio.sleep(interval_s)
 
 
+# 正在执行的 agent 运行数（分析 + 断点恢复）：部署脚本据此等运行结束再重启（GET /busy）
+_active_runs = 0
+
+
+def active_runs() -> int:
+    return _active_runs
+
+
 async def run_analyze(files: list[dict], internet_allowed: bool) -> CaseState:
     """启动一次 agent 会话，返回结果 CaseState（可能带 pending 断点）。"""
+    global _active_runs
+    _active_runs += 1
+    try:
+        return await _run_analyze(files, internet_allowed)
+    finally:
+        _active_runs -= 1
+
+
+async def _run_analyze(files: list[dict], internet_allowed: bool) -> CaseState:
     run_id = uuid.uuid4().hex
     config = _config(run_id)
     run_log.set_run_id(run_id)
@@ -123,6 +140,15 @@ async def run_analyze(files: list[dict], internet_allowed: bool) -> CaseState:
 
 async def run_resume(run_id: str, decisions: dict) -> CaseState:
     """在断点处提交律师决定并恢复 agent。run_id 未知则抛 KeyError。"""
+    global _active_runs
+    _active_runs += 1
+    try:
+        return await _run_resume(run_id, decisions)
+    finally:
+        _active_runs -= 1
+
+
+async def _run_resume(run_id: str, decisions: dict) -> CaseState:
     config = _config(run_id)
     graph = await get_graph()
     if await checkpoint.is_expired(run_id):
@@ -222,6 +248,19 @@ async def _analyze_and_remember(
         case = await run_analyze(files, internet_allowed)
     await checkpoint.save_analyze_key(key, fingerprint, case.run_id)
     return case
+
+
+async def analyze_result(key: str) -> CaseState | None:
+    """
+    按请求编号取分析结果（前端在处理页刷新后接回）：还在跑就等它跑完，已跑完返回会话当前状态；
+    没有这次分析（失败、服务重启、已过期）返回 None，失败的任务抛出原异常。
+    只凭编号、不比对材料：编号是前端随机生成的，与 run_id 一样只有发起的标签页知道。
+    """
+    entry = _inflight.get(key)
+    if entry is not None:
+        return await asyncio.shield(entry[1])  # 同 run_analyze_once：请求断开不取消分析
+    saved = await checkpoint.find_analyze_key(key)
+    return await get_case(saved[1]) if saved is not None else None
 
 
 async def run_analyze_once(

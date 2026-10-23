@@ -184,6 +184,8 @@ POST /api/resume             # 律师在断点处给出决定后恢复 agent
   输出：同 /api/analyze（可能再次 pending，直至 pending=null）
 
 GET /api/case/{run_id}       # 取回会话当前状态（刷新页面后「继续上次的案件」）；过期 / 不存在 404
+GET /api/analyze/result?key=<请求编号>  # 处理页刷新后接回同一次分析：还在跑就等它跑完，已跑完直接返回；失败 / 重启 / 过期 404
+GET /busy（不在 /api 下，nginx 不转发）   # 正在执行的分析 / 断点恢复数，deploy.sh 重启前等它归零
 
 POST /api/generate
   输入：{ validated_state: CaseState }
@@ -404,7 +406,7 @@ legal-doc-app/
 │   ├── requirements.txt
 │   └── .env.example                 # DEEPSEEK_API_KEY, DASHSCOPE_API_KEY
 │
-├── deploy/                          # nginx 配置（http/https）、cert.sh（Let's Encrypt 证书）、deploy.sh（部署 + 失败回滚，GitHub Actions 审批后调用）、中文部署指南
+├── deploy/                          # nginx 配置（http/https）、cert.sh（Let's Encrypt 证书）、deploy.sh（部署 + 失败回滚，GitHub Actions 审批后调用；先构建，等进行中的分析结束（最多 `DEPLOY_DRAIN_TIMEOUT` 秒）再重启）、中文部署指南
 └── docker-compose.yml               # 一键部署：backend（不对外，含登录校验）+ web（nginx 静态页 + 反代 + HTTPS）
 ```
 
@@ -483,7 +485,8 @@ Step 3: 审核确认 ⭐ 核心页面（agent 断点的 UI）
   - 律师决定 → POST /api/resume（可多次往返直至无待决）
   - 底部："确认并生成起诉状"
   - 处理 / 审核 / 预览阶段刷新或关闭页面先弹浏览器确认（`hooks/useLeaveWarning.ts`）；会话编号与字段修改存本标签页
-    sessionStorage（`lib/case-session.ts`，关标签页即清除），刷新后上传页问「继续上次的案件？」→ GET /api/case 回到审核页
+    sessionStorage（`lib/case-session.ts`，关标签页即清除），刷新后上传页问「继续上次的案件？」→ GET /api/case 回到审核页；
+    处理中刷新则存的是分析请求编号，「继续」→ GET /api/analyze/result 接回同一次分析（还在跑就等它跑完，不重新上传、不重复计费）
 
 Step 4: 预览下载
   - 起诉状全文预览（标注保留）

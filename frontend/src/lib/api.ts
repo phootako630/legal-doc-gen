@@ -142,6 +142,16 @@ export async function analyzeCase(
   return res.json() as Promise<CaseState>;
 }
 
+/**
+ * 处理页刷新后接回同一次分析：后端还在跑就等它跑完（可能几分钟），已跑完直接返回；
+ * 找不到（失败 / 服务重启 / 过期）时抛中文错误。
+ */
+export async function fetchAnalyzeResult(requestKey: string, signal?: AbortSignal): Promise<CaseState> {
+  const res = await safeFetch(`${BASE}/analyze/result?key=${encodeURIComponent(requestKey)}`, { signal });
+  if (!res.ok) throw await extractError(res, '取回上次的分析失败');
+  return res.json() as Promise<CaseState>;
+}
+
 /** 在断点处提交律师决定并恢复 agent；可能再次返回 pending，直至 pending=null */
 export async function resumeCase(
   runId: string,

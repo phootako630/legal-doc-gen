@@ -1,8 +1,9 @@
-// 上传页顶部：本标签页有未完成的案件（刷新过页面）时，询问是否继续
+// 上传页顶部：本标签页有未完成的案件（刷新过页面）时，询问是否继续。
+// 刷新前在审核 / 预览页 → 按会话编号取回；刷新前还在分析 → 按请求编号接回那次分析（还在跑就等它跑完）
 import { useEffect, useRef, useState } from 'react';
 import { History, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { fetchCase } from '@/lib/api';
+import { fetchAnalyzeResult, fetchCase } from '@/lib/api';
 import type { SavedCaseSession } from '@/lib/case-session';
 import type { CaseState } from '@/lib/types';
 
@@ -34,7 +35,9 @@ export function ResumeCaseBanner({ saved, onResume, onDiscard }: ResumeCaseBanne
     setLoading(true);
     setError(null);
     try {
-      const caseState = await fetchCase(saved.runId, ctrl.signal);
+      const caseState = saved.runId
+        ? await fetchCase(saved.runId, ctrl.signal)
+        : await fetchAnalyzeResult(saved.analyzeKey ?? '', ctrl.signal);
       if (!ctrl.signal.aborted) onResume(caseState, saved.edits);
     } catch (e) {
       if (ctrl.signal.aborted) return;
@@ -49,8 +52,16 @@ export function ResumeCaseBanner({ saved, onResume, onDiscard }: ResumeCaseBanne
       <div className="min-w-0 flex-1 text-sm">
         <p className="font-medium text-foreground">继续上次的案件？</p>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          {minutesAgo(saved.savedAt)}在审核页的案件尚未完成
-          {editCount > 0 ? `，已修改 ${editCount} 个字段` : ''}。继续将回到审核页。
+          {saved.runId ? (
+            <>
+              {minutesAgo(saved.savedAt)}在审核页的案件尚未完成
+              {editCount > 0 ? `，已修改 ${editCount} 个字段` : ''}。继续将回到审核页。
+            </>
+          ) : loading ? (
+            '正在等待上次的分析完成，可能需要几分钟，请不要关闭页面……'
+          ) : (
+            `${minutesAgo(saved.savedAt)}开始的分析在刷新页面时还没结束。继续将接回这次分析，不用重新上传。`
+          )}
         </p>
         {error && <p className="mt-1 text-xs text-destructive">{error}</p>}
       </div>

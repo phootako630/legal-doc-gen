@@ -78,12 +78,37 @@ check() {
   return 1
 }
 
+# 等后端正在执行的分析 / 断点恢复结束再重启，免得律师的分析中途被打断（GET /busy，只在容器内部可访问）。
+# 最多等 DEPLOY_DRAIN_TIMEOUT 秒（默认 600，一次分析通常 2–3 分钟）；期间又有人开始分析也只等到超时为止。
+# 后端没在运行（首次部署、回滚时已挂掉）或查不到时直接继续
+wait_idle() {
+  local timeout="${DEPLOY_DRAIN_TIMEOUT:-600}" waited=0 running
+  while :; do
+    running="$(docker compose exec -T backend python -c \
+      "import json, urllib.request; print(json.load(urllib.request.urlopen('http://127.0.0.1:8000/busy', timeout=4))['running'])" \
+      2>/dev/null || echo 0)"
+    if ! [ "$running" -gt 0 ] 2>/dev/null; then
+      return 0
+    fi
+    if [ "$waited" -ge "$timeout" ]; then
+      echo "!! 等了 ${timeout} 秒仍有 ${running} 个分析在进行，继续重启（这些分析会中断，律师重新点「开始分析」即可）" >&2
+      return 0
+    fi
+    echo "   有 ${running} 个分析正在进行，等它结束再重启（已等 ${waited} 秒）"
+    sleep 10
+    waited=$((waited + 10))
+  done
+}
+
+# 先构建新镜像（旧服务照常运行），再等分析结束，最后才替换容器，律师感受到的停机只有重启那几秒
 up() {
-  docker compose up -d --build --wait --wait-timeout 300
+  docker compose build &&
+    wait_idle &&
+    docker compose up -d --wait --wait-timeout 300
 }
 
 git reset --quiet --hard "$target"
-echo "== 构建并启动（约几分钟；进行中的分析会中断，律师重新点「开始分析」即可）"
+echo "== 构建新版本（约几分钟，期间服务照常可用），等进行中的分析结束后重启"
 if up && check; then
   echo "== 部署成功：${target:0:7}"
   docker image prune -f >/dev/null || true

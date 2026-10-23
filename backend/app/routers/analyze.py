@@ -8,7 +8,7 @@ import re
 from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel
 
-from app.agent.runner import IdempotencyConflict, run_analyze, run_analyze_once
+from app.agent.runner import IdempotencyConflict, analyze_result, run_analyze, run_analyze_once
 from app.agent.state import CaseState
 from app.services import llm_progress, run_log
 from app.services.file_parser import DocType
@@ -91,6 +91,25 @@ async def analyze(
         return await run_analyze(files, req.internet_allowed)
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=f"分析失败：{e}") from e
+
+
+@router.get("/analyze/result", response_model=CaseState)
+async def get_analyze_result(key: str = Query(...)) -> CaseState:
+    """
+    处理页刷新后接回同一次分析：还在跑就等结果，已跑完直接返回；找不到（失败 / 服务重启 / 过期）404。
+    """
+    if not _KEY_RE.fullmatch(key):
+        raise HTTPException(status_code=400, detail="请求编号格式不正确")
+    try:
+        case = await analyze_result(key)
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=f"分析失败：{e}") from e
+    if case is None:
+        raise HTTPException(
+            status_code=404,
+            detail="上次的分析没有完成（可能失败或服务已重启），请重新上传材料",
+        )
+    return case
 
 
 @router.get("/analyze/progress", response_model=LlmProgress)
