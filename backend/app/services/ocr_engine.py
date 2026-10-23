@@ -29,7 +29,6 @@ from app.config import (
 from app.services import upload_progress
 
 logger = logging.getLogger(__name__)
-print(f"[OCR ENGINE] loading: {__file__}  (model: {QWEN_OCR_MODEL})", flush=True)
 
 
 class OcrPage(TypedDict):
@@ -56,7 +55,7 @@ async def ocr_pdf(pdf_bytes: bytes) -> OcrResult:
     if not _keys():
         raise RuntimeError(_MISSING_KEY)
 
-    print(f"[OCR ENGINE] ocr_pdf() called, pdf_bytes len={len(pdf_bytes)}", flush=True)
+    logger.info("整份 OCR：%d 字节", len(pdf_bytes))
     loop = asyncio.get_event_loop()
     try:
         result = await asyncio.wait_for(
@@ -106,10 +105,7 @@ def _post_with_fallback(payload: dict):
         is_last = i == len(keys) - 1
         if resp.status_code in _SWITCH_STATUSES and not is_last:
             # 不打印 key，只记状态码，方便排查免费额度何时用完
-            print(
-                f"[OCR ENGINE] 主 key 被拒（HTTP {resp.status_code}），改用付费备用 key",
-                flush=True,
-            )
+            logger.warning("主 key 被拒（HTTP %s），改用付费备用 key", resp.status_code)
             _use_backup = True
             continue
         resp.raise_for_status()
@@ -145,17 +141,16 @@ def _ocr_image_b64(img_b64: str) -> str:
     try:
         return data["output"]["choices"][0]["message"]["content"][0]["text"].strip()
     except (KeyError, IndexError):
-        print(f"[OCR ENGINE] unexpected response: {data}", flush=True)
+        # 只记结构，不记内容：返回里可能带识别出的案件原文
+        keys = sorted(data) if isinstance(data, dict) else type(data).__name__
+        logger.warning("OCR 返回结构异常，顶层字段：%s", keys)
         return ""
 
 
 def _ocr_one_page(page_idx: int, img_b64: str, total_pages: int) -> OcrPage:
     """对单页图片调用 Qwen-VL-OCR，供整份并发 OCR 的线程池调度（带进度上报）。"""
     text = _ocr_image_b64(img_b64)
-    print(
-        f"[OCR ENGINE] page {page_idx + 1}/{total_pages} done, chars={len(text)}",
-        flush=True,
-    )
+    logger.info("第 %d/%d 页识别完成，%d 字", page_idx + 1, total_pages, len(text))
     upload_progress.page_done()
     return {"page_num": page_idx + 1, "text": text}
 

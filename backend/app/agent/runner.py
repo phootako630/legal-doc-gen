@@ -62,8 +62,6 @@ async def _collect(run_id: str, config: dict) -> CaseState:
         case = _case_from_interrupt(run_id, snapshot.values, payload)
     else:
         case = _case_from_values(run_id, snapshot.values)
-    # 记下交付给律师的字段取值，generate 时据此统计律师改动（只存内存，不落盘）
-    run_log.remember_fields(run_id, case.extracted_fields)
     run_log.log_event(
         "run_state",
         run_id=run_id,
@@ -85,7 +83,8 @@ async def purge_expired_cases() -> None:
     try:
         runs = await checkpoint.purge_expired()
         files = await asyncio.to_thread(file_store.purge_expired)
-        run_log.log_event("purge", runs=runs, files=files)
+        logs = await asyncio.to_thread(run_log.purge_old)
+        run_log.log_event("purge", runs=runs, files=files, logs=logs)
     except Exception as exc:  # noqa: BLE001 — 清理是尽力而为
         run_log.log_event("purge_error", error=type(exc).__name__)
 
@@ -196,6 +195,20 @@ async def get_case(run_id: str) -> CaseState | None:
     if not snapshot.tasks and not snapshot.values:
         return None
     return await _collect(run_id, config)
+
+
+async def delivered_fields(run_id: str) -> dict | None:
+    """
+    交给律师审核时的字段（checkpoint 里的 extracted_fields；律师在断点处的决定已并入），
+    generate 时据此统计律师在审核页的改动。会话过期 / 不存在则 None。
+    落在 checkpoint 里，服务重启后仍可对比，随会话一起过期清除。
+    """
+    if await checkpoint.is_expired(run_id):
+        return None
+    graph = await get_graph()
+    snapshot = await graph.aget_state(_config(run_id))
+    fields = (snapshot.values or {}).get("extracted_fields")
+    return fields if isinstance(fields, dict) else None
 
 
 async def _analyze_and_remember(

@@ -2,7 +2,8 @@
 
 用法（在 backend/ 目录下）：
     python scripts/usage_report.py [运行日志路径] [--days 30]
-日志路径默认取环境变量 RUN_LOG_PATH，未设置时为 data/run_log.jsonl。
+日志路径默认取环境变量 RUN_LOG_PATH，未设置时为 data/run_log.jsonl；按天切分出的
+run_log-YYYY-MM-DD.jsonl 一并读取（超过 RUN_LOG_RETENTION_DAYS 的已被服务自动删除）。
 Docker 部署时：docker compose exec backend python scripts/usage_report.py --days 7
 
 统计口径：分析 = 点「开始分析」启动的会话数；生成 = 生成起诉状次数；恢复 = 在断点处提交决定的次数；
@@ -13,6 +14,7 @@ Docker 部署时：docker compose exec backend python scripts/usage_report.py --
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
 from collections import defaultdict
@@ -39,7 +41,8 @@ def summarize(lines: list[str], since: datetime | None) -> dict[tuple[str, str],
         event = rec.get("event")
         if event == "run_start":
             row["analyze"] += 1
-        elif event == "lawyer_edits":
+        elif event in ("lawyer_edits", "lawyer_edits_unavailable"):
+            # 每次生成起诉状记其中一条（会话已过期、算不出改动时是后者）
             row["generate"] += 1
         elif event == "resume":
             row["resume"] += 1
@@ -52,6 +55,13 @@ def summarize(lines: list[str], since: datetime | None) -> dict[tuple[str, str],
     return {k: v for k, v in stats.items() if any(v.values())}
 
 
+def log_files(path: str) -> list[str]:
+    """当前日志及按天切分出的旧日志（与 app.services.run_log.log_files 同一命名规则）。"""
+    stem, ext = os.path.splitext(path)
+    rotated = sorted(glob.glob(f"{glob.escape(stem)}-????-??-??{glob.escape(ext)}"))
+    return rotated + ([path] if os.path.exists(path) else [])
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="按账号统计使用情况")
     parser.add_argument(
@@ -62,12 +72,16 @@ def main() -> int:
     parser.add_argument("--days", type=int, default=30, help="只看最近 N 天（默认 30；0 = 全部）")
     args = parser.parse_args()
 
-    if not os.path.exists(args.log):
+    files = log_files(args.log)
+    if not files:
         print(f"找不到运行日志：{args.log}")
         return 1
     since = datetime.now(timezone.utc) - timedelta(days=args.days) if args.days > 0 else None
-    with open(args.log, encoding="utf-8") as f:
-        stats = summarize(f.read().splitlines(), since)
+    lines: list[str] = []
+    for path in files:
+        with open(path, encoding="utf-8") as f:
+            lines.extend(f.read().splitlines())
+    stats = summarize(lines, since)
     if not stats:
         print("这段时间没有使用记录")
         return 0
