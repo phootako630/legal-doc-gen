@@ -23,6 +23,8 @@ export default function App() {
   const flow = useComplaintFlow();
   const auth = useAuth();
   const [view, setView] = useState<'flow' | 'branches'>('flow');
+  // 审核页字段多、列多，放宽到 1280px；其余步骤保持窄版便于阅读。页头 / 步骤条 / 页脚一起切，左右对齐
+  const container = view === 'flow' && flow.step === 'review' ? 'max-w-[1280px]' : 'max-w-5xl';
   // 页面打开时读一次：本标签页刷新前有未完成的案件，就在上传页问律师是否继续
   const [savedCase, setSavedCase] = useState(loadCaseSession);
   useLeaveWarning(flow.step !== 'upload');
@@ -35,7 +37,7 @@ export default function App() {
     <div className="min-h-screen bg-background">
       {/* Header */}
       <header className="sticky top-0 z-10 border-b border-border bg-white shadow-sm">
-        <div className="mx-auto flex max-w-5xl items-center justify-between px-8 py-3.5">
+        <div className={`mx-auto flex ${container} items-center justify-between px-8 py-3.5`}>
           <div className="flex items-center gap-3">
             <AppLogo />
             <div>
@@ -74,13 +76,13 @@ export default function App() {
       <>
       {/* 步骤条 */}
       <div className="border-b border-border bg-white px-8 py-4">
-        <div className="mx-auto max-w-5xl">
+        <div className={`mx-auto ${container}`}>
           <Stepper currentStep={flow.step} />
         </div>
       </div>
 
       {/* 主内容区 */}
-      <main className="mx-auto max-w-5xl px-8 py-8">
+      <main className={`mx-auto ${container} px-8 py-8`}>
         {/* 错误提示 */}
         {flow.error && (
           <div className="mb-6 flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
@@ -155,7 +157,7 @@ export default function App() {
 
       {/* Footer */}
       <footer className="mt-12 border-t border-border bg-white px-8 py-4">
-        <p className="mx-auto max-w-5xl text-center text-xs text-muted-foreground">
+        <p className={`mx-auto ${container} text-center text-xs text-muted-foreground`}>
           仅供内部律师团队使用 · 生成内容须经人工复核后方可使用 · 不构成法律意见
         </p>
       </footer>

@@ -11,7 +11,7 @@ function DeterministicChecks({ checks }: { checks: ValidationCheck[] }) {
   if (checks.length === 0) return null;
 
   return (
-    <div className="mb-3 rounded-lg border border-border bg-white p-3 shadow-sm">
+    <section className="mb-4">
       <p className="mb-2 text-xs font-semibold text-muted-foreground">系统自动校验（代码判定）</p>
       <ul className="flex flex-col gap-1.5">
         {checks.map((c) => {
@@ -35,7 +35,7 @@ function DeterministicChecks({ checks }: { checks: ValidationCheck[] }) {
           );
         })}
       </ul>
-    </div>
+    </section>
   );
 }
 
@@ -50,9 +50,10 @@ export function ValidationReport({ report, validations = [] }: ValidationReportP
     <div>
       <DeterministicChecks checks={validations} />
       {hasReport && (
-        <div className="rounded-lg border border-border bg-white p-4 shadow-sm">
+        <section className="border-t border-border pt-3">
+          <p className="mb-2 text-xs font-semibold text-muted-foreground">说明</p>
           <p className="whitespace-pre-wrap text-sm text-foreground/85">{report}</p>
-        </div>
+        </section>
       )}
     </div>
   );
