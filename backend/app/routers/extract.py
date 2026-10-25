@@ -15,7 +15,7 @@ from app.services.extraction import (
 from app.services.llm_client import chat
 from app.services.materials import material_note, material_status
 from app.services.prompt_loader import load_prompt
-from app.services.validators import check_to_dict, run_all_checks
+from app.services.validators import check_materials, check_to_dict, run_all_checks
 
 router = APIRouter()
 
@@ -118,6 +118,8 @@ async def _extract_impl(req: ExtractRequest) -> ExtractResponse:
     # ── Step 3a：确定性交叉校验（代码，非 LLM）────────────────────────────
     # 金额勾稽/台数三源/信用代码/日期一律由 validators.py 判定，是冲突结论的权威来源。
     checks = run_all_checks(extracted_fields)
+    # 缺材料只提醒、不算冲突（与 agent 校验节点一致）
+    checks.append(check_materials(status.missing, material_note(status)))
     validations = [check_to_dict(c) for c in checks]
 
     # ── Step 3b：LLM 仅据确定性结论生成给律师看的说明文本（不做一致性判断）──
