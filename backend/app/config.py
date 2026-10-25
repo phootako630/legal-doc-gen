@@ -151,6 +151,24 @@ RUN_LOG_RETENTION_DAYS = int(os.getenv("RUN_LOG_RETENTION_DAYS", "90"))
 COST_PRICES: dict = json.loads(os.getenv("COST_PRICES") or "{}")
 COST_PRICES_DATE = os.getenv("COST_PRICES_DATE", "")
 
+# ── 每日运行小结（#76）────────────────────────────────────────────────────────
+# 每天 DAILY_SUMMARY_HOUR 点（北京时间）后汇总前一天的运行日志，写到 DAILY_SUMMARY_DIR/YYYY-MM-DD.md
+# （不含案件内容）；超过下面阈值时文件开头列出「需要关注」，并在后端日志里记一条警告。
+# 以后要发邮件，在 services/daily_summary.deliver 里加通道即可。
+DAILY_SUMMARY_ENABLED = os.getenv("DAILY_SUMMARY_ENABLED", "1") != "0"
+DAILY_SUMMARY_DIR = os.getenv("DAILY_SUMMARY_DIR", os.path.join(_DATA_DIR, "daily_summary"))
+DAILY_SUMMARY_HOUR = int(os.getenv("DAILY_SUMMARY_HOUR", "8"))
+# 一天内节点出错（分析中断）超过此次数
+ALERT_MAX_NODE_ERRORS = int(os.getenv("ALERT_MAX_NODE_ERRORS", "3"))
+# OCR 失败页占请求页的比例超过此值（当天请求不足 ALERT_MIN_OCR_PAGES 页时不判，免得一两页失败就报警）
+ALERT_MAX_OCR_FAIL_RATE = float(os.getenv("ALERT_MAX_OCR_FAIL_RATE", "0.1"))
+ALERT_MIN_OCR_PAGES = int(os.getenv("ALERT_MIN_OCR_PAGES", "20"))
+# DeepSeek 不可用、改用备用模型超过此次数
+ALERT_MAX_LLM_FALLBACKS = int(os.getenv("ALERT_MAX_LLM_FALLBACKS", "3"))
+# 当天成本（元，按 COST_PRICES 换算）超过此值；0 = 不判
+ALERT_MAX_DAILY_COST = float(os.getenv("ALERT_MAX_DAILY_COST", "0"))
+# 付费备用 key 切换、Key 连通性检查失败：出现即列入「需要关注」，不设阈值
+
 # ── 登录（账号 + 会话）─────────────────────────────────────────────────────────
 # 部署时（docker-compose.yml）开启：除登录接口外所有 /api 都要求先登录。
 # 本地开发与单测默认关闭，免得每次都要先建账号；关闭时启动日志会提醒。
