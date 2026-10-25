@@ -32,14 +32,6 @@ def test_log_failure_is_silent(monkeypatch, tmp_path):
 
 def test_agent_flow_logs_nodes_and_no_values(monkeypatch, tmp_path):
     path = _use_log(monkeypatch, tmp_path)
-    ok = {
-        "has_approval": True,
-        "has_contract": True,
-        "has_acceptance": True,
-        "can_proceed": True,
-        "missing": [],
-        "notes": "",
-    }
     fields = {
         "total_amount": {"value": 900000, "src": "《审批表》"},
         "paid_amount": {"value": 638667.2, "src": "《审批表》"},
@@ -49,7 +41,7 @@ def test_agent_flow_logs_nodes_and_no_values(monkeypatch, tmp_path):
     monkeypatch.setattr(
         nodes_mod,
         "chat",
-        AsyncMock(side_effect=[ok, fields, "说明\n---HIGHLIGHT---\n- 1"]),
+        AsyncMock(side_effect=[fields, "说明\n---HIGHLIGHT---\n- 1"]),
     )
     state = asyncio.run(run_analyze([{"filename": "审批表.pdf", "text": "x"}], True))
     asyncio.run(run_resume(state.run_id, {"total_amount": 894934}))
@@ -96,11 +88,10 @@ def test_lawyer_edits_survive_restart(monkeypatch, tmp_path):
         "plaintiff_name_final": {"value": "某电梯公司", "src": "《审批表》"},
         "defendant_name": {"value": "某被告", "src": "《审批表》"},
     }
-    ok = {"can_proceed": True, "missing": [], "notes": ""}
     monkeypatch.setattr(
         nodes_mod,
         "chat",
-        AsyncMock(side_effect=[ok, fields, "说明\n---HIGHLIGHT---\n- 1"]),
+        AsyncMock(side_effect=[fields, "说明\n---HIGHLIGHT---\n- 1"]),
     )
     state = asyncio.run(run_analyze([{"filename": "审批表.pdf", "text": "x"}], True))
     assert state.pending is None

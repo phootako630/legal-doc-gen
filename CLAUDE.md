@@ -111,7 +111,7 @@ LLM 调用：     OpenAI SDK（兼容 DeepSeek API），启用 function calling 
 ┌─────────────────────────────────────────────────────────┐
 │  Orchestrator（LangGraph 状态图）                          │
 │  节点：清点 → 抽取(带工具) → 校验(代码) → [interrupt:律师] → 生成 │
-│  边：条件跳转（缺材料/有冲突 → 回到抽取或暂停）                  │
+│  边：条件跳转（有冲突 / 需确认 → 暂停问律师）                    │
 └───────────────┬─────────────────────────────────────────┘
                 │ 读/写
         ┌───────▼────────┐         ┌──────────────────────────┐
@@ -142,7 +142,8 @@ LLM 调用：     OpenAI SDK（兼容 DeepSeek API），启用 function calling 
 
 - agent 在抽取节点可多轮：抽取 → 自校验（值回原文命中？）→ 命中失败标待核实 → 缺关键字段则 `search_in_docs` / `ocr_page` 定向补齐。
 - 护栏：成本上限（全案 OCR 总页数 `AGENT_MAX_TOTAL_OCR_PAGES`，用完时在出处注明可能未读到）。
-- **interrupt 断点**：材料缺失、字段冲突、需联网确认名称时，agent 通过 LangGraph `interrupt` 暂停，把决策抛到前端审核页；律师给出选择后 `resume` 继续。Step 3 审核页即此断点的 UI 呈现，支持多次往返。
+- **材料清点**：按上传页律师确认的文件类型，由代码判定齐全与否（`services/materials.py`，与上传接口、前端 `lib/materials.ts` 同一口径），不调 LLM。缺材料不终止、不暂停：律师在上传页已看到缺什么，点了「材料不全，仍然分析」就照常继续，缺的字段留【待补充】，校验面板琥珀色提醒（`materials` 检查）。
+- **interrupt 断点**：字段冲突、需联网确认名称时，agent 通过 LangGraph `interrupt` 暂停，把决策抛到前端审核页；律师给出选择后 `resume` 继续。Step 3 审核页即此断点的 UI 呈现，支持多次往返。
 
 ---
 
@@ -339,7 +340,6 @@ legal-doc-app/
 ├── CLAUDE.md
 ├── .claude/                         # Claude Code 辅助：启动脚本 + skills（见「本地开发启动」）
 ├── prompts/                         # LLM Prompt 模板（纯文本）
-│   ├── prompt-a-checklist.md        # 材料清点（JSON）
 │   ├── prompt-a-extract.md          # 字段抽取（JSON，结构化输出）
 │   ├── prompt-a-validate.md         # 仅生成高亮说明文本（不再做一致性判断）
 │   ├── prompt-b-generate.md         # v1 遗留；模板渲染后仅作兜底/参考
@@ -508,7 +508,7 @@ Step 4: 预览下载
     ▼
 POST /api/analyze → 启动 LangGraph agent
     ├── 扫描审批表整份 OCR（approval_ocr，上限 AGENT_MAX_APPROVAL_OCR_PAGES）
-    ├── 清点节点（Prompt A-1）→ 缺材料 → interrupt 问律师
+    ├── 清点节点（代码按文件类型判定）→ 缺材料只提醒、照常继续
     ├── 抽取节点（Prompt A-2，结构化输出）
     │     ├── 主取审批表结构字段
     │     ├── 缺条款 → search_in_docs / ocr_page 定向补（扫描合同按需）
@@ -934,13 +934,12 @@ CASE_RETENTION_DAYS=7
 
 | Prompt 文件（`/prompts/`） | 后端加载位置 | 步骤 | LLM 输出格式 |
 |---|---|---|---|
-| `prompt-a-checklist.md` | `agent/nodes.py` via `prompt_loader.py` | 材料清点 | JSON |
 | `prompt-a-extract.md` | `agent/nodes.py` via `prompt_loader.py` | 字段抽取 | JSON（结构化输出） |
 | `prompt-a-validate.md` | `agent/nodes.py` via `prompt_loader.py` | 仅生成高亮说明文本 | 文本 |
 | `prompt-b-generate.md` | v1 遗留；模板渲染后仅作兜底 | — | 文本 |
 | `complaint-template.md` | `services/`（模板常量） | 模板 | — |
 
-> 交叉校验的"判断"已移出 prompt，改由 `services/validators.py` 完成；`prompt-a-validate.md` 只产出面向律师的自然语言说明。
+> 材料清点不再调 LLM（`services/materials.py`）。交叉校验的"判断"已移出 prompt，改由 `services/validators.py` 完成；`prompt-a-validate.md` 只产出面向律师的自然语言说明。
 
 ---
 

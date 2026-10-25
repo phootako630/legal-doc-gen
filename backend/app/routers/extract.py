@@ -1,4 +1,4 @@
-# POST /api/extract：接收文件文本，依次调用 LLM 完成清点、抽取、校验三步
+# POST /api/extract（v1 遗留）：代码清点材料，再调用 LLM 抽取、生成校验说明
 # GET /api/extract/progress：三步 LLM 处理的实时阶段，供前端轮询渲染进度
 import json
 
@@ -13,8 +13,9 @@ from app.services.extraction import (
     mark_ocr_fields,
 )
 from app.services.llm_client import chat
+from app.services.materials import material_note, material_status
 from app.services.prompt_loader import load_prompt
-from app.services.validators import check_to_dict, run_all_checks
+from app.services.validators import check_materials, check_to_dict, run_all_checks
 
 router = APIRouter()
 
@@ -74,33 +75,20 @@ async def get_extract_progress(
 
 
 async def _extract_impl(req: ExtractRequest) -> ExtractResponse:
-    """三步 LLM 调用：材料清点 → 字段抽取 → 校验高亮。"""
+    """材料清点（代码）→ 字段抽取 → 校验高亮。"""
     files = [f.model_dump() for f in req.files]
     combined_text = build_combined_text(files)
     scanned_filenames = {f.filename for f in req.files if f.is_scanned}
 
-    # ── Step 1：材料清点（json_mode=True）──────────────────────────────────
+    # ── Step 1：材料清点（确定性代码，与 /api/upload 同一口径，#69）────────────
     llm_progress.start_stage("材料清点", 1)
-    checklist_prompt = load_prompt(
-        "prompt-a-checklist.md", {"files_text": combined_text}
-    )
-    try:
-        checklist: dict = await chat(  # type: ignore[type-arg]
-            [{"role": "user", "content": checklist_prompt}], json_mode=True
-        )
-    except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=f"材料清点失败：{e}") from e
-
-    # can_proceed=false 表示 LLM 判断材料不足，提前终止
-    if not checklist.get("can_proceed", True):
-        missing: list[str] = checklist.get("missing", [])
-        notes: str = checklist.get("notes", "")
-        detail = (
-            f"材料不足，无法继续处理。缺少：{'、'.join(missing) if missing else '未知'}"
-        )
-        if notes:
-            detail += f"。备注：{notes}"
-        raise HTTPException(status_code=422, detail=detail)
+    status = material_status(f.identified_type for f in req.files)
+    # 缺材料不阻断（与 agent 一致，#70）：缺什么写进清点结果，供抽取提示词参考
+    checklist = {
+        "can_proceed": status.can_proceed,
+        "missing": status.missing,
+        "notes": material_note(status),
+    }
 
     # 序列化清单，注入后续两个 Prompt
     checklist_summary = json.dumps(checklist, ensure_ascii=False, indent=2)
@@ -130,6 +118,8 @@ async def _extract_impl(req: ExtractRequest) -> ExtractResponse:
     # ── Step 3a：确定性交叉校验（代码，非 LLM）────────────────────────────
     # 金额勾稽/台数三源/信用代码/日期一律由 validators.py 判定，是冲突结论的权威来源。
     checks = run_all_checks(extracted_fields)
+    # 缺材料只提醒、不算冲突（与 agent 校验节点一致）
+    checks.append(check_materials(status.missing, material_note(status)))
     validations = [check_to_dict(c) for c in checks]
 
     # ── Step 3b：LLM 仅据确定性结论生成给律师看的说明文本（不做一致性判断）──

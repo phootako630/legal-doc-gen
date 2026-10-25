@@ -146,7 +146,7 @@ export interface ExtractedFields {
 
 /** 交叉校验单项结果（②：由后端确定性代码判定，非 LLM） */
 export interface ValidationCheck {
-  key: string; // 'amount_reconcile' | 'qty_consistency' | 'credit_code' | 'date_valid'
+  key: string; // 'amount_reconcile' | 'qty_consistency' | 'credit_code' | 'date_valid' | 'materials' | ...
   passed: boolean;
   applicable: boolean; // false 表示输入不足、本次跳过（既非通过也非冲突）
   is_conflict: boolean; // applicable 且未通过 = 真冲突

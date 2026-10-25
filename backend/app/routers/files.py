@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from app.services import upload_progress
 from app.services.file_parser import DocType, parse_file
+from app.services.materials import material_status
 
 logger = logging.getLogger(__name__)
 
@@ -73,22 +74,13 @@ async def upload(
                 logger.warning("第 %d 份文件解析失败：%s", idx, type(e).__name__)
                 warnings.append(f"{upload_file.filename}：解析失败 — {e}")
 
-    identified_types = {f.identified_type for f in parsed}
-
-    # 收集所有缺失类型，供前端展示参考
-    missing: list[str] = []
-    for doc_type in ["审批表", "合同", "验收报告"]:
-        if doc_type not in identified_types:
-            missing.append(doc_type)
-
-    # 流程继续条件：至少有审批表 + 合同（验收报告缺失不阻断，仅列入 missing_materials）
-    required_present = {"审批表", "合同"}.issubset(identified_types)
-    can_proceed = len(parsed) > 0 and required_present
+    # 缺哪些材料、能否直接开始分析（与前端 lib/materials.ts、agent 清点节点同一口径）
+    status = material_status(f.identified_type for f in parsed)
 
     return UploadResponse(
         files=parsed,
-        can_proceed=can_proceed,
-        missing_materials=missing,
+        can_proceed=status.can_proceed,
+        missing_materials=status.missing,
         warnings=warnings,
     )
 

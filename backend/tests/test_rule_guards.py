@@ -41,9 +41,6 @@ def test_payment_summary_marked_ai():
     assert fields["payment_clause_summary"]["src"].count("AI 归纳，待核实") == 1
 
 
-_OK_CHECKLIST = {"can_proceed": True, "missing": [], "notes": ""}
-
-
 def test_retention_pauses_then_sets_ratio(monkeypatch):
     extracted = {
         "retention_ratio": {"value": "5%", "src": "《合同》"},
@@ -56,7 +53,7 @@ def test_retention_pauses_then_sets_ratio(monkeypatch):
     monkeypatch.setattr(
         nodes_mod,
         "chat",
-        AsyncMock(side_effect=[_OK_CHECKLIST, extracted, "无\n---HIGHLIGHT---\n"]),
+        AsyncMock(side_effect=[extracted, "无\n---HIGHLIGHT---\n"]),
     )
     state = asyncio.run(run_analyze([{"filename": "审批表.pdf", "text": "x"}], True))
     assert state.pending is not None
@@ -75,7 +72,7 @@ def test_no_retention_no_pause(monkeypatch):
     monkeypatch.setattr(
         nodes_mod,
         "chat",
-        AsyncMock(side_effect=[_OK_CHECKLIST, extracted, "无\n---HIGHLIGHT---\n"]),
+        AsyncMock(side_effect=[extracted, "无\n---HIGHLIGHT---\n"]),
     )
     state = asyncio.run(run_analyze([{"filename": "审批表.pdf", "text": "x"}], True))
     assert state.pending is None

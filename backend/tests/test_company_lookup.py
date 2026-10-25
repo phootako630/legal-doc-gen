@@ -13,14 +13,11 @@ def test_lookup_company_stub_returns_none():
     assert asyncio.run(lookup_company(None)) is None
 
 
-_OK_CHECKLIST = {"can_proceed": True, "missing": [], "notes": ""}
-
-
 def _run(monkeypatch, extracted):
     monkeypatch.setattr(
         nodes_mod,
         "chat",
-        AsyncMock(side_effect=[_OK_CHECKLIST, extracted, "无\n---HIGHLIGHT---\n"]),
+        AsyncMock(side_effect=[extracted, "无\n---HIGHLIGHT---\n"]),
     )
     return asyncio.run(run_analyze([{"filename": "审批表.pdf", "text": "x"}], True))
 

@@ -26,7 +26,6 @@ def _analyze_once(monkeypatch) -> str:
         "chat",
         AsyncMock(
             side_effect=[
-                {"can_proceed": True, "missing": [], "notes": ""},
                 {"defendant_name": {"value": "某地产公司", "src": "《审批表.pdf》"}},
                 "说明\n---HIGHLIGHT---\n",
             ]

@@ -38,14 +38,11 @@ def test_count_vge_seen_but_unparsed():
     assert count_vge_units("| 编号 | 2#DT1 |\n| 型号规格 | VGE-320 |") == (0, True)
 
 
-_OK_CHECKLIST = {"can_proceed": True, "missing": [], "notes": ""}
-
-
 def _run(monkeypatch, extracted, files, ocr=None):
     monkeypatch.setattr(
         nodes_mod,
         "chat",
-        AsyncMock(side_effect=[_OK_CHECKLIST, extracted, "无\n---HIGHLIGHT---\n"]),
+        AsyncMock(side_effect=[extracted, "无\n---HIGHLIGHT---\n"]),
     )
     if ocr is not None:
         monkeypatch.setattr(nodes_mod, "ocr_page", ocr)

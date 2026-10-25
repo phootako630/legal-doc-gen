@@ -32,7 +32,6 @@ def test_code_validation_drives_conflict_and_llm_only_phrases(monkeypatch):
     seen = _patch(
         monkeypatch,
         [
-            {"can_proceed": True},  # Step1 清点
             extracted,  # Step2 抽取
             "校验报告文本\n---HIGHLIGHT---\n- 高亮项1",  # Step3b 说明文本
         ],
@@ -74,7 +73,6 @@ def test_all_consistent_yields_no_conflict(monkeypatch):
     _patch(
         monkeypatch,
         [
-            {"can_proceed": True},
             extracted,
             "无冲突\n---HIGHLIGHT---\n",
         ],
@@ -83,3 +81,15 @@ def test_all_consistent_yields_no_conflict(monkeypatch):
     req = ExtractRequest(files=[FileInput(filename="审批表.pdf", text="任意文本")])
     resp = asyncio.run(extract(req))
     assert not any(v["is_conflict"] for v in resp.validations)
+
+
+def test_missing_materials_continue_with_reminder(monkeypatch):
+    # 缺材料不再 422（#70）：照常返回，校验列表带琥珀色的缺材料提醒（#96 评审）
+    _patch(monkeypatch, [{}, "说明\n---HIGHLIGHT---\n"])
+    req = ExtractRequest(
+        files=[FileInput(filename="虚构安装合同.pdf", text="任意文本", identified_type="合同")]
+    )
+    resp = asyncio.run(extract(req))
+    check = next(v for v in resp.validations if v["key"] == "materials")
+    assert check["needs_review"] and not check["is_conflict"]
+    assert "审批表、验收报告" in check["message"]

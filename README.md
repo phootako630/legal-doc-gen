@@ -18,10 +18,11 @@ After the lawyer reviews and confirms, the app generates a civil complaint as a 
 ## Core principles
 
 - **AI never makes the final call.** The agent only extracts, validates and proposes; the lawyer confirms and edits. It pauses to ask at key disagreements:
-  - missing materials;
   - conflicting fields;
   - mismatched elevator counts;
   - the retention-money ratio.
+
+  Missing materials are flagged on the upload page instead: the lawyer can add files or choose to continue with what was uploaded.
 - **Validation is code, not LLM.** Deterministic Python handles amount reconciliation, the three-source quantity comparison, format checks, and the calculations in the lawyer rules (penalty amount, start date, court name, etc.). The LLM only pulls out the numbers and the clause text.
 - **Traceable provenance.** Every field value is tagged with its source file and a **verified page number** found by per-page anchoring, never one the LLM reports itself.
 - **A gap beats a fabrication.** Uncertain fields are marked missing and never invented. A value that does not anchor back to the source is flagged "to verify", both on the review page and in the complaint.
@@ -38,7 +39,7 @@ After the lawyer reviews and confirms, the app generates a civil complaint as a 
 | Extraction & anchoring | Structured fields are read straight from the approval form, and contract clauses are kept verbatim. Each value is matched back to the source page by page; values with no match are flagged "to verify". |
 | Cross-validation | Amount reconciliation (total = paid + unpaid), elevator counts across signing / contract / acceptance, credit-code check digit, dates. |
 | Lawyer drafting rules | Several rounds of lawyer-confirmed rule sheets, implemented as code in `services/derived_fields.py` and `services/payment_nodes.py`. They cover:<br>• plaintiff naming (HQ + branch, or an independent subsidiary)<br>• sales vs. installation wording<br>• elevator-count basis (including VGE home elevators)<br>• citing the payment milestones the debt falls under (matched by the cumulative ratio of paid + unpaid)<br>• supplementary agreements and strategic / framework contracts (clauses only)<br>• penalty vs. late-payment interest (rate-based, lump-sum, fixed daily amount, caps)<br>• paid / unpaid ratios<br>• competent court and jurisdiction sentence<br>• switching to an arbitration application |
-| Lawyer breakpoints | Pauses on missing materials, field conflicts, count mismatches, and contracts with retention money (the lawyer picks "paid up to X% of the contract price"). It resumes once the lawyer decides. |
+| Lawyer breakpoints | Pauses on field conflicts, count mismatches, and contracts with retention money (the lawyer picks "paid up to X% of the contract price"). It resumes once the lawyer decides. |
 | Review page | A Chinese field table with status, source and page, grouped into parties / contract & amounts / payment & breach clauses / jurisdiction & document, with a "needs attention only" filter. Every field is editable, and each field has a button for submitting feedback on it. Edits survive going back from the preview; the browser asks before a refresh, and after one the lawyer can resume the previous case. |
 | Complaint export | The preview shows how many blanks still need filling. The Word export keeps the yellow highlights for a final check. |
 | Plaintiff info table | A firm-wide table of plaintiff credit codes, legal representatives and addresses. Anyone can view or download it as Excel; uploading a new version or restoring an old one needs the admin token. |
@@ -196,7 +197,6 @@ legal-doc-gen/
 ├── CLAUDE.md                        # Instructions for AI coding assistants (full spec + lawyer rules)
 ├── README.md / README.zh-CN.md      # This file (English / Chinese)
 ├── prompts/                         # LLM prompts and the complaint template
-│   ├── prompt-a-checklist.md        # Material check-in
 │   ├── prompt-a-extract.md          # Field extraction (structured)
 │   ├── prompt-a-clauses.md          # Clause extraction from scanned contracts
 │   ├── prompt-a-validate.md         # Highlight text only (no consistency judgments)
