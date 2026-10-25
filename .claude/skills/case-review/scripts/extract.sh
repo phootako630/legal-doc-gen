@@ -13,7 +13,12 @@ fi
 mkdir -p "$OUT"
 
 need() {  # 缺工具时按需安装（不放进 session-start，避免拖慢每次启动）
-  command -v "$1" >/dev/null 2>&1 || apt-get install -y -q "$2" >/dev/null
+  command -v "$1" >/dev/null 2>&1 && return
+  # 新开的云端容器没有软件源索引，直接 install 会报 Unable to locate package：装不上先刷新再装
+  apt-get install -y -q "$2" >/dev/null 2>&1 || {
+    apt-get update -qq >/dev/null
+    apt-get install -y -q "$2" >/dev/null
+  }
 }
 
 case "${ARCHIVE,,}" in
