@@ -18,7 +18,8 @@ router = APIRouter()
 ClientErrorKind = Literal["uncaught", "unhandled_rejection", "api_5xx"]
 ClientStep = Literal["upload", "processing", "review", "preview", "other"]
 ClientApi = Literal[
-    "upload", "analyze", "analyze_result", "resume", "case", "generate", "feedback", "extract", "other"
+    "upload", "analyze", "analyze_result", "resume", "case", "generate", "feedback", "extract",
+    "progress", "branches", "auth", "other",
 ]
 
 limiter = SlidingWindowLimiter(limit=config.CLIENT_ERROR_RATE_PER_MIN, window_s=60)
@@ -29,7 +30,8 @@ class ClientErrorReport(BaseModel):
 
     kind: ClientErrorKind
     step: ClientStep
-    run_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,128}$")
+    # 会话编号固定是 uuid4().hex（32 位小写十六进制）：再宽一点就能夹带任意文字进日志（#104 评审）
+    run_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
     # 只在 api_5xx 时有意义
     api: ClientApi | None = None
     status: int | None = Field(default=None, ge=500, le=599)

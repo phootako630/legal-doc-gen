@@ -1,6 +1,10 @@
 // 前端错误上报（#76）：生产构建才上报；未捕获异常、接口 5xx 上报固定枚举，不带错误消息原文
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { resumeCase } from './api';
+import { readdirSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { fetchAnalyzeProgress, resumeCase } from './api';
+import { fetchAuthStatus } from './auth-api';
+import { fetchBranchTable } from './branch-api';
 import {
   apiName,
   installErrorReporting,
@@ -40,6 +44,25 @@ describe('上报内容', () => {
     ]);
   });
 
+  it('进度轮询、原告信息表、登录接口的 5xx 同样上报', async () => {
+    const calls = stubFetch(503);
+    expect(await fetchAnalyzeProgress('k1')).toBeNull(); // 轮询失败仍静默
+    await expect(fetchBranchTable()).rejects.toThrow();
+    await expect(fetchAuthStatus()).rejects.toThrow();
+    expect(calls.map((c) => c.body.api)).toEqual(['progress', 'branches', 'auth']);
+  });
+
+  it('lib 里每个直接发起的 fetch 都经过 5xx 检查（防止新加的请求漏报）', () => {
+    const dir = fileURLToPath(new URL('.', import.meta.url));
+    for (const name of readdirSync(dir)) {
+      if (!name.endsWith('.ts') || name.endsWith('.test.ts') || name === 'error-report.ts') continue;
+      const src = readFileSync(`${dir}${name}`, 'utf-8');
+      const fetches = src.match(/\bfetch\(/g)?.length ?? 0;
+      const checks = src.match(/noteServerError\(/g)?.length ?? 0;
+      expect(checks, `${name}：${fetches} 处 fetch，${checks} 处 noteServerError`).toBeGreaterThanOrEqual(fetches);
+    }
+  });
+
   it('4xx 不上报', async () => {
     const calls = stubFetch(422);
     await expect(resumeCase('r1', {})).rejects.toThrow();
@@ -75,7 +98,10 @@ describe('上报内容', () => {
     expect(apiName('/api/analyze/result?key=abc')).toBe('analyze_result');
     expect(apiName('/api/case/abc123')).toBe('case');
     expect(apiName('/api/upload')).toBe('upload');
-    expect(apiName('/api/branches/preview')).toBe('other');
+    expect(apiName('/api/upload/progress?progress_id=x')).toBe('progress');
+    expect(apiName('/api/branches/preview')).toBe('branches');
+    expect(apiName('/api/auth/me')).toBe('auth');
+    expect(apiName('/api/somewhere-new')).toBe('other');
   });
 });
 

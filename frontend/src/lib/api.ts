@@ -29,6 +29,13 @@ async function safeFetch(url: string, opts?: RequestInit): Promise<Response> {
   return res;
 }
 
+/** 进度轮询用：失败由调用方静默处理，但后端 5xx 仍上报（只报接口名与状态码） */
+async function pollFetch(url: string): Promise<Response> {
+  const res = await fetch(url);
+  noteServerError(url, res);
+  return res;
+}
+
 /** 从后端响应中提取中文错误信息 */
 async function extractError(res: Response, fallback: string): Promise<Error> {
   try {
@@ -59,7 +66,7 @@ export async function uploadFiles(files: File[], progressId: string): Promise<Up
 /** 查询某次上传的处理进度（上传期间轮询用；失败静默返回 null，不打断上传流程） */
 export async function fetchUploadProgress(progressId: string): Promise<UploadProgress | null> {
   try {
-    const res = await fetch(`${BASE}/upload/progress?progress_id=${encodeURIComponent(progressId)}`);
+    const res = await pollFetch(`${BASE}/upload/progress?progress_id=${encodeURIComponent(progressId)}`);
     if (!res.ok) return null;
     return (await res.json()) as UploadProgress;
   } catch {
@@ -70,7 +77,7 @@ export async function fetchUploadProgress(progressId: string): Promise<UploadPro
 /** 查询抽取任务的 LLM 处理阶段（抽取期间轮询用；失败静默返回 null，不打断流程） */
 export async function fetchExtractProgress(): Promise<LlmProgress | null> {
   try {
-    const res = await fetch(`${BASE}/extract/progress`);
+    const res = await pollFetch(`${BASE}/extract/progress`);
     if (!res.ok) return null;
     return (await res.json()) as LlmProgress;
   } catch {
@@ -108,7 +115,7 @@ export async function extractFields(
  */
 export async function fetchAnalyzeProgress(requestKey: string): Promise<LlmProgress | null> {
   try {
-    const res = await fetch(`${BASE}/analyze/progress?progress_id=${encodeURIComponent(requestKey)}`);
+    const res = await pollFetch(`${BASE}/analyze/progress?progress_id=${encodeURIComponent(requestKey)}`);
     if (!res.ok) return null;
     return (await res.json()) as LlmProgress;
   } catch {

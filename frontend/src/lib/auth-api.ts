@@ -2,6 +2,8 @@
 //
 // 会话令牌在 HttpOnly Cookie 里，前端读不到也不需要读；同源请求浏览器会自动带上。
 
+import { noteServerError } from './error-report';
+
 const BASE = '/api/auth';
 
 /** 任一接口返回「需要登录」时广播此事件，useAuth 收到后切回登录页 */
@@ -23,8 +25,9 @@ export interface AuthStatus {
 }
 
 async function post(path: string, body?: unknown): Promise<Response> {
+  let res: Response;
   try {
-    return await fetch(`${BASE}${path}`, {
+    res = await fetch(`${BASE}${path}`, {
       method: 'POST',
       headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -32,6 +35,8 @@ async function post(path: string, body?: unknown): Promise<Response> {
   } catch {
     throw new Error('网络连接失败，请检查网络设置后重试');
   }
+  noteServerError(`${BASE}${path}`, res);
+  return res;
 }
 
 async function errorOf(res: Response, fallback: string): Promise<Error> {
@@ -51,6 +56,7 @@ export async function fetchAuthStatus(): Promise<AuthStatus> {
   } catch {
     throw new Error('网络连接失败，请检查网络设置后重试');
   }
+  noteServerError(`${BASE}/me`, res);
   if (!res.ok) throw await errorOf(res, '读取登录状态失败');
   return res.json() as Promise<AuthStatus>;
 }

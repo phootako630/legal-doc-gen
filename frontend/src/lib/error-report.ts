@@ -13,6 +13,9 @@ export type ClientApi =
   | 'generate'
   | 'feedback'
   | 'extract'
+  | 'progress'
+  | 'branches'
+  | 'auth'
   | 'other';
 
 export interface ClientErrorReport {
@@ -40,6 +43,9 @@ export function setErrorContext(step: FlowStep, runId?: string): void {
 export function apiName(url: string): ClientApi {
   const path = url.split('?')[0].replace(/^\/api\//, '');
   if (path === 'analyze/result') return 'analyze_result';
+  if (path.endsWith('/progress')) return 'progress';
+  if (path === 'branches' || path.startsWith('branches/')) return 'branches';
+  if (path.startsWith('auth/')) return 'auth';
   if (path.startsWith('case/')) return 'case';
   const known: ClientApi[] = ['upload', 'analyze', 'resume', 'generate', 'feedback', 'extract'];
   return known.find((k) => path === k) ?? 'other';
@@ -59,7 +65,7 @@ export function reportClientError(kind: ClientErrorKind, extra?: Pick<ClientErro
   }).catch(() => undefined);
 }
 
-/** 后端返回 5xx 时调用（api.ts 的 safeFetch 统一处理） */
+/** 后端返回 5xx 时调用：api.ts（safeFetch / 进度轮询）、branch-api.ts、auth-api.ts 的每个请求都经过这里 */
 export function noteServerError(url: string, res: Response): void {
   if (res.status >= 500 && res.status <= 599 && !url.startsWith(ENDPOINT)) {
     reportClientError('api_5xx', { api: apiName(url), status: res.status });

@@ -40,6 +40,9 @@ def test_invalid_enum_and_status_rejected():
     assert c.post("/api/client-error", json={"kind": "虚构", "step": "review"}).status_code == 422
     assert c.post("/api/client-error", json={"kind": "api_5xx", "step": "review", "status": 404}).status_code == 422
     assert c.post("/api/client-error", json={"kind": "uncaught", "step": "review", "run_id": "带 空格"}).status_code == 422
+    # run_id 只认真实会话编号格式（32 位小写十六进制），夹带文字的一律拒绝
+    for bad in ("defendant-name_XG-0815", "A" * 32, "a" * 31):
+        assert c.post("/api/client-error", json={"kind": "uncaught", "step": "review", "run_id": bad}).status_code == 422
 
 
 def test_rate_limited_per_source():
