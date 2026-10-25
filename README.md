@@ -44,7 +44,7 @@ After the lawyer reviews and confirms, the app generates a civil complaint as a 
 | Complaint export | The preview shows how many blanks still need filling. The Word export keeps the yellow highlights for a final check. |
 | Plaintiff info table | A firm-wide table of plaintiff credit codes, legal representatives and addresses. Anyone can view or download it as Excel; uploading a new version or restoring an old one needs the admin token. |
 | Login | Accounts are created by an admin on the server (there is no sign-up). Sessions last 7 days, lawyers can change their own password, and repeated wrong passwords lock the login. |
-| Operations | The run log records field keys, timings, tokens and account names, never case content. Usage can be reported per account, and lawyer feedback can be listed. GitHub Actions deploys after approval and rolls back automatically on failure. |
+| Operations | The run log records field keys, timings, tokens and account names, never case content. On top of it:<br>• usage per account, and a list of lawyer feedback<br>• cost per case / node / model (from configured unit prices), fixed error categories, how long lawyers wait at breakpoints and how often they abandon<br>• a daily summary written on the server, with alerts when thresholds are crossed (failed analyses, OCR failure rate, model fallbacks, paid-key use, key connectivity)<br>• browser errors and API 5xx reported from the frontend (error type and step only, never the message text)<br>GitHub Actions deploys after approval. Health checks are split into liveness (`/healthz`) and readiness (`/readyz`: database read/write, free disk, keys configured), and a deploy that is not ready rolls back automatically. |
 
 ---
 
@@ -254,10 +254,19 @@ Checks and tests:
 
 ```bash
 cd backend && python -m ruff check . && python -m pytest
-cd frontend && pnpm lint && pnpm build
+cd frontend && pnpm lint && pnpm test && pnpm build
 ```
 
-After changing extraction or the lawyer rules, run `backend/scripts/eval_cases.py` on real cases that already have a lawyer-written complaint. It scores each field and compares with the previous run (OCR / LLM responses are recorded, so `--strict` replay costs nothing). The cases live only on the server under `/srv/eval-cases`; see [deploy/README.md](./deploy/README.md).
+## Evaluation
+
+Unit tests check each rule in isolation. To see how the whole system does on real cases, `backend/scripts/eval_cases.py` runs it end to end on cases where a lawyer has already written the complaint, and scores it field by field against that complaint.
+
+- **How it scores**: each field is correct, wrong, missing (it would show as "to be filled" in the complaint), or pending (the lawyer has not yet confirmed the rule; listed but not scored). Fields are compared, not whole sentences, because lawyers word complaints differently.
+- **Source and silent errors**: an expected field can also name the file it should come from. The value is matched back to the materials with the same logic the app uses, so the source is judged by where the value is actually found, not by where the model says it came from. A *silent error* is a field the review page shows as normal even though it is wrong, should have been flagged for review, or cannot be found in the materials. These are the dangerous ones, so they are counted separately.
+- **Free reruns**: OCR and LLM responses are recorded per case, keyed by the request. After a rule change, `--strict` replays the recordings at no cost and without network access; after a model or prompt change, `--mode live` re-records them. Each run is compared field by field with the previous one.
+- **Where the cases live**: real cases contain client information, so they stay on the server under `/srv/eval-cases` and are never committed (see [deploy/README.md](./deploy/README.md)).
+- **Latest result** (real-case set, October 2026): 164 of 165 scored fields correct (about 99%). The one error is a clause number misread by OCR; by design the system does not silently correct OCR text, and it marks scanned values for the lawyer to verify.
+- **Next**: a synthetic case set in the repository, replayed strictly in CI on every pull request, so a rule change that breaks another case fails before it is merged.
 
 ## Deployment (UAT / production)
 
