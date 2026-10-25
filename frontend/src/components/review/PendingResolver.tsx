@@ -90,24 +90,30 @@ export function PendingResolver({
               />
               {/* 冲突字段的候选值：各来源的值及推算值，点选即回填，来源写在值下方 */}
               {(pending.field_options?.[key] ?? []).length > 0 && (
-                <div className="flex flex-wrap gap-2 pt-0.5">
-                  {(pending.field_options?.[key] ?? []).map((opt) => (
-                    <button
-                      key={opt.value}
-                      type="button"
-                      disabled={loading}
-                      onClick={() => setValues((s) => ({ ...s, [key]: opt.value }))}
-                      className={`flex max-w-full flex-col items-start rounded border px-2.5 py-1 text-left disabled:opacity-50 ${
-                        values[key] === opt.value
-                          ? 'border-primary bg-primary/5'
-                          : 'border-border bg-white hover:border-primary'
-                      }`}
-                    >
-                      <span className="text-sm font-medium text-foreground">{opt.value}</span>
-                      <span className="text-xs text-muted-foreground">{opt.source}</span>
-                    </button>
-                  ))}
-                </div>
+                <>
+                  <div className="flex flex-wrap gap-2 pt-0.5">
+                    {(pending.field_options?.[key] ?? []).map((opt) => (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        disabled={loading}
+                        onClick={() => setValues((s) => ({ ...s, [key]: opt.value }))}
+                        className={`flex max-w-full flex-col items-start rounded border px-2.5 py-1 text-left disabled:opacity-50 ${
+                          values[key] === opt.value
+                            ? 'border-primary bg-primary/5'
+                            : 'border-border bg-white hover:border-primary'
+                        }`}
+                      >
+                        <span className="text-sm font-medium text-foreground">{opt.value}</span>
+                        <span className="text-xs text-muted-foreground">{opt.source}</span>
+                      </button>
+                    ))}
+                  </div>
+                  {/* 输入框已预填现值、看不到占位提示：明确告诉律师候选之外可以自己填 */}
+                  <p className="text-xs text-muted-foreground">
+                    都不对？可直接在上方输入框修改。
+                  </p>
+                </>
               )}
               {/* 若 agent 提供候选值，作为快捷填充 */}
               {pending.options.length > 0 && (
