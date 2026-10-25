@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import weakref
 from concurrent.futures import ThreadPoolExecutor
 from typing import TypedDict
 
@@ -20,6 +21,7 @@ from app.config import (
     DASHSCOPE_API_KEY,
     DASHSCOPE_API_KEY_BACKUP,
     DASHSCOPE_BASE_URL,
+    OCR_GLOBAL_CONCURRENCY,
     OCR_MAX_CONCURRENCY,
     OCR_PAGE_TIMEOUT,
     OCR_TIMEOUT,
@@ -29,6 +31,30 @@ from app.config import (
 from app.services import upload_progress
 
 logger = logging.getLogger(__name__)
+
+# ── 按需 OCR 的并发控制 ──────────────────────────────────────────────────────
+# DashScope 请求是同步的（requests），一页 5–15 秒。若放在默认线程池里，几个律师同时分析就会
+# 占满默认池（2 核服务器只有 6 个线程），登录校验（asyncio.to_thread）等所有请求跟着排队，
+# 整个网站像卡死一样。故 OCR 用专用线程池，并用全局信号量限制同时识别的页数：超出的在
+# 信号量上排队（单页超时从拿到名额后才开始算，排队不会被当成超时）。
+# 线程比名额多 2 个：超时放弃的请求在线程里还要等 requests 自身超时才退出，不让它挤掉新请求
+_OCR_POOL = ThreadPoolExecutor(
+    max_workers=OCR_GLOBAL_CONCURRENCY + 2, thread_name_prefix="ocr"
+)
+# 渲染页面图片是本地 CPU 活，2 核服务器给 2 个线程
+_RENDER_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ocr-render")
+# 信号量绑定事件循环：服务里只有一个循环；测试里每次 asyncio.run 是新循环，各建一个
+_slots: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _ocr_slot() -> asyncio.Semaphore:
+    loop = asyncio.get_running_loop()
+    sem = _slots.get(loop)
+    if sem is None:
+        sem = _slots[loop] = asyncio.Semaphore(OCR_GLOBAL_CONCURRENCY)
+    return sem
 
 
 class OcrPage(TypedDict):
@@ -187,17 +213,19 @@ async def ocr_page(pdf_bytes: bytes, page_num: int) -> str:
     if not _keys():
         raise RuntimeError(_MISSING_KEY)
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
-        img_b64 = await loop.run_in_executor(
-            None, _render_page_b64, pdf_bytes, page_num
-        )
-        if img_b64 is None:
-            return ""
-        return await asyncio.wait_for(
-            loop.run_in_executor(None, _ocr_image_b64, img_b64),
-            timeout=OCR_PAGE_TIMEOUT,
-        )
+        # 名额里渲染 + 识别：同时渲染出来、占着内存的页图也不超过名额数
+        async with _ocr_slot():
+            img_b64 = await loop.run_in_executor(
+                _RENDER_POOL, _render_page_b64, pdf_bytes, page_num
+            )
+            if img_b64 is None:
+                return ""
+            return await asyncio.wait_for(
+                loop.run_in_executor(_OCR_POOL, _ocr_image_b64, img_b64),
+                timeout=OCR_PAGE_TIMEOUT,
+            )
     except asyncio.TimeoutError as exc:
         raise TimeoutError(
             f"第 {page_num} 页 OCR 超时（超过 {OCR_PAGE_TIMEOUT} 秒）"
