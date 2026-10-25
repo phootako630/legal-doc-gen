@@ -11,6 +11,7 @@ from fastapi import UploadFile
 
 from app.config import SCANNED_PAGE_TEXT_THRESHOLD, SCANNED_PDF_TEXT_THRESHOLD
 from app.services import file_store, ocr_engine
+from app.services.error_category import UnsupportedFileError
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +107,7 @@ async def parse_file(upload_file: UploadFile) -> dict[str, Any]:
             _PARSE_POOL, _parse_docx, filename, content, identified_type
         )
     else:
-        raise ValueError(f"不支持的文件格式：{filename}，仅支持 .pdf / .docx")
+        raise UnsupportedFileError(f"不支持的文件格式：{filename}，仅支持 .pdf / .docx")
 
 
 def _pdf_page_texts(content: bytes) -> list[str]:
@@ -160,7 +161,7 @@ async def _parse_pdf(
         }
 
     if not text.strip():
-        raise ValueError(
+        raise UnsupportedFileError(
             f"文件《{filename}》内容为空，无法提取有效文本（可能为空白页或图像质量过低）"
         )
     if identified_type == "未知":
@@ -201,7 +202,7 @@ def _parse_docx(filename: str, content: bytes, identified_type: str) -> dict[str
     text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
 
     if not text.strip():
-        raise ValueError(f"文件《{filename}》内容为空，无法提取有效文本")
+        raise UnsupportedFileError(f"文件《{filename}》内容为空，无法提取有效文本")
     if identified_type == "未知":
         identified_type = _identify_type(filename, text)
 

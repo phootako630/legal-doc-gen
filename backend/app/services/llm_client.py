@@ -31,6 +31,7 @@ from app.config import (
     LLM_TOTAL_TIMEOUT,
 )
 from app.services import run_log
+from app.services.error_category import LLMEmptyResponse
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +188,7 @@ async def _complete(
     deadline = time.monotonic() + LLM_TOTAL_TIMEOUT
 
     for attempt in range(2):  # 最多尝试 2 次
+        t0 = time.monotonic()
         try:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -207,6 +209,7 @@ async def _complete(
                 len(content),
                 f" tokens={usage.completion_tokens}/{usage.total_tokens}" if usage else "",
             )
+            # node 由 traced_node 设的上下文自动带上；prompt 为模板文件名 + 模板内容哈希（不含案件内容）
             run_log.log_event(
                 "llm_call",
                 model=model,
@@ -214,13 +217,15 @@ async def _complete(
                 finish_reason=choice.finish_reason,
                 prompt_tokens=getattr(usage, "prompt_tokens", None),
                 completion_tokens=getattr(usage, "completion_tokens", None),
+                duration_ms=round((time.monotonic() - t0) * 1000),
+                prompt=run_log.current_prompt(),
             )
 
             # 推理模型可能把 max_tokens 全部耗在思维链上（finish_reason=length），
             # 导致正文为空——这是失败而非成功，必须走重试路径
             if not content.strip():
                 if attempt == 1:
-                    raise RuntimeError(
+                    raise LLMEmptyResponse(
                         f"AI 返回内容为空（finish_reason={choice.finish_reason}），"
                         "已重试一次仍为空，请稍后重试"
                     )
@@ -287,13 +292,17 @@ async def _chat_fallback(messages: list[Message], json_mode: bool) -> Any:
     """用备用模型完成调用；主 key 被拒（401/403）时换备用 key，与 OCR 一致。"""
     extra = {"enable_thinking": LLM_FALLBACK_ENABLE_THINKING}
     last: Exception | None = None
-    for key in _fallback_keys():
+    keys = _fallback_keys()
+    for i, key in enumerate(keys):
         try:
             return await _complete(
                 _get_fallback_client(key), LLM_FALLBACK_MODEL, messages, json_mode, extra
             )
         except (openai.AuthenticationError, openai.PermissionDeniedError) as e:
             last = e
+            if i < len(keys) - 1:
+                # 改用付费备用 key，与 OCR 同一事件（#75）；这里不记住切换，每次被拒都记一条
+                run_log.log_event("dashscope_key_switch", reason=e.status_code, path="llm")
             continue
         except _Unavailable as u:
             raise RuntimeError(

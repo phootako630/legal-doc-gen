@@ -210,7 +210,7 @@ legal-doc-gen/
 │   │       ├── derived_fields  payment_nodes  acceptance_report  equipment_list  complaint_renderer
 │   │       ├── branch_table  branch_registry  company_lookup（预留）
 │   │       └── auth_store  login_guard  run_log  progress_table  llm_progress  upload_progress
-│   ├── scripts/{manage_users,list_feedback,usage_report}.py  # 账号管理 / 查看反馈 / 使用统计
+│   ├── scripts/{manage_users,list_feedback,usage_report,cost_report}.py  # 账号管理 / 查看反馈 / 使用统计 / 成本与错误汇总
 │   ├── scripts/eval_cases.py + case_eval/                    # 案件 eval：真实案卷逐字段打分（案卷不进仓库）
 │   └── tests/                                                # pytest（虚构数据）
 │

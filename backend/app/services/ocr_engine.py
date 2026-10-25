@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextvars
 import logging
 import weakref
 from concurrent.futures import ThreadPoolExecutor
@@ -28,7 +29,7 @@ from app.config import (
     QWEN_OCR_ENABLE_THINKING,
     QWEN_OCR_MODEL,
 )
-from app.services import upload_progress
+from app.services import run_log, upload_progress
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +134,8 @@ def _post_with_fallback(payload: dict):
         if resp.status_code in _SWITCH_STATUSES and not is_last:
             # 不打印 key，只记状态码，方便排查免费额度何时用完
             logger.warning("主 key 被拒（HTTP %s），改用付费备用 key", resp.status_code)
+            # 从这里起开始产生费用：单独记一条事件（#75），汇总时一眼能看到
+            run_log.log_event("dashscope_key_switch", reason=resp.status_code, path="ocr")
             _use_backup = True
             continue
         resp.raise_for_status()
@@ -227,7 +230,10 @@ async def ocr_page(pdf_bytes: bytes, page_num: int) -> str:
         img_b64 = await asyncio.shield(running)
         if img_b64 is None:
             return ""
-        running = loop.run_in_executor(_OCR_POOL, _ocr_image_b64, img_b64)
+        # 带上调用方的上下文（run_id / 节点名）：线程里切换 key 时记的事件才能归到本案件
+        running = loop.run_in_executor(
+            _OCR_POOL, contextvars.copy_context().run, _ocr_image_b64, img_b64
+        )
         return await asyncio.wait_for(asyncio.shield(running), timeout=OCR_PAGE_TIMEOUT)
     except asyncio.TimeoutError as exc:
         raise TimeoutError(

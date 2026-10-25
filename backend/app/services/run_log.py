@@ -18,12 +18,17 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
 from app.config import RUN_LOG_ENABLED, RUN_LOG_PATH, RUN_LOG_RETENTION_DAYS
+from app.services.error_category import categorize
 
 # 当前协程所属的 run_id；runner 入口设置，节点/LLM 调用无需逐层传参
 _run_id: ContextVar[str | None] = ContextVar("run_id", default=None)
 # 当前请求的登录账号；登录中间件设置，请求内启动的后台分析任务（create_task 复制上下文）一并继承。
 # 只记账号名，用于统计谁在什么时候用了几次，不涉及案件内容
 _user: ContextVar[str | None] = ContextVar("user", default=None)
+# 当前图节点名（traced_node 设置）：节点里的 LLM / OCR 事件自动带上 node，按节点归集成本与耗时
+_node: ContextVar[str | None] = ContextVar("node", default=None)
+# 最近一次加载的提示词「文件名@模板哈希」（prompt_loader 设置），llm_call 据此记录提示词版本
+_prompt: ContextVar[str | None] = ContextVar("prompt", default=None)
 _lock = threading.Lock()
 
 
@@ -33,6 +38,14 @@ def set_run_id(run_id: str | None) -> None:
 
 def set_user(user: str | None) -> None:
     _user.set(user)
+
+
+def set_prompt(tag: str | None) -> None:
+    _prompt.set(tag)
+
+
+def current_prompt() -> str | None:
+    return _prompt.get()
 
 
 def current_user() -> str | None:
@@ -53,6 +66,9 @@ def log_event(event: str, run_id: str | None = None, **data: Any) -> None:
     user = _user.get()
     if user is not None:
         record["user"] = user
+    node = _node.get()
+    if node is not None and "node" not in record:
+        record["node"] = node
     try:
         line = json.dumps(record, ensure_ascii=False, default=str)
         with _lock:
@@ -144,13 +160,18 @@ def traced_node(
     async def wrapper(state: dict) -> dict:
         t0 = time.monotonic()
         outcome: dict[str, Any] = {"outcome": "ok"}
+        token = _node.set(name)
         try:
             return await fn(state)
         except Exception as exc:  # noqa: BLE001 — 只记录后原样抛出
             if type(exc).__name__ == "GraphInterrupt":
                 outcome = {"outcome": "interrupt", **_interrupt_info(exc)}
             else:
-                outcome = {"outcome": "error", "error": type(exc).__name__}
+                outcome = {
+                    "outcome": "error",
+                    "error": type(exc).__name__,
+                    "error_category": categorize(exc),
+                }
             raise
         finally:
             log_event(
@@ -159,6 +180,7 @@ def traced_node(
                 duration_ms=round((time.monotonic() - t0) * 1000),
                 **outcome,
             )
+            _node.reset(token)
 
     return wrapper
 

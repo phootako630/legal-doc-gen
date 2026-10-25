@@ -1,4 +1,5 @@
 # 配置中心：从 .env 读取所有环境变量和运行时常量
+import json
 import logging
 import os
 from dotenv import load_dotenv
@@ -139,6 +140,13 @@ RUN_LOG_PATH = os.getenv("RUN_LOG_PATH", os.path.join(_DATA_DIR, "run_log.jsonl"
 # 用于统计使用量与律师改动率，故比案件数据（CASE_RETENTION_DAYS，含原文）保留得久；
 # run_id 在案件数据清除后就对不上任何案件。
 RUN_LOG_RETENTION_DAYS = int(os.getenv("RUN_LOG_RETENTION_DAYS", "90"))
+
+# 成本估算单价（人民币元），只给汇总脚本 scripts/cost_report.py 换算金额用，不影响运行。
+# 以 DeepSeek / 阿里云百炼控制台的价格页为准；改价后同时改 COST_PRICES_DATE（取值日期）。
+# 格式：{"模型名": {"input": 每百万输入 token, "output": 每百万输出 token}, "ocr_page": 每页 OCR}
+# 未配置的模型 / OCR，报告里金额显示「未配置单价」，token 与页数照常统计
+COST_PRICES: dict = json.loads(os.getenv("COST_PRICES") or "{}")
+COST_PRICES_DATE = os.getenv("COST_PRICES_DATE", "")
 
 # ── 登录（账号 + 会话）─────────────────────────────────────────────────────────
 # 部署时（docker-compose.yml）开启：除登录接口外所有 /api 都要求先登录。
