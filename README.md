@@ -220,7 +220,7 @@ legal-doc-gen/
 │   │       ├── derived_fields  payment_nodes  acceptance_report  equipment_list  complaint_renderer
 │   │       ├── branch_table  branch_registry  company_lookup (placeholder)
 │   │       └── auth_store  login_guard  run_log  progress_table  llm_progress  upload_progress
-│   ├── scripts/{manage_users,list_feedback,usage_report}.py  # Accounts / feedback / usage report
+│   ├── scripts/{manage_users,list_feedback,usage_report,cost_report}.py  # Accounts / feedback / usage / cost & errors
 │   ├── scripts/eval_cases.py + case_eval/                    # Case eval: per-field scoring on real cases (kept out of the repo)
 │   └── tests/                                                # pytest (synthetic data)
 │

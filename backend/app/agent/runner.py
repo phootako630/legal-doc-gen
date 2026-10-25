@@ -9,6 +9,7 @@ import hashlib
 import json
 import time
 import uuid
+from datetime import datetime, timezone
 
 from langgraph.types import Command
 
@@ -28,6 +29,15 @@ def _interrupt_payload(snapshot) -> dict | None:
         for intr in task.interrupts or []:
             return intr.value
     return None
+
+
+def _waited_s(snapshot) -> float | None:
+    """断点快照写入（即暂停）距今的秒数；时间读不出时为 None。"""
+    try:
+        paused = datetime.fromisoformat(snapshot.created_at)
+    except (TypeError, ValueError):
+        return None
+    return round((datetime.now(timezone.utc) - paused).total_seconds(), 1)
 
 
 def _case_from_values(run_id: str, values: dict) -> CaseState:
@@ -81,12 +91,24 @@ _PURGE_INTERVAL_S = 3600
 async def purge_expired_cases() -> None:
     """清除过期的 checkpoint 与上传文件。清理失败只记日志，不影响服务。"""
     try:
+        await _log_abandoned()
         runs = await checkpoint.purge_expired()
         files = await asyncio.to_thread(file_store.purge_expired)
         logs = await asyncio.to_thread(run_log.purge_old)
         run_log.log_event("purge", runs=runs, files=files, logs=logs)
     except Exception as exc:  # noqa: BLE001 — 清理是尽力而为
         run_log.log_event("purge_error", error=type(exc).__name__)
+
+
+async def _log_abandoned() -> None:
+    """过期时仍停在断点、律师一直没作答的会话记 abandoned（统计放弃率）；只记断点类型。"""
+    graph = await get_graph()
+    for run_id in await checkpoint.expired_run_ids():
+        payload = _interrupt_payload(await graph.aget_state(_config(run_id)))
+        if payload:
+            pending = payload.get("pending") if isinstance(payload, dict) else None
+            kind = pending.get("kind") if isinstance(pending, dict) else None
+            run_log.log_event("abandoned", run_id=run_id, pending_kind=kind)
 
 
 async def retention_loop(interval_s: float = _PURGE_INTERVAL_S) -> None:
@@ -195,8 +217,8 @@ async def _run_resume(run_id: str, decisions: dict) -> CaseState:
     if not snapshot.tasks and not snapshot.values:
         raise KeyError(run_id)  # 无此会话（进程重启或 run_id 失效）
     run_log.set_run_id(run_id)
-    # 只记律师本次决定了哪些字段，不记取值
-    run_log.log_event("resume", decided_keys=sorted(decisions))
+    # 只记律师本次决定了哪些字段，不记取值；wait_s = 停在断点到律师作答的秒数（#75）
+    run_log.log_event("resume", decided_keys=sorted(decisions), wait_s=_waited_s(snapshot))
     t0 = time.monotonic()
     await graph.ainvoke(Command(resume=decisions), config)
     run_log.log_event("run_pass", duration_ms=round((time.monotonic() - t0) * 1000))

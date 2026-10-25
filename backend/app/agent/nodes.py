@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import time
 
 from langgraph.types import interrupt
 
@@ -57,6 +58,7 @@ from app.services.derived_fields import (
     payable_ratio_options,
     retention_is_guarantee,
 )
+from app.services.error_category import OCR_RATE_LIMIT, OCR_TIMEOUT, categorize
 from app.services.llm_client import chat
 from app.services.materials import material_note, material_status
 from app.services.ocr_engine import ocr_page, pdf_page_count
@@ -409,20 +411,40 @@ async def _extract_clauses(file: dict) -> dict:
     return result if isinstance(result, dict) else {}
 
 
+async def _timed_ocr(pdf: bytes, page_num: int) -> tuple[str | BaseException, float]:
+    """单页 OCR 并计时（毫秒）；异常作为结果返回，由调用方决定跳过还是抛出。"""
+    t0 = time.monotonic()
+    try:
+        res: str | BaseException = await ocr_page(pdf, page_num)
+    except Exception as exc:  # noqa: BLE001 — 交给 _ocr_batch 分类处理
+        res = exc
+    return res, (time.monotonic() - t0) * 1000
+
+
 async def _ocr_batch(pdf: bytes, page_nums: list[int]) -> list[dict]:
     """并发 OCR 一批页；单页失败 / 超时跳过（实测密集表格页偶发超时），返回成功的页。"""
-    results = await asyncio.gather(
-        *(ocr_page(pdf, n) for n in page_nums), return_exceptions=True
-    )
+    results = await asyncio.gather(*(_timed_ocr(pdf, n) for n in page_nums))
     pages: list[dict] = []
-    for page_num, res in zip(page_nums, results):
+    failed: list[str] = []
+    for page_num, (res, _) in zip(page_nums, results):
         if isinstance(res, (RuntimeError, TimeoutError)):
+            failed.append(categorize(res))
             continue
         if isinstance(res, BaseException):
             raise res
         pages.append({"page": page_num, "text": res})
-    # OCR 是主要成本项：记请求页数与成功页数，供按需 OCR 的成本复盘
-    run_log.log_event("ocr_batch", requested=len(page_nums), ok=len(pages))
+    # OCR 是主要成本项：记请求页数与成功页数，以及单页耗时分布、超时 / 限流页数（#75）
+    durations = sorted(ms for _, ms in results)
+    run_log.log_event(
+        "ocr_batch",
+        requested=len(page_nums),
+        ok=len(pages),
+        p50_ms=round(durations[len(durations) // 2]) if durations else None,
+        max_ms=round(durations[-1]) if durations else None,
+        timeouts=failed.count(OCR_TIMEOUT),
+        rate_limited=failed.count(OCR_RATE_LIMIT),
+        failed=len(failed),
+    )
     return pages
 
 

@@ -173,6 +173,13 @@ docker compose exec backend python scripts/usage_report.py --days 7   # 最近 7
 ```
 
   本功能上线前的旧记录没有账号名，归在「（未登录 / 旧记录）」下。统计脚本会读当前日志和全部切分文件。
+- 成本、耗时与错误汇总（每案成本、成本最高的节点、各模型用量、错误类别次数、律师在断点停留时长中位数与放弃率、付费备用 key 切换次数；不含案件内容）：
+
+```bash
+docker compose exec backend python scripts/cost_report.py --days 7
+```
+
+  金额按 `backend/.env` 的 `COST_PRICES` 换算（格式见 `.env.example`），单价以 DeepSeek / 阿里云百炼控制台价格页为准，并把取值日期写进 `COST_PRICES_DATE`；没配单价时只列 token 与页数，金额显示「未配置单价」。
 
 ### 6.1 案件 eval（开发用）
 

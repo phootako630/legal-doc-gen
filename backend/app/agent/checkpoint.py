@@ -139,16 +139,27 @@ async def is_expired(run_id: str, retention_days: float | None = None) -> bool:
     return row is not None and row[0] < time.time() - days * 86400
 
 
+def _cutoff(retention_days: float | None) -> float:
+    days = config.CASE_RETENTION_DAYS if retention_days is None else retention_days
+    return time.time() - days * 86400
+
+
+async def expired_run_ids(retention_days: float | None = None) -> list[str]:
+    """超过保留期、即将被清除的会话编号。"""
+    await get_saver()
+    assert _conn is not None
+    async with _conn.execute(
+        "SELECT thread_id FROM run_meta WHERE created_at < ?", (_cutoff(retention_days),)
+    ) as cur:
+        return [row[0] async for row in cur]
+
+
 async def purge_expired(retention_days: float | None = None) -> int:
     """删除超过保留期的会话（checkpoint + 登记），返回删除数量。"""
     saver = await get_saver()
     assert _conn is not None
-    days = config.CASE_RETENTION_DAYS if retention_days is None else retention_days
-    cutoff = time.time() - days * 86400
-    async with _conn.execute(
-        "SELECT thread_id FROM run_meta WHERE created_at < ?", (cutoff,)
-    ) as cur:
-        expired = [row[0] async for row in cur]
+    cutoff = _cutoff(retention_days)
+    expired = await expired_run_ids(retention_days)
     for thread_id in expired:
         await saver.adelete_thread(thread_id)
         await _conn.execute("DELETE FROM run_meta WHERE thread_id = ?", (thread_id,))
