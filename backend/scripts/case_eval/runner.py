@@ -10,11 +10,12 @@ from typing import Any
 
 from starlette.datastructures import UploadFile
 
+from app.agent.graph import get_graph
 from app.agent.runner import run_analyze, run_resume
 from app.services.complaint_renderer import render_complaint
 from app.services.file_parser import parse_file
 from scripts.case_eval.cache import ReplayCache, patched
-from scripts.case_eval.scoring import score_case, summarize
+from scripts.case_eval.scoring import score_case, summarize, summarize_quality
 
 MATERIAL_EXTS = (".pdf", ".docx", ".doc")
 MAX_RESUMES = 6  # 断点轮数上限：正常案件 0–2 次，超过说明在原地打转
@@ -54,6 +55,25 @@ def _pause_record(pending: Any, answered: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+async def _final_files(run_id: str) -> list[dict[str, Any]]:
+    """分析结束时图状态里的材料：含 OCR 补读出的逐页文字，核对来源要在这里面回原文找。"""
+    graph = await get_graph()
+    snapshot = await graph.aget_state({"configurable": {"thread_id": run_id}})
+    return list((snapshot.values or {}).get("files") or [])
+
+
+def _conflict_keys(validations: list[dict[str, Any]]) -> set[str]:
+    """审核页按冲突显示的字段（与前端 collectConflictKeys 一致）。"""
+    keys: set[str] = set()
+    for v in validations:
+        if not v.get("is_conflict"):
+            continue
+        keys.update(v.get("related_fields") or [])
+        if v.get("key") == "qty_consistency":
+            keys.add("elevator_qty")
+    return keys
+
+
 async def run_case(case_dir: str, mode: str = "replay", strict: bool = False) -> dict[str, Any]:
     """跑一个案件，返回结果（含逐字段结论、断点、调用统计、生成的起诉状）。出错不抛，记在 error。"""
     name = os.path.basename(os.path.normpath(case_dir))
@@ -85,9 +105,12 @@ async def run_case(case_dir: str, mode: str = "replay", strict: bool = False) ->
         result["readiness"] = case.readiness
         result["fields"] = fields
         result["complaint"] = render_complaint(fields)
-        scored = score_case(expected["fields"], fields)
+        scored = score_case(
+            expected["fields"], fields, await _final_files(case.run_id), _conflict_keys(case.validations)
+        )
         result["results"] = [r.as_dict() for r in scored]
         result["summary"] = summarize(scored)
+        result["quality"] = summarize_quality(scored)
     except Exception as exc:  # noqa: BLE001 — 一个案件出错不影响其他案件
         result["error"] = f"{type(exc).__name__}: {exc}"
     result["stats"] = cache.stats.as_dict()

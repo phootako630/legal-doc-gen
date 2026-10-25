@@ -26,9 +26,17 @@ expected.json：
         "plaintiff_name_final": "日立电梯（中国）有限公司湖南分公司",   其他 → 去空白、全半角后全等
         "jurisdiction_text": {"value": "邵东市人民法院", "match": "contains"},  包含即可
         "defendant_legal_rep": null,                     null → 应留空（如工商信息系统取不到）
-        "interest_term": {"pending": "确认单（五）第 11 题"}  待律师确认：列出但不计分
+        "interest_term": {"pending": "确认单（五）第 11 题"},  待律师确认：列出但不计分
+        "contract_sign_date": {"value": "2020年7月30日", "source": "安装合同"},  选填 source：预期来源文件名（或其中一段）
+        "payment_clause_location": {"value": "第5条", "review": "待核实"}  选填 review：审核页应标待核实
       }
     }
+
+来源与静默错误（#59）：
+    - 填了 source 的字段，把系统值回原文重新锚定（与应用同一套逻辑），按实际命中的文件判断来源对不对，
+      不看模型在出处里自称来自哪个文件；哪份材料都没命中也算来源错误
+    - 静默错误：审核页显示「正常」，但值错、标准答案要求待核实（review），或填了 source 却回原文没命中
+    - 两项单独计数，不影响「正确 / 错误 / 缺失 / 待定」与准确率；与上次运行对比时也列出它们的变化
 """
 from __future__ import annotations
 
