@@ -55,8 +55,18 @@ def test_global_cap_across_analyses(monkeypatch):
 
 
 def test_ocr_does_not_starve_default_pool(monkeypatch):
-    # 登录校验用 asyncio.to_thread（默认线程池）：OCR 再多也不能让它排队（2 核服务器默认池仅 6 线程）
-    _fake_ocr(monkeypatch, 0.5)
+    # 登录校验用 asyncio.to_thread（默认线程池）：OCR 把线程全占住时它也不能排队（2 核服务器默认池仅
+    # 6 线程）。OCR 打桩成一直卡住，不靠计时判断：若 OCR 占的是默认池，to_thread 会一直等到超时
+    release = threading.Event()
+    started = threading.Semaphore(0)
+
+    def stuck(_img):
+        started.release()
+        release.wait(10)
+        return "识别文字"
+
+    monkeypatch.setattr(ocr_engine, "_ocr_image_b64", stuck)
+    monkeypatch.setattr(ocr_engine, "_keys", lambda: ["虚构key"])
     pdf = _pdf(5)
 
     async def scenario():
@@ -66,30 +76,33 @@ def test_ocr_does_not_starve_default_pool(monkeypatch):
         ocr = asyncio.gather(
             *(ocr_engine.ocr_page(pdf, n) for _ in range(4) for n in range(1, 6))
         )
-        await asyncio.sleep(0.05)  # OCR 已经占上线程
-        waits = []
-        for _ in range(5):
-            t = time.monotonic()
-            await asyncio.to_thread(lambda: None)
-            waits.append(time.monotonic() - t)
-            await asyncio.sleep(0.05)
-        await ocr
-        return max(waits)
+        try:
+            # 等至少两页真正卡在识别里（旧实现下默认池的 2 个线程此时已被占满）
+            for _ in range(2):
+                await asyncio.wait_for(asyncio.to_thread(started.acquire), 5)
+            await asyncio.wait_for(asyncio.to_thread(lambda: None), 5)
+        finally:
+            release.set()
+        return await ocr
 
-    assert asyncio.run(scenario()) < 0.25  # 挤占时至少要等一页（0.5 秒）
+    assert len(asyncio.run(scenario())) == 20
 
 
 def test_queued_pages_do_not_time_out(monkeypatch):
     # 名额满时排队等待不计入单页超时：排队的页照样识别成功，不被当成超时跳过
     _fake_ocr(monkeypatch, 0.3)
     monkeypatch.setattr(ocr_engine, "OCR_GLOBAL_CONCURRENCY", 2)
-    monkeypatch.setattr(ocr_engine, "OCR_PAGE_TIMEOUT", 0.6)
-    pdf = _pdf(8)
+    monkeypatch.setattr(
+        ocr_engine, "OCR_PAGE_TIMEOUT", 1.0
+    )  # 单页 0.3 秒，慢机器上也留足余量
+    pdf = _pdf(10)
 
     async def scenario():
-        return await asyncio.gather(*(ocr_engine.ocr_page(pdf, n) for n in range(1, 9)))
+        return await asyncio.gather(
+            *(ocr_engine.ocr_page(pdf, n) for n in range(1, 11))
+        )
 
-    assert asyncio.run(scenario()) == ["识别文字"] * 8  # 总共约 1.2 秒，远超单页超时
+    assert asyncio.run(scenario()) == ["识别文字"] * 10  # 总共约 1.5 秒，超过单页超时
 
 
 def test_pdf_parsing_runs_off_event_loop(monkeypatch):
