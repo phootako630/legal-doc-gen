@@ -1,12 +1,12 @@
 # eval 报告：汇总各案件结论写成 report.md（给人看）与 results.json（给下次对比），
-# 并与上一次运行逐字段对比，列出变好 / 变坏的字段。
+# 并与上一次运行逐字段对比，列出变好 / 变坏的字段（值、来源、静默错误分别看）。
 from __future__ import annotations
 
 import json
 import os
 from typing import Any
 
-from scripts.case_eval.scoring import CORRECT, MISSING, PENDING, WRONG
+from scripts.case_eval.scoring import CORRECT, MISSING, PENDING, SILENT, SOURCE_WRONG, WRONG
 
 _CELL_MAX = 60
 
@@ -47,12 +47,22 @@ def find_previous(runs_dir: str, current: str) -> dict[str, Any] | None:
     return None
 
 
+def _label(r: dict[str, Any]) -> str:
+    """一个字段的完整结论：值的结论，加上来源错误 / 静默错误（旧版 results.json 没有这两项）。"""
+    parts = [r["verdict"]]
+    if r.get("source_ok") is False:
+        parts.append(SOURCE_WRONG)
+    if r.get("silent"):
+        parts.append(SILENT)
+    return "，".join(parts)
+
+
 def diff_runs(prev: dict[str, Any] | None, cases: list[dict[str, Any]]) -> list[dict[str, str]]:
-    """与上次比，结论变了的字段（同一案件、同一字段）。"""
+    """与上次比，结论变了的字段（同一案件、同一字段；值、来源、静默错误任一变化都算）。"""
     if not prev:
         return []
     before = {
-        (c["case"], r["key"]): r["verdict"]
+        (c["case"], r["key"]): _label(r)
         for c in prev.get("cases", [])
         for r in c.get("results") or []
     }
@@ -60,9 +70,14 @@ def diff_runs(prev: dict[str, Any] | None, cases: list[dict[str, Any]]) -> list[
     for c in cases:
         for r in c.get("results") or []:
             old = before.get((c["case"], r["key"]))
-            if old is not None and old != r["verdict"]:
-                changes.append({"case": c["case"], "key": r["key"], "before": old, "after": r["verdict"]})
+            if old is not None and old != _label(r):
+                changes.append({"case": c["case"], "key": r["key"], "before": old, "after": _label(r)})
     return changes
+
+
+def _source_cell(q: dict[str, int]) -> str:
+    checked = q.get("来源检查", 0)
+    return f"{q.get(SOURCE_WRONG, 0)}/{checked}" if checked else "—"
 
 
 def render_markdown(meta: dict[str, Any], cases: list[dict[str, Any]], changes: list[dict[str, str]],
@@ -77,28 +92,36 @@ def render_markdown(meta: dict[str, Any], cases: list[dict[str, Any]], changes: 
         lines[-1] += f" · DeepSeek 不可用，{fallback} 次调用由备用模型 {meta.get('llm_fallback_model') or ''} 回答"
     lines.append("")
     total = {CORRECT: 0, WRONG: 0, MISSING: 0, PENDING: 0}
+    total_q = {SOURCE_WRONG: 0, "来源检查": 0, SILENT: 0}
     lines += [
-        "| 案件 | 正确 | 错误 | 缺失 | 待定 | 准确率 | 暂停 | 就绪度 | OCR 页（调用/缓存） | LLM（调用/缓存） | 耗时 |",
-        "|---|---|---|---|---|---|---|---|---|---|---|",
+        "| 案件 | 正确 | 错误 | 缺失 | 待定 | 准确率 | 来源错误 | 静默错误 | 暂停 | 就绪度 "
+        "| OCR 页（调用/缓存） | LLM（调用/缓存） | 耗时 |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for c in cases:
         s = c.get("summary") or {}
         for k in total:
             total[k] += s.get(k, 0)
+        q = c.get("quality") or {}
+        for k in total_q:
+            total_q[k] += q.get(k, 0)
         st = c.get("stats") or {}
         name = c.get("title") or c["case"]
         if c.get("error"):
-            lines.append(f"| {name} | 运行出错 | | | | | | | | | {c.get('duration_s')} 秒 |")
+            lines.append(f"| {name} | 运行出错 | | | | | | | | | | | {c.get('duration_s')} 秒 |")
             continue
         lines.append(
             f"| {name} | {s.get(CORRECT, 0)} | {s.get(WRONG, 0)} | {s.get(MISSING, 0)} | "
-            f"{s.get(PENDING, 0)} | {_pct(accuracy(s))} | {len(c.get('pauses') or [])}"
+            f"{s.get(PENDING, 0)} | {_pct(accuracy(s))} | {_source_cell(q)} | {q.get(SILENT, 0)} | "
+            f"{len(c.get('pauses') or [])}"
             f"{'（卡住）' if c.get('stuck') else ''} | {c.get('readiness')} | "
             f"{st.get('ocr_calls', 0)}/{st.get('ocr_hits', 0)} | "
             f"{st.get('llm_calls', 0)}/{st.get('llm_hits', 0)} | {c.get('duration_s')} 秒 |"
         )
     lines += ["", f"**合计**：正确 {total[CORRECT]}，错误 {total[WRONG]}，缺失 {total[MISSING]}，"
-              f"待定 {total[PENDING]}，准确率 {_pct(accuracy(total))}（待定不计分）。", ""]
+              f"待定 {total[PENDING]}，准确率 {_pct(accuracy(total))}（待定不计分）；"
+              f"来源错误 {_source_cell(total_q)}（填了预期来源的字段中），静默错误 {total_q[SILENT]}"
+              "（审核页显示「正常」，但值错 / 应标待核实 / 回原文未命中）。", ""]
 
     lines.append(f"## 与上次运行对比{f'（{prev_run}）' if prev_run else ''}")
     lines.append("")
@@ -127,11 +150,18 @@ def render_markdown(meta: dict[str, Any], cases: list[dict[str, Any]], changes: 
             lines.append(f"- 暂停（{p['kind']}）：{_cell(p['question'])} → {ans}")
         if c.get("pauses"):
             lines.append("")
-        bad = [r for r in c.get("results") or [] if r["verdict"] in (WRONG, MISSING)]
+        bad = [
+            r for r in c.get("results") or []
+            if r["verdict"] in (WRONG, MISSING) or r.get("source_ok") is False or r.get("silent")
+        ]
         if bad:
-            lines += ["| 字段 | 结论 | 标准值 | 系统值 | 系统出处 |", "|---|---|---|---|---|"]
             lines += [
-                f"| `{r['key']}` | {r['verdict']} | {_cell(r['expected'])} | {_cell(r['actual'])} | {_cell(r['src'])} |"
+                "| 字段 | 结论 | 标准值 | 系统值 | 审核页显示 | 来源核对 | 系统出处 |",
+                "|---|---|---|---|---|---|---|",
+            ]
+            lines += [
+                f"| `{r['key']}` | {_label(r)} | {_cell(r['expected'])} | {_cell(r['actual'])} | "
+                f"{r.get('shown') or '—'} | {_source_check(r)} | {_cell(r['src'])} |"
                 for r in bad
             ]
         else:
@@ -141,6 +171,15 @@ def render_markdown(meta: dict[str, Any], cases: list[dict[str, Any]], changes: 
             lines += ["", "待定（不计分）：" + "；".join(f"`{r['key']}`（{r['note']}）" for r in pend)]
         lines.append("")
     return "\n".join(lines)
+
+
+def _source_check(r: dict[str, Any]) -> str:
+    """来源核对一栏：预期来源 vs 回原文实际命中的文件。"""
+    if r.get("source_ok") is None:
+        return "—"
+    found = r.get("verified_source")
+    got = f"《{_cell(found)}》" if found else "原文未命中"  # 文件名可能含「|」，转义后再进表格
+    return f"{'✓' if r['source_ok'] else '✗'} 应为「{_cell(r.get('expected_source'))}」，实际{got}"
 
 
 def write_report(out_dir: str, meta: dict[str, Any], cases: list[dict[str, Any]],
