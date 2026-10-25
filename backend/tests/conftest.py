@@ -20,6 +20,9 @@ def isolated_case_storage(tmp_path, monkeypatch):
     # 账号库同样隔离；登录默认关闭（与本地开发一致），登录相关测试自行开启
     monkeypatch.setattr(config, "AUTH_DB_PATH", str(tmp_path / "auth.sqlite"))
     monkeypatch.setattr(config, "AUTH_ENABLED", False)
+    # 每日小结：写临时目录，且不随 TestClient 的 lifespan 自动运行（会发 Key 检查的外部请求）
+    monkeypatch.setattr(config, "DAILY_SUMMARY_DIR", str(tmp_path / "daily_summary"))
+    monkeypatch.setattr(config, "DAILY_SUMMARY_ENABLED", False)
     guard.reset()
     yield
     # 进行中的分析任务属于测试自己的事件循环，跨测试复用会出错，清空

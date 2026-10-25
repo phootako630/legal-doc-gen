@@ -31,7 +31,7 @@ from app.agent.graph import get_graph, reset_graph  # noqa: E402
 from app.agent.runner import active_runs, is_draining, retention_loop, start_draining  # noqa: E402
 from app import config  # noqa: E402
 from app.config import CORS_ORIGINS  # noqa: E402
-from app.services import auth_store, file_store, readiness, run_log  # noqa: E402
+from app.services import auth_store, daily_summary, file_store, readiness, run_log  # noqa: E402
 from app.routers import (  # noqa: E402
     analyze,
     auth,
@@ -48,7 +48,8 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """启动时建好 checkpoint 库（尽早暴露路径/权限问题）并开始定时清理过期案件数据，关闭时收尾。"""
+    """启动时建好 checkpoint 库（尽早暴露路径/权限问题），开始定时清理过期案件数据、
+    每天写运行小结，关闭时收尾。"""
     if config.AUTH_ENABLED:
         users = await asyncio.to_thread(auth_store.list_users)  # 顺带建好账号库
         if not users:
@@ -56,11 +57,14 @@ async def lifespan(_app: FastAPI):
     else:
         logger.warning("未开启登录（AUTH_ENABLED!=1）：所有接口无需登录，仅限本地开发")
     await get_graph()
-    purge_task = asyncio.create_task(retention_loop())
+    tasks = [asyncio.create_task(retention_loop())]
+    if config.DAILY_SUMMARY_ENABLED:
+        tasks.append(asyncio.create_task(daily_summary.daily_loop()))
     yield
-    purge_task.cancel()
-    with suppress(asyncio.CancelledError):
-        await purge_task
+    for task in tasks:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
     await reset_graph()
 
 

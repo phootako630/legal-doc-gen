@@ -401,7 +401,7 @@ legal-doc-app/
 │   │   │   ├── anchoring.py         # 值回原文命中/定位
 │   │   │   ├── auth_store.py        # 账号与会话（SQLite，scrypt 哈希；令牌只存摘要）
 │   │   │   ├── login_guard.py       # 登录输错锁定
-│   │   │   ├── run_log.py           # 运行日志（JSONL：节点耗时/断点/LLM token/OCR 页数/律师改动/登录账号名；只记 key 不记取值，`tests/test_log_secrecy.py` 守着；按天切分、保留 `RUN_LOG_RETENTION_DAYS`；律师改动对比 checkpoint 里交给律师时的字段，重启不丢；`scripts/usage_report.py` 按账号统计。#75：节点内的 llm_call / ocr_batch 自动带 `node`，llm_call 带耗时与提示词版本（模板文件名@哈希），ocr_batch 带单页耗时分布与超时 / 限流页数，节点出错记固定 `error_category`（`services/error_category.py`），另有 `dashscope_key_switch`（OCR 与 LLM 备用路径改用付费 key，`path` 区分）、resume 的 `wait_s`、过期仍停在断点的 `abandoned`；`scripts/cost_report.py` 按 `.env` 的 `COST_PRICES` 汇总每案 / 每节点 / 每模型成本、错误类别、断点等待中位数与放弃率）
+│   │   │   ├── run_log.py           # 运行日志（JSONL：节点耗时/断点/LLM token/OCR 页数/律师改动/登录账号名；只记 key 不记取值，`tests/test_log_secrecy.py` 守着；按天切分、保留 `RUN_LOG_RETENTION_DAYS`；律师改动对比 checkpoint 里交给律师时的字段，重启不丢；`scripts/usage_report.py` 按账号统计。#75：节点内的 llm_call / ocr_batch 自动带 `node`，llm_call 带耗时与提示词版本（模板文件名@哈希），ocr_batch 带单页耗时分布与超时 / 限流页数，节点出错记固定 `error_category`（`services/error_category.py`），另有 `dashscope_key_switch`（OCR 与 LLM 备用路径改用付费 key，`path` 区分）、resume 的 `wait_s`、过期仍停在断点的 `abandoned`；`scripts/cost_report.py` 按 `.env` 的 `COST_PRICES` 汇总每案 / 每节点 / 每模型成本、错误类别、断点等待中位数与放弃率，计算在 `services/cost_summary.py`；`services/daily_summary.py` 每天 8 点（北京时间）后汇总前一天写 `data/daily_summary/YYYY-MM-DD.md`，含 Key 连通性检查，超过 `ALERT_*` 阈值的列入「需要关注」，不含案件内容，目前只写文件、以后加邮件）
 │   │   │   └── company_lookup.py    # 联网企业信息查询
 │   │   └── config.py
 │   ├── scripts/                     # 运维脚本（账号管理、反馈查看）+ 案件 eval（eval_cases.py、case_eval/）

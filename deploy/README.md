@@ -194,6 +194,22 @@ docker compose exec backend python scripts/cost_report.py --days 7
 ```
 
   金额按 `backend/.env` 的 `COST_PRICES` 换算（格式见 `.env.example`），单价以 DeepSeek / 阿里云百炼控制台价格页为准，并把取值日期写进 `COST_PRICES_DATE`；没配单价时只列 token 与页数，金额显示「未配置单价」。
+- 每日运行小结：后端每天 8 点（北京时间，`DAILY_SUMMARY_HOUR`）后自动汇总前一天，写到数据卷里的 `daily_summary/YYYY-MM-DD.md`（服务停了几天也会从最近一份逐日补写，读日志或写文件失败则下一小时重试；与运行日志同一保留期）。内容只有次数、比例、金额和 Key 检查结果，不含案件内容：分析次数、分析中断次数与错误类别、OCR 失败率、改用备用模型次数、改用付费 key 次数、成本，以及用各 Key 请求一次模型列表（不计费）的连通性。超过阈值的项列在文件开头「需要关注」，并在 `docker compose logs backend` 里记一条警告。阈值都在 `backend/.env` 里调（变量与默认值见 `backend/app/config.py`「每日运行小结」）：
+
+| 变量 | 默认 | 含义 |
+|---|---|---|
+| `ALERT_MAX_NODE_ERRORS` | 3 | 一天内分析中断超过此次数 |
+| `ALERT_MAX_OCR_FAIL_RATE` / `ALERT_MIN_OCR_PAGES` | 0.1 / 20 | OCR 失败页占比超过 10%（当天不足 20 页不判） |
+| `ALERT_MAX_LLM_FALLBACKS` | 3 | DeepSeek 不可用、改用备用模型超过此次数 |
+| `ALERT_MAX_DAILY_COST` | 0（不判） | 当天成本（元）超过此值 |
+| — | — | 改用付费备用 key、Key 被拒或连不上：出现即列入 |
+
+```bash
+docker compose exec backend sh -c 'ls data/daily_summary; cat data/daily_summary/$(date -d yesterday +%F).md'
+docker compose exec backend python scripts/daily_summary.py --date 2026-10-24   # 手动重新生成某天
+```
+
+  目前只写服务器文件；以后要发到运营律师邮箱，在 `services/daily_summary.deliver` 加邮件通道。`DAILY_SUMMARY_ENABLED=0` 关闭。
 
 ### 6.1 案件 eval（开发用）
 
