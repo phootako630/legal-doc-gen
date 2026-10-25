@@ -106,6 +106,20 @@ docker compose ps                   # backend 显示 healthy 即正常
 docker compose logs -f backend      # 看后端日志
 ```
 
+后端有两个检查接口，都只在容器内部访问得到（nginx 不转发）：
+
+| 接口 | 查什么 | 谁在用 |
+|---|---|---|
+| `/healthz` | 进程活着 | docker 健康检查：连续失败就重启容器（`docker compose ps` 的 healthy 就是它） |
+| `/readyz` | checkpoint 库能读写、数据目录磁盘剩余 ≥ `READY_MIN_FREE_MB`（默认 500MB）、DeepSeek / DashScope Key 已配置 | 部署脚本：新版本不就绪就回滚，并打印哪一项没过 |
+
+磁盘写满、Key 没配，重启容器也修不好，所以 docker 只看 `/healthz`；`/readyz` 不调外部接口，Key 是否真能用不在这里查。手动查看：
+
+```bash
+docker compose exec backend python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/readyz').read().decode())"
+```
+（未就绪时返回 503，命令会报 HTTPError；看 `docker compose logs backend` 或部署脚本打印的结果）
+
 更新到最新代码：
 
 ```bash

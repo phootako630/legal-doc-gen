@@ -59,7 +59,20 @@ env_value() {
   printf '%s' "${v:-$2}"
 }
 
-# 检查健康：后端 healthy + 经 nginx 能访问登录状态接口
+# 后端就绪：/readyz 查 checkpoint 库读写、磁盘余量、Key 是否配置（只在容器内部可访问）。
+# 未就绪时打印各项结果（只有检查项名称和说明，不含案件内容），方便看是哪一项没过。
+# 回滚到还没有 /readyz 的旧版本时（404）按就绪处理，免得回滚本身被判失败
+backend_ready() {
+  docker compose exec -T backend python -c \
+    "import sys, urllib.error, urllib.request
+try:
+    urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=8)
+except urllib.error.HTTPError as e:
+    if e.code == 404: sys.exit(0)
+    print(e.read().decode('utf-8'), file=sys.stderr); sys.exit(1)" 2>&1
+}
+
+# 检查健康：后端就绪 + 经 nginx 能访问登录状态接口
 check() {
   local mode url
   mode="$(env_value NGINX_MODE http)"
@@ -68,13 +81,15 @@ check() {
   else
     url="http://127.0.0.1:$(env_value HTTP_PORT 80)/api/auth/me"
   fi
+  local ready=""
   for _ in $(seq 1 20); do
     # -k：证书签给域名，本机用 IP 访问只验证服务通不通
-    if curl -fsk --max-time 5 "$url" | grep -q '"auth_enabled"'; then
+    if ready="$(backend_ready)" && curl -fsk --max-time 5 "$url" | grep -q '"auth_enabled"'; then
       return 0
     fi
     sleep 3
   done
+  [ -n "$ready" ] && echo "!! 后端未就绪：$ready" >&2
   return 1
 }
 

@@ -23,13 +23,15 @@ import asyncio  # noqa: E402
 from contextlib import asynccontextmanager, suppress  # noqa: E402
 
 from fastapi import FastAPI  # noqa: E402
+from fastapi.responses import JSONResponse  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
+from app.agent import checkpoint  # noqa: E402
 from app.agent.graph import get_graph, reset_graph  # noqa: E402
 from app.agent.runner import active_runs, is_draining, retention_loop, start_draining  # noqa: E402
 from app import config  # noqa: E402
 from app.config import CORS_ORIGINS  # noqa: E402
-from app.services import auth_store  # noqa: E402
+from app.services import auth_store, file_store, readiness, run_log  # noqa: E402
 from app.routers import (  # noqa: E402
     analyze,
     auth,
@@ -100,6 +102,30 @@ async def busy() -> dict:
     return {"running": active_runs(), "draining": is_draining()}
 
 
-@app.get("/")
+# 健康检查分两层（#76），都不在 /api 下、nginx 不转发，只有容器内部访问得到：
+# /healthz 只说明进程活着（docker HEALTHCHECK 用，挂了就重启）；/readyz 说明能正常处理案件
+# （checkpoint 库能读写、磁盘够、Key 已配置），部署脚本用它判断新版本能否上线。
+@app.get("/healthz")
+@app.get("/")  # 旧地址，保留给还在用它的检查
 async def health_check() -> dict[str, str]:
     return {"status": "ok", "message": "服务运行正常"}
+
+
+@app.get("/readyz")
+async def ready_check() -> JSONResponse:
+    try:
+        await checkpoint.probe()
+        db = readiness.Check("checkpoint 库读写", True, "正常")
+    except Exception as exc:  # noqa: BLE001 — 任何失败都算未就绪，只报异常类型
+        db = readiness.Check("checkpoint 库读写", False, f"失败（{type(exc).__name__}）")
+    min_mb = config.READY_MIN_FREE_MB
+    checks = [
+        db,
+        readiness.check_disk("上传目录磁盘空间", file_store.UPLOAD_DIR, min_mb),
+        readiness.check_disk("checkpoint 目录磁盘空间", config.CHECKPOINT_DB_PATH, min_mb),
+        readiness.check_disk("运行日志目录磁盘空间", run_log.RUN_LOG_PATH, min_mb),
+        readiness.check_key("DEEPSEEK_API_KEY", config.DEEPSEEK_API_KEY),
+        readiness.check_key("DASHSCOPE_API_KEY", config.DASHSCOPE_API_KEY),
+    ]
+    body = readiness.summarize(checks)
+    return JSONResponse(body, status_code=200 if body["ready"] else 503)

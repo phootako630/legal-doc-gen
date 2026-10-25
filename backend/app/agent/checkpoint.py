@@ -100,6 +100,20 @@ async def close() -> None:
         await conn.close()
 
 
+async def probe() -> None:
+    """就绪检查：在库里写一行再读回（磁盘写满、文件权限坏了都会在这里抛异常）。不碰案件数据。"""
+    await get_saver()
+    assert _conn is not None
+    stamp = time.time()
+    await _conn.execute("CREATE TABLE IF NOT EXISTS health_probe (id INTEGER PRIMARY KEY, ts REAL)")
+    await _conn.execute("INSERT OR REPLACE INTO health_probe (id, ts) VALUES (1, ?)", (stamp,))
+    await _conn.commit()
+    async with _conn.execute("SELECT ts FROM health_probe WHERE id = 1") as cur:
+        row = await cur.fetchone()
+    if row is None or row[0] != stamp:
+        raise RuntimeError("写入后读不回")
+
+
 async def record_run(run_id: str, owner: str | None = None) -> None:
     """登记会话创建时间（过期清理的依据）与发起分析的登录账号（按账号隔离案件）。"""
     await get_saver()
