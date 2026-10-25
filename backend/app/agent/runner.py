@@ -234,6 +234,16 @@ def request_fingerprint(
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _legacy_fingerprint(files: list[dict], internet_allowed: bool) -> str:
+    """按账号隔离之前的摘要格式（不含账号）：升级前已落盘的请求编号用它比对（#93 评审）。"""
+    raw = json.dumps(
+        {"files": files, "internet_allowed": internet_allowed},
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 def _running_task(key: str, fingerprint: str) -> asyncio.Task[CaseState] | None:
     """同编号正在运行（或刚成功结束、还没从字典移除）的任务；编号对应别的材料则报冲突。"""
     entry = _inflight.get(key)
@@ -326,7 +336,12 @@ async def run_analyze_once(
         saved = await checkpoint.find_analyze_key(key)
         if saved is not None:
             saved_fp, run_id = saved
-            if saved_fp != fingerprint:
+            # 升级前落盘的编号用旧摘要（不含账号）：材料一致、会话也允许当前账号访问（旧会话没记账号）
+            # 时照常接回，否则处理页「重试」会一直 409
+            legacy_ok = saved_fp == _legacy_fingerprint(
+                files, internet_allowed
+            ) and await checkpoint.can_access(run_id, owner)
+            if saved_fp != fingerprint and not legacy_ok:
                 raise IdempotencyConflict(key)
             case = await get_case(run_id, owner)
             if case is not None:

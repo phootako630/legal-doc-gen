@@ -138,3 +138,35 @@ def test_old_database_gets_owner_column(tmp_path, monkeypatch):
     con = sqlite3.connect(path)
     assert "owner" in {row[1] for row in con.execute("PRAGMA table_info(run_meta)")}
     con.close()
+
+
+def test_retry_with_key_saved_before_upgrade(monkeypatch):
+    # 升级前落盘的请求编号（摘要不含账号）+ 旧会话（没记账号）：原律师用同一编号、同一材料重试，
+    # 照常接回，不 409、不重跑（#93 评审）
+    _patch_chat(monkeypatch)  # 只够一次分析：若重跑，mock 用尽会报错
+    old = asyncio.run(runner.run_analyze(_FILES, True))  # 升级前：不记账号
+    legacy_fp = runner._legacy_fingerprint(_FILES, True)
+    asyncio.run(checkpoint.save_analyze_key("key-legacy-0001", legacy_fp, old.run_id))
+
+    again = asyncio.run(
+        runner.run_analyze_once("key-legacy-0001", _FILES, True, "lawyer01")
+    )
+    assert again.run_id == old.run_id
+    # 材料不同仍然 409
+    other_files = [{"filename": "审批表.pdf", "text": "另一份材料"}]
+    with pytest.raises(runner.IdempotencyConflict):
+        asyncio.run(
+            runner.run_analyze_once("key-legacy-0001", other_files, True, "lawyer01")
+        )
+
+
+def test_new_key_of_other_owner_still_conflicts_even_if_legacy_shape(monkeypatch):
+    # 新会话（记了账号）即使摘要按旧格式也对得上，别的账号仍然接不上
+    _patch_chat(monkeypatch)
+    mine = asyncio.run(runner.run_analyze(_FILES, True, owner="lawyer01"))
+    legacy_fp = runner._legacy_fingerprint(_FILES, True)
+    asyncio.run(checkpoint.save_analyze_key("key-legacy-0002", legacy_fp, mine.run_id))
+    with pytest.raises(runner.IdempotencyConflict):
+        asyncio.run(
+            runner.run_analyze_once("key-legacy-0002", _FILES, True, "lawyer02")
+        )
