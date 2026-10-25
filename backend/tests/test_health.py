@@ -70,3 +70,15 @@ def test_disk_check_walks_up_to_existing_dir(tmp_path):
 def test_readyz_not_behind_login(keys, monkeypatch):
     monkeypatch.setattr(config, "AUTH_ENABLED", True)
     assert TestClient(app).get("/readyz").status_code == 200
+
+
+def test_concurrent_probes_do_not_clobber_each_other():
+    # 并发的 /readyz 各写各的行：不会读到别人的值而误报失败，探测行用完即删
+    import asyncio
+
+    async def go():
+        await asyncio.gather(*(checkpoint.probe() for _ in range(30)))
+        async with checkpoint._conn.execute("SELECT COUNT(*) FROM health_probe") as cur:
+            return (await cur.fetchone())[0]
+
+    assert asyncio.run(go()) == 0

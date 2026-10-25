@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+import uuid
 
 import aiosqlite
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -101,16 +102,19 @@ async def close() -> None:
 
 
 async def probe() -> None:
-    """就绪检查：在库里写一行再读回（磁盘写满、文件权限坏了都会在这里抛异常）。不碰案件数据。"""
+    """就绪检查：在库里写一行再读回、删掉（磁盘写满、文件权限坏了都会在这里抛异常）。不碰案件数据。
+    每次探测用自己的随机行：并发的探测之间有 await，共用一行会互相覆盖、误报读不回（#102 评审）。"""
     await get_saver()
     assert _conn is not None
-    stamp = time.time()
-    await _conn.execute("CREATE TABLE IF NOT EXISTS health_probe (id INTEGER PRIMARY KEY, ts REAL)")
-    await _conn.execute("INSERT OR REPLACE INTO health_probe (id, ts) VALUES (1, ?)", (stamp,))
+    token = uuid.uuid4().hex
+    await _conn.execute("CREATE TABLE IF NOT EXISTS health_probe (token TEXT PRIMARY KEY, ts REAL)")
+    await _conn.execute("INSERT INTO health_probe (token, ts) VALUES (?, ?)", (token, time.time()))
     await _conn.commit()
-    async with _conn.execute("SELECT ts FROM health_probe WHERE id = 1") as cur:
+    async with _conn.execute("SELECT 1 FROM health_probe WHERE token = ?", (token,)) as cur:
         row = await cur.fetchone()
-    if row is None or row[0] != stamp:
+    await _conn.execute("DELETE FROM health_probe WHERE token = ?", (token,))
+    await _conn.commit()
+    if row is None:
         raise RuntimeError("写入后读不回")
 
 
