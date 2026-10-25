@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import type { FlowStep, UploadResponse, CaseState } from '@/lib/types';
 import { newRequestKey } from '@/lib/request-key';
 import { clearCaseSession, saveAnalyzeSession, saveCaseSession } from '@/lib/case-session';
+import { setErrorContext } from '@/lib/error-report';
 
 interface FlowState {
   step: FlowStep;
@@ -54,6 +55,10 @@ export function useComplaintFlow(): UseComplaintFlowReturn {
   useEffect(() => {
     if (inCase && runId) saveCaseSession(runId, state.reviewEdits);
   }, [inCase, runId, state.reviewEdits]);
+  // 前端报错上报带上所在步骤与会话编号（不带任何字段取值）
+  useEffect(() => {
+    setErrorContext(state.step, runId);
+  }, [state.step, runId]);
   // 处理中记下分析请求编号：刷新后上传页可接回同一次分析（后端还在跑或已跑完）
   const pendingKey = state.step === 'processing' ? state.analyzeKey : null;
   useEffect(() => {

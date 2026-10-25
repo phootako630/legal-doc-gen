@@ -1,4 +1,4 @@
-# CI：PR / master 推送时跑后端 ruff + pytest、前端类型检查与构建
+# CI：PR / master 推送时跑后端 ruff + pytest、前端 lint + vitest + 类型检查与构建
 # 全部离线：后端测试已 mock LLM / OCR，不需要任何 API 密钥
 name: CI
 
@@ -48,5 +48,6 @@ jobs:
           cache-dependency-path: frontend/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
+      - run: pnpm test
       # build 含 tsc -b 类型检查
       - run: pnpm build

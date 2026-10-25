@@ -189,6 +189,7 @@ GET /api/case/{run_id}       # 取回会话当前状态（刷新页面后「继�
 #   的改动统计只认本人，别人的会话一律按不存在（404）处理；未开启登录不限制，升级前的旧会话（无 owner）不限制
 GET /api/analyze/result?key=<请求编号>  # 处理页刷新后接回同一次分析：还在跑就等它跑完，已跑完直接返回；失败 / 重启 / 过期 404
 GET /healthz、GET /readyz（不在 /api 下，nginx 不转发）  # 存活（docker 健康检查）/ 就绪（checkpoint 库读写、磁盘余量 `READY_MIN_FREE_MB`、Key 已配置；deploy.sh 用，不就绪回滚）
+POST /api/client-error            # 前端上报未捕获异常 / 接口 5xx（#76）：只收错误类型、步骤、接口名、状态码、run_id（extra=forbid，不收消息原文），记运行日志 client_error，同一账号 / IP 每分钟 `CLIENT_ERROR_RATE_PER_MIN` 条；只在生产构建上报（`lib/error-report.ts`）
 POST /drain、GET /busy（不在 /api 下，nginx 不转发）  # deploy.sh 重启前先 drain（新的分析 / 恢复 503「系统正在更新」），再等 busy 归零（含编号落盘）
 
 POST /api/generate

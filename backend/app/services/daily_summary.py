@@ -42,6 +42,7 @@ class DayStats:
     ocr_requested: int = 0
     ocr_failed: int = 0
     llm_fallbacks: int = 0
+    client_errors: int = 0
     key_switches: int = 0
     cost: float = 0.0
     unpriced: bool = False
@@ -78,6 +79,8 @@ def collect(lines: list[str], day: date, prices: dict) -> DayStats:
             s.ocr_failed += rec.get("failed") or 0
         elif event == "llm_fallback":
             s.llm_fallbacks += 1
+        elif event == "client_error":
+            s.client_errors += 1
     summary = cost_summary.summarize(lines, None, prices)
     s.errors = summary["errors"]
     s.key_switches = summary["key_switches"]
@@ -156,6 +159,7 @@ def render(s: DayStats, keys: list[KeyCheck], found: list[str], prices_date: str
         f"- OCR 请求 {s.ocr_requested} 页，失败 {s.ocr_failed} 页"
         + ("" if rate is None else f"（{rate:.0%}）"),
         f"- 改用备用模型 {s.llm_fallbacks} 次；改用付费备用 key {s.key_switches} 次",
+        f"- 前端报错（未捕获异常、接口 5xx）{s.client_errors} 次",
         f"- 成本 {cost}（单价取值日期：{prices_date or '未填写'}）",
         "",
         "## 错误类别",

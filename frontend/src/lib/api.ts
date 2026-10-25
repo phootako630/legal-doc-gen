@@ -11,10 +11,12 @@ import type {
   FeedbackRequest,
 } from './types';
 import { noteLoginRequired } from './auth-api';
+import { noteServerError } from './error-report';
 
 const BASE = '/api';
 
-/** fetch 包装：将网络层异常（TypeError: Failed to fetch）转为中文错误；登录失效时通知回登录页 */
+/** fetch 包装：将网络层异常（TypeError: Failed to fetch）转为中文错误；登录失效时通知回登录页；
+ * 后端 5xx 上报（只报接口名与状态码） */
 async function safeFetch(url: string, opts?: RequestInit): Promise<Response> {
   let res: Response;
   try {
@@ -23,6 +25,7 @@ async function safeFetch(url: string, opts?: RequestInit): Promise<Response> {
     throw new Error('网络连接失败，请检查网络设置后重试');
   }
   noteLoginRequired(res);
+  noteServerError(url, res);
   return res;
 }
 

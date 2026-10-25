@@ -36,6 +36,7 @@ from app.routers import (  # noqa: E402
     analyze,
     auth,
     branches,
+    client_errors,
     extract,
     feedback,
     files,
@@ -88,6 +89,7 @@ app.include_router(resume.router, prefix="/api")
 app.include_router(generate.router, prefix="/api")
 app.include_router(branches.router, prefix="/api")
 app.include_router(feedback.router, prefix="/api")
+app.include_router(client_errors.router, prefix="/api")
 
 
 
