@@ -1,10 +1,14 @@
 # 冲突断点的候选值（#70）：按校验项列出各字段可选的取值及来源，律师在审核页一键选用
 #
 # 只罗列材料里已有的值和据此能算出的值，不替律师选：
-#   - 金额勾稽：三项的现值，以及用另外两项推出的值（总价 = 已付 + 未付 等）
-#   - 台数三源：各来源的台数（相同台数合并来源）
+#   - 金额勾稽：三项的现值，以及用另外两项推出的值（总价 = 已付 + 未付 等）；
+#     有一项不是纯数字写法（如「100万元」）就不推算，避免单位被剥掉后算错
+#   - 台数三源：各来源字段只给自身现值；写进起诉状的台数从各来源的台数里选（带出处）
 #   - 信用代码 / 日期：现值及出处（律师核对原件后修改）
 from __future__ import annotations
+
+import re
+import unicodedata
 
 from app.services.validators import ValidationCheck, parse_amount, parse_qty
 
@@ -19,6 +23,18 @@ _QTY_SOURCES = {
 def _node(fields: dict, key: str) -> dict:
     node = fields.get(key)
     return node if isinstance(node, dict) else {"value": node}
+
+
+# 纯数字金额：可带货币符号、千分位、末尾「元」；含「万 / 亿」等单位的不算
+_PLAIN_AMOUNT = re.compile(r"^(?:¥|RMB)?-?[\d,]+(?:\.\d+)?元?$")
+
+
+def _plain_amount(raw: object) -> float | None:
+    """只认数字或纯数字写法的金额；其余返回 None（parse_amount 会剥掉单位不换算）。"""
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return float(raw)
+    text = re.sub(r"\s", "", unicodedata.normalize("NFKC", str(raw or "")))
+    return parse_amount(text) if _PLAIN_AMOUNT.match(text) else None
 
 
 def _amount_text(amount: float) -> str:
@@ -48,7 +64,7 @@ def _add(options: dict[str, list[dict]], key: str, value: str, source: str) -> N
 
 
 def _amount_options(fields: dict, options: dict[str, list[dict]]) -> None:
-    t, p, u = (parse_amount(_node(fields, k).get("value")) for k in _AMOUNT_KEYS)
+    t, p, u = (_plain_amount(_node(fields, k).get("value")) for k in _AMOUNT_KEYS)
     for key in _AMOUNT_KEYS:
         cur = _current(fields, key)
         if cur:
@@ -68,15 +84,17 @@ def _amount_options(fields: dict, options: dict[str, list[dict]]) -> None:
 
 
 def _qty_options(fields: dict, options: dict[str, list[dict]]) -> None:
-    candidates = []
     for key, name in _QTY_SOURCES.items():
-        qty = parse_qty(_node(fields, key).get("value"))
-        if qty is not None:
-            candidates.append((str(qty), f"{name}写 {qty} 台"))
-    # 写进起诉状的台数与三个来源字段都可从这几个口径里选
-    for key in (*_QTY_SOURCES, "elevator_qty"):
-        for value, source in candidates:
-            _add(options, key, value, source)
+        node = _node(fields, key)
+        qty = parse_qty(node.get("value"))
+        if qty is None:
+            continue
+        # 来源字段只给自身现值：不能拿别的来源的台数补，否则会凭空造出一个来源
+        cur = _current(fields, key)
+        if cur:
+            _add(options, key, cur["value"], cur["source"])
+        src = str(node.get("src") or "").strip() or "出处未注明"
+        _add(options, "elevator_qty", str(qty), f"{name}写 {qty} 台：{src}")
 
 
 def conflict_options(

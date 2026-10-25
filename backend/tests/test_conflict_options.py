@@ -55,19 +55,39 @@ def test_negative_derived_amount_is_not_offered():
     assert [o["value"] for o in opts["unpaid_amount"]] == ["20000"]
 
 
-def test_qty_conflict_lists_each_source():
-    # 没有验收报告台数、审批表与合同不一致 → 冲突；同台数的来源合并
+def test_qty_conflict_lists_each_source_with_its_src():
+    # 没有验收报告台数、审批表与合同不一致 → 冲突。候选带字段实际出处（#97 评审）
     fields = {
-        "elevator_qty_by_approval": {"value": "6台", "src": "《审批表.pdf》"},
-        "elevator_qty_by_contract": {"value": 8, "src": "《安装合同.pdf》"},
+        "elevator_qty_by_approval": {"value": "6台", "src": "《审批表.pdf》第2页"},
+        "elevator_qty_by_contract": {"value": 8, "src": "《安装合同（二）.pdf》第5页"},
     }
     opts = conflict_options(_conflicts(fields), fields)
-    expected = [
-        {"value": "6", "source": "审批表写 6 台"},
-        {"value": "8", "source": "合同写 8 台"},
+    assert opts["elevator_qty"] == [
+        {"value": "6", "source": "审批表写 6 台：《审批表.pdf》第2页"},
+        {"value": "8", "source": "合同写 8 台：《安装合同（二）.pdf》第5页"},
     ]
-    assert opts["elevator_qty"] == expected
-    assert opts["elevator_qty_by_contract"] == expected
+    # 来源字段只给自身现值，不能用别的来源的台数补（#97 评审 P1）
+    assert opts["elevator_qty_by_contract"] == [
+        {"value": "8", "source": "现值：《安装合同（二）.pdf》第5页"}
+    ]
+    assert opts["elevator_qty_by_approval"] == [
+        {"value": "6台", "source": "现值：《审批表.pdf》第2页"}
+    ]
+    assert "elevator_qty_by_acceptance" not in opts
+
+
+def test_amount_with_chinese_unit_gets_no_derived_value():
+    # 「万元」等单位 parse_amount 会剥掉不换算：含单位时只列现值，不给推算值（#97 评审）
+    fields = _amounts("100万元", "60万元", "30万元")
+    opts = conflict_options(_conflicts(fields), fields)
+    assert opts["total_amount"] == [
+        {"value": "100万元", "source": "现值：《审批表.pdf》合同总额"}
+    ]
+    assert len(opts["paid_amount"]) == 1 and len(opts["unpaid_amount"]) == 1
+    # 带货币符号、千分位、「元」的纯数字写法照常推算
+    fields = _amounts("¥900,000.00元", "638,667.20", 256266.8)
+    opts = conflict_options(_conflicts(fields), fields)
+    assert opts["total_amount"][1] == {"value": "894934", "source": "按已付 + 未付计算"}
 
 
 def test_credit_code_conflict_offers_current_value_with_source():
