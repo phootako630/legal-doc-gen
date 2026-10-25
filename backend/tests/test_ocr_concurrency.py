@@ -123,3 +123,30 @@ def test_pdf_parsing_runs_off_event_loop(monkeypatch):
     out = asyncio.run(file_parser._parse_pdf("审批表.pdf", doc.tobytes(), "审批表"))
     assert out["is_scanned"] is False and out["page_count"] == 1
     assert seen and seen[0].startswith("parse")
+
+
+def test_slot_held_until_timed_out_request_finishes(monkeypatch):
+    # 超时 / 取消只是不再等，线程里的请求还在跑：名额要等它真正结束才放出，
+    # 否则排队的页马上开始，实际同时发往 DashScope 的请求超过上限（#92 评审）
+    state = _fake_ocr(monkeypatch, 0.6)
+    monkeypatch.setattr(ocr_engine, "OCR_GLOBAL_CONCURRENCY", 2)
+    monkeypatch.setattr(ocr_engine, "OCR_PAGE_TIMEOUT", 0.2)
+    pdf = _pdf(6)
+
+    async def scenario():
+        # 第一批：全部超时（请求要 0.6 秒，只等 0.2 秒）
+        first = await asyncio.gather(
+            *(ocr_engine.ocr_page(pdf, n) for n in range(1, 4)), return_exceptions=True
+        )
+        # 第二批：一页被取消，其余排队；旧请求线程还在跑时不得多发
+        tasks = [asyncio.create_task(ocr_engine.ocr_page(pdf, n)) for n in range(4, 7)]
+        await asyncio.sleep(0.05)
+        tasks[0].cancel()
+        second = await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.sleep(0.8)  # 让被放弃的线程跑完
+        return first, second
+
+    first, second = asyncio.run(scenario())
+    assert all(isinstance(e, TimeoutError) for e in first)
+    assert isinstance(second[0], asyncio.CancelledError)
+    assert state["max"] <= 2
