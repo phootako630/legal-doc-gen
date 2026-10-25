@@ -40,7 +40,7 @@ export default function App() {
             <AppLogo />
             <div>
               <h1 className="text-[15px] font-semibold leading-tight tracking-tight text-foreground">起诉状助手</h1>
-              <p className="text-[11px] leading-tight text-muted-foreground">安装合同纠纷 · 自动化生成系统</p>
+              <p className="text-xs leading-tight text-muted-foreground">安装合同纠纷 · 自动化生成系统</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -56,7 +56,7 @@ export default function App() {
               <Building2 className="h-4 w-4" />
               原告信息表
             </button>
-            <span className="rounded-full border border-border bg-muted px-3 py-1 text-[11px] font-medium text-muted-foreground">
+            <span className="rounded-full border border-border bg-muted px-3 py-1 text-xs font-medium text-muted-foreground">
               v1.0 内部版
             </span>
             {auth.authEnabled && auth.username && (
@@ -155,7 +155,7 @@ export default function App() {
 
       {/* Footer */}
       <footer className="mt-12 border-t border-border bg-white px-8 py-4">
-        <p className="mx-auto max-w-5xl text-center text-[11px] text-muted-foreground">
+        <p className="mx-auto max-w-5xl text-center text-xs text-muted-foreground">
           仅供内部律师团队使用 · 生成内容须经人工复核后方可使用 · 不构成法律意见
         </p>
       </footer>

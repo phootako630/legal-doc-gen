@@ -35,6 +35,32 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+  /* 字段状态色（审核页徽章、行底色、汇总、校验面板共用）：缺失=红、冲突=橙、待核实=黄、正常=绿 */
+  --color-status-missing: var(--status-missing);
+  --color-status-missing-bg: var(--status-missing-bg);
+  --color-status-missing-border: var(--status-missing-border);
+  --color-status-conflict: var(--status-conflict);
+  --color-status-conflict-bg: var(--status-conflict-bg);
+  --color-status-conflict-border: var(--status-conflict-border);
+  --color-status-review: var(--status-review);
+  --color-status-review-bg: var(--status-review-bg);
+  --color-status-review-border: var(--status-review-border);
+  --color-status-ok: var(--status-ok);
+  --color-status-ok-bg: var(--status-ok-bg);
+  --color-status-ok-border: var(--status-ok-border);
+}
+
+/* 中文排版：英文 / 数字用 Geist，中文明确落到苹方 / 微软雅黑（不写则 Windows 个别环境会落到宋体）；
+   字号刻度比 shadcn 默认大一档、行高放宽（中文字形密）；中文不收紧字距 */
+@theme {
+  --font-sans: 'Geist Variable', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif;
+  --text-xs: 0.8125rem;
+  --text-xs--line-height: 1.6;
+  --text-sm: 0.9375rem;
+  --text-sm--line-height: 1.7;
+  --text-base--line-height: 1.75;
+  --tracking-tight: 0;
+  --tracking-tighter: 0;
 }
 
 @layer components {
@@ -76,6 +102,19 @@
     --border: oklch(0.88 0.012 250);
     --input: oklch(0.91 0.010 250);
     --ring: oklch(0.50 0.10 250);
+    /* 状态色：色相拉开（红 25° / 橙 50° / 黄 90° / 绿 155°），浅底也分得清 */
+    --status-missing: oklch(0.52 0.20 25);
+    --status-missing-bg: oklch(0.97 0.02 25);
+    --status-missing-border: oklch(0.86 0.07 25);
+    --status-conflict: oklch(0.55 0.17 50);
+    --status-conflict-bg: oklch(0.96 0.04 55);
+    --status-conflict-border: oklch(0.82 0.10 55);
+    --status-review: oklch(0.52 0.11 90);
+    --status-review-bg: oklch(0.975 0.035 98);
+    --status-review-border: oklch(0.88 0.09 98);
+    --status-ok: oklch(0.50 0.12 155);
+    --status-ok-bg: oklch(0.97 0.03 155);
+    --status-ok-border: oklch(0.87 0.07 155);
     --chart-1: oklch(0.809 0.105 251.813);
     --chart-2: oklch(0.623 0.214 259.815);
     --chart-3: oklch(0.546 0.245 262.881);
@@ -123,9 +162,6 @@
     --sidebar-accent-foreground: oklch(0.985 0 0);
     --sidebar-border: oklch(1 0 0 / 10%);
     --sidebar-ring: oklch(0.556 0 0)
-  }
-  .theme {
-    --font-sans: 'Geist Variable', sans-serif
   }
   * {
     @apply border-border outline-ring/50;

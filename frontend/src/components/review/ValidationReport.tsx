@@ -18,17 +18,17 @@ function DeterministicChecks({ checks }: { checks: ValidationCheck[] }) {
           const color = !c.applicable
             ? 'bg-gray-300'
             : !c.passed
-              ? 'bg-orange-500'
+              ? 'bg-status-conflict'
               : c.needs_review
-                ? 'bg-amber-500'
-                : 'bg-emerald-500';
+                ? 'bg-status-review'
+                : 'bg-status-ok';
           const textColor = c.is_conflict
-            ? 'text-orange-700 font-medium'
+            ? 'text-status-conflict font-medium'
             : c.needs_review
-              ? 'text-amber-800'
+              ? 'text-status-review'
               : 'text-foreground/80';
           return (
-            <li key={c.key} className="flex items-start gap-2 text-[13px]">
+            <li key={c.key} className="flex items-start gap-2 text-sm">
               <span className={`mt-1.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full ${color}`} />
               <span className={textColor}>{c.message}</span>
             </li>
@@ -43,7 +43,7 @@ export function ValidationReport({ report, validations = [] }: ValidationReportP
   const hasReport = report.trim().length > 0;
 
   if (!hasReport && validations.length === 0) {
-    return <p className="text-sm text-muted-foreground italic">无校验报告</p>;
+    return <p className="text-sm text-muted-foreground">无校验报告</p>;
   }
 
   return (
@@ -51,7 +51,7 @@ export function ValidationReport({ report, validations = [] }: ValidationReportP
       <DeterministicChecks checks={validations} />
       {hasReport && (
         <div className="rounded-lg border border-border bg-white p-4 shadow-sm">
-          <p className="whitespace-pre-wrap text-[13px] leading-7 text-foreground/85">{report}</p>
+          <p className="whitespace-pre-wrap text-sm text-foreground/85">{report}</p>
         </div>
       )}
     </div>
