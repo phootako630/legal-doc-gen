@@ -126,6 +126,9 @@ UPLOAD_DIR = os.getenv("UPLOAD_DIR", os.path.join(_DATA_DIR, "uploads"))
 # 案件数据（checkpoint 里的字段与原文、上传的原始文件）保留天数，超期自动清除。
 # 这些是客户机密：保留期应由律所明确，此处先给保守默认值。
 CASE_RETENTION_DAYS = int(os.getenv("CASE_RETENTION_DAYS", "7"))
+# 就绪检查（/readyz）：数据目录所在磁盘剩余空间低于此值（MB）即未就绪。
+# 一次上传最多约 95MB，checkpoint 与日志另需余量，故默认 500MB
+READY_MIN_FREE_MB = int(os.getenv("READY_MIN_FREE_MB", "500"))
 
 # 管理员口令：只有持口令者能上传 / 回退原告信息表（查看、下载不限）。
 # 系统暂无用户账号体系，先用一个服务器端口令；未配置时任何人都不能更新。

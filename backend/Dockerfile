@@ -27,7 +27,8 @@ RUN mkdir -p data && chown app:app data && chmod 700 data
 
 USER app
 EXPOSE 8000
+# 只查进程存活（/healthz）：磁盘满、Key 缺失重启也修不好，由部署脚本查 /readyz（见 deploy/README.md）
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-    CMD python -c "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/', timeout=4).status == 200 else 1)"
+    CMD python -c "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=4).status == 200 else 1)"
 # 必须单 worker：上传 / 分析进度、进行中的分析任务都在进程内存里
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

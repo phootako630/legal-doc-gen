@@ -59,7 +59,21 @@ env_value() {
   printf '%s' "${v:-$2}"
 }
 
-# 检查健康：后端 healthy + 经 nginx 能访问登录状态接口
+# 后端就绪：/readyz 查 checkpoint 库读写、磁盘余量、Key 是否配置（只在容器内部可访问）。
+# 未就绪时打印各项结果（只有检查项名称和说明，不含案件内容），方便看是哪一项没过。
+# 参数 allow-404：只在回滚时传——旧版本可能还没有 /readyz，404 按就绪处理，免得回滚本身被判失败；
+# 新版本上线必须 200，接口意外缺失也算不就绪（#102 评审）
+backend_ready() {
+  docker compose exec -T backend python -c \
+    "import sys, urllib.error, urllib.request
+try:
+    urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=8)
+except urllib.error.HTTPError as e:
+    if e.code == 404 and sys.argv[1] == 'allow-404': sys.exit(0)
+    print(e.read().decode('utf-8'), file=sys.stderr); sys.exit(1)" "${1:-strict}" 2>&1
+}
+
+# 检查健康：后端就绪 + 经 nginx 能访问登录状态接口。参数原样交给 backend_ready（回滚时传 allow-404）
 check() {
   local mode url
   mode="$(env_value NGINX_MODE http)"
@@ -68,13 +82,15 @@ check() {
   else
     url="http://127.0.0.1:$(env_value HTTP_PORT 80)/api/auth/me"
   fi
+  local ready=""
   for _ in $(seq 1 20); do
     # -k：证书签给域名，本机用 IP 访问只验证服务通不通
-    if curl -fsk --max-time 5 "$url" | grep -q '"auth_enabled"'; then
+    if ready="$(backend_ready "${1:-strict}")" && curl -fsk --max-time 5 "$url" | grep -q '"auth_enabled"'; then
       return 0
     fi
     sleep 3
   done
+  [ -n "$ready" ] && echo "!! 后端未就绪：$ready" >&2
   return 1
 }
 
@@ -130,7 +146,7 @@ fi
 echo "!! 新版本启动或检查失败，回滚到 ${previous:0:7}" >&2
 docker compose logs --tail 60 backend >&2 || true
 git reset --quiet --hard "$previous"
-if up && check; then
+if up && check allow-404; then
   echo "!! 已回滚到 ${previous:0:7}，服务正常；请修复后重新部署" >&2
 else
   echo "!! 回滚后服务仍不正常，请登录服务器排查：docker compose ps / docker compose logs backend" >&2
