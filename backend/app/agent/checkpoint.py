@@ -62,8 +62,13 @@ async def get_saver() -> AsyncSqliteSaver:
             await conn.execute("PRAGMA journal_mode=WAL")  # 读写互不阻塞，崩溃后更安全
             await conn.execute(
                 "CREATE TABLE IF NOT EXISTS run_meta "
-                "(thread_id TEXT PRIMARY KEY, created_at REAL NOT NULL)"
+                "(thread_id TEXT PRIMARY KEY, created_at REAL NOT NULL, owner TEXT)"
             )
+            # 旧库没有 owner 列（按账号隔离案件之前建的）：补上，旧会话 owner 为空
+            async with conn.execute("PRAGMA table_info(run_meta)") as cur:
+                columns = {row[1] async for row in cur}
+            if "owner" not in columns:
+                await conn.execute("ALTER TABLE run_meta ADD COLUMN owner TEXT")
             # fingerprint：请求内容的摘要，防止同一编号被误用于另一组材料
             await conn.execute(
                 "CREATE TABLE IF NOT EXISTS analyze_keys "
@@ -95,15 +100,31 @@ async def close() -> None:
         await conn.close()
 
 
-async def record_run(run_id: str) -> None:
-    """登记会话创建时间，作为过期清理的依据。"""
+async def record_run(run_id: str, owner: str | None = None) -> None:
+    """登记会话创建时间（过期清理的依据）与发起分析的登录账号（按账号隔离案件）。"""
     await get_saver()
     assert _conn is not None
     await _conn.execute(
-        "INSERT OR IGNORE INTO run_meta (thread_id, created_at) VALUES (?, ?)",
-        (run_id, time.time()),
+        "INSERT OR IGNORE INTO run_meta (thread_id, created_at, owner) VALUES (?, ?, ?)",
+        (run_id, time.time(), owner),
     )
     await _conn.commit()
+
+
+async def can_access(run_id: str, user: str | None) -> bool:
+    """
+    该账号能否访问这个会话：只有发起分析的账号能看、能继续、能生成。
+    未开启登录（user 为空）不限制；升级前建的旧会话没有记录账号，也不限制（随 7 天保留期自然消失）。
+    """
+    if user is None:
+        return True
+    await get_saver()
+    assert _conn is not None
+    async with _conn.execute(
+        "SELECT owner FROM run_meta WHERE thread_id = ?", (run_id,)
+    ) as cur:
+        row = await cur.fetchone()
+    return row is None or row[0] is None or row[0] == user
 
 
 async def is_expired(run_id: str, retention_days: float | None = None) -> bool:

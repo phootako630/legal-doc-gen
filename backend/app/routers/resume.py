@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from app.agent.runner import Draining, get_case, run_resume
 from app.routers.analyze import DRAINING_DETAIL
 from app.agent.state import CaseState
-from app.services import llm_progress
+from app.services import llm_progress, run_log
 
 router = APIRouter()
 
@@ -31,7 +31,7 @@ async def resume(req: ResumeRequest) -> CaseState:
     # 恢复后仅重跑校验节点（校验高亮阶段），仍用同一进度模块驱动前端等待提示
     with llm_progress.track(req.progress_id, total_stages=3):
         try:
-            return await run_resume(req.run_id, req.decisions)
+            return await run_resume(req.run_id, req.decisions, run_log.current_user())
         except KeyError as e:
             raise HTTPException(
                 status_code=404, detail="会话不存在或已过期，请重新分析"
@@ -44,8 +44,12 @@ async def resume(req: ResumeRequest) -> CaseState:
 
 @router.get("/case/{run_id}", response_model=CaseState)
 async def get_case_state(run_id: str) -> CaseState:
-    """会话当前状态（与 resume 同样只凭 run_id 访问；过期会话按不存在处理）。"""
-    case = await get_case(run_id) if _RUN_ID_RE.fullmatch(run_id) else None
+    """会话当前状态（只有发起分析的账号能取回；过期 / 别人的会话按不存在处理）。"""
+    case = (
+        await get_case(run_id, run_log.current_user())
+        if _RUN_ID_RE.fullmatch(run_id)
+        else None
+    )
     if case is None:
         raise HTTPException(status_code=404, detail="上次的案件已过期或不存在，请重新上传材料")
     return case

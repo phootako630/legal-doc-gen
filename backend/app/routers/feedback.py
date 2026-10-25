@@ -33,8 +33,10 @@ class FeedbackResponse(BaseModel):
 @router.post("/feedback", response_model=FeedbackResponse)
 async def feedback(req: FeedbackRequest) -> FeedbackResponse:
     """保存律师反馈；会话不存在或已过期时拒绝（反馈必须能对应到具体案件）。"""
-    if not await checkpoint.run_exists(req.run_id) or await checkpoint.is_expired(
-        req.run_id
+    if (
+        not await checkpoint.run_exists(req.run_id)
+        or await checkpoint.is_expired(req.run_id)
+        or not await checkpoint.can_access(req.run_id, run_log.current_user())
     ):
         raise HTTPException(status_code=404, detail="会话不存在或已过期，反馈未保存")
     comment = (req.comment or "").strip() or None
