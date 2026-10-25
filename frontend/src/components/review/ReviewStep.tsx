@@ -149,7 +149,7 @@ export function ReviewStep({
       )}
 
       {/* 主体：左右分栏 */}
-      <div className="grid gap-4 md:grid-cols-[1fr_320px]">
+      <div className="grid gap-4 md:grid-cols-[1fr_360px]">
         {/* 左侧：字段审核表格 */}
         <Card className="shadow-sm">
           <CardHeader className="border-b border-border pb-4">

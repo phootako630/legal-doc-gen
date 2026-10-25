@@ -62,7 +62,7 @@ export const FieldTable = forwardRef<FieldTableHandle, FieldTableProps>(
     return (
       <div className="flex flex-col gap-3">
         {/* 摘要行 */}
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 pt-3 text-xs">
           <span className="text-muted-foreground">共 {rows.length} 个字段</span>
           {(counts.missing   ?? 0) > 0 && (
             <span className="flex items-center gap-1 font-medium text-status-missing">
@@ -96,13 +96,13 @@ export const FieldTable = forwardRef<FieldTableHandle, FieldTableProps>(
         </div>
 
         {/* 表格 */}
-        <div className="overflow-auto rounded-lg border border-border shadow-sm">
+        <div className="overflow-auto border-t border-border">
           <table className="w-full table-fixed text-sm">
             <colgroup>
-              <col className="w-[140px]" />
+              <col className="w-[160px]" />
               <col />
-              <col className="w-[130px]" />
-              <col className="w-[76px]" />
+              <col className="w-[200px]" />
+              <col className="w-[84px]" />
             </colgroup>
             <thead>
               <tr className="border-b border-border bg-muted/60">
@@ -122,11 +122,11 @@ export const FieldTable = forwardRef<FieldTableHandle, FieldTableProps>(
             </thead>
             {groups.map((g) => (
               <tbody key={g.title}>
-                <tr className="border-b border-border bg-muted/40">
+                <tr className="border-b border-border bg-secondary">
                   <th
                     colSpan={4}
                     scope="colgroup"
-                    className="py-1.5 pl-4 text-left text-xs font-semibold text-foreground/80"
+                    className="py-2 pl-4 text-left text-sm font-semibold text-secondary-foreground"
                   >
                     {g.title}
                     <span className="ml-2 font-normal text-muted-foreground">
