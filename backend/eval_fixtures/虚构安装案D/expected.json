@@ -1,0 +1,25 @@
+{
+  "title": "虚构安装案 D（一次性违约金为合同总价 5%、合同签订地管辖、县级市法院）",
+  "decisions": {},
+  "fields": {
+    "plaintiff_name_final": "日立电梯（中国）有限公司梧桐分公司",
+    "defendant_name": "昆山虚构实业有限公司",
+    "contract_sign_date": "2024年5月10日",
+    "total_amount": 80000,
+    "paid_amount": 40000,
+    "unpaid_amount": 40000,
+    "elevator_qty": 2,
+    "acceptance_latest_date": "2024年10月15日",
+    "payable_ratio": "100%",
+    "interest_term": "违约金",
+    "penalty_amount": 4000,
+    "contract_sign_place": {
+      "value": "昆山市",
+      "match": "contains"
+    },
+    "jurisdiction_text": {
+      "value": "昆山市人民法院",
+      "match": "contains"
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "title": "虚构安装案 C（合同 4 台含 1 台 VGE 家用电梯、验收报告 3 份；原告所在地法院）",
+  "decisions": {},
+  "fields": {
+    "plaintiff_name_final": "日立电梯（中国）有限公司梧桐分公司",
+    "defendant_name": "无锡虚构房地产开发有限公司",
+    "contract_sign_date": "2024年2月22日",
+    "total_amount": 160000,
+    "paid_amount": 120000,
+    "unpaid_amount": 40000,
+    "elevator_qty_contract": 4,
+    "elevator_qty": 3,
+    "elevator_qty_vge": 1,
+    "acceptance_latest_date": "2024年9月26日",
+    "payable_ratio": "100%",
+    "interest_term": "违约金",
+    "court_district": {
+      "value": "南京市鼓楼区",
+      "match": "contains"
+    }
+  }
+}

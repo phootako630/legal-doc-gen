@@ -7,6 +7,8 @@
     python scripts/eval_cases.py /srv/eval-cases --strict        # 严格回放：不调用任何接口（改规则后用）
     python scripts/eval_cases.py /srv/eval-cases --mode live     # 全部重新调用 OCR / LLM（换模型、改提示词后用）
     python scripts/eval_cases.py /srv/eval-cases --case 安装案2   # 只跑某个案件（可重复）
+    python scripts/eval_cases.py eval_fixtures --strict --baseline eval_fixtures/baseline.json
+                                                                  # 虚构案卷集 + 基线门槛（CI 用，变差即失败）
 
 目录结构：
     /srv/eval-cases/
@@ -59,6 +61,8 @@ os.environ["RUN_LOG_ENABLED"] = "0"
 
 from app import config  # noqa: E402
 from app.agent.graph import reset_graph  # noqa: E402
+from app.services import branch_registry  # noqa: E402
+from scripts.case_eval import baseline  # noqa: E402
 from scripts.case_eval.cache import MODES  # noqa: E402
 from scripts.case_eval.report import accuracy, find_previous, write_report  # noqa: E402
 from scripts.case_eval.runner import run_case  # noqa: E402
@@ -109,11 +113,19 @@ def main() -> None:
     parser.add_argument("--mode", choices=MODES, default="replay")
     parser.add_argument("--strict", action="store_true", help="严格回放：缓存未命中即报错，不调用接口")
     parser.add_argument("--out", help="报告目录，默认 <root>/_runs")
+    parser.add_argument("--baseline", help="与这份基线比较，变差或缓存未命中时退出码 1（CI 用）")
+    parser.add_argument("--update-baseline", action="store_true", help="把这次的结论写入 --baseline")
     args = parser.parse_args()
     if args.strict and args.mode != "replay":
         raise SystemExit("--strict 只用于 replay 模式")
+    if args.update_baseline and not args.baseline:
+        raise SystemExit("--update-baseline 需要同时给出 --baseline 路径")
 
     dirs = _case_dirs(args.root, args.case)
+    # 案卷根目录自带原告信息表（虚构案卷集 eval_fixtures/branch_info.json）时用它，不读线上那份
+    fixture_table = os.path.join(args.root, "branch_info.json")
+    if os.path.isfile(fixture_table):
+        branch_registry.BRANCH_INFO_PATH = fixture_table
     runs_dir = args.out or os.path.join(args.root, "_runs")
     run_name = datetime.now().strftime("%Y%m%d-%H%M%S")
     cases = asyncio.run(_run_all(dirs, args.mode, args.strict))
@@ -127,8 +139,21 @@ def main() -> None:
         "cases": [os.path.basename(d) for d in dirs],
     }
     prev = find_previous(runs_dir, run_name)
-    path = write_report(os.path.join(runs_dir, run_name), meta, cases, prev)
+    gate_text, failed = "", False
+    if args.baseline and args.update_baseline:
+        baseline.save(args.baseline, cases)
+        print(f"[eval] 已更新基线：{args.baseline}", flush=True)
+    elif args.baseline:
+        base = baseline.load(args.baseline)
+        if base is None:
+            raise SystemExit(f"找不到基线：{args.baseline}（第一次用 --update-baseline 生成）")
+        gate = baseline.compare(base, cases, args.root)
+        gate_text, failed = baseline.render(gate, args.baseline), gate.failed
+        print(gate_text, flush=True)
+    path = write_report(os.path.join(runs_dir, run_name), meta, cases, prev, gate_text)
     print(f"[eval] 报告：{path}", flush=True)
+    if failed:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
