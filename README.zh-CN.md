@@ -244,7 +244,7 @@ pnpm dev                   # http://localhost:5173，/api/* 代理转发到 :800
 检查与测试：
 
 ```bash
-cd backend && ruff check . && python -m pytest
+cd backend && python -m ruff check . && python -m pytest
 cd frontend && pnpm lint && pnpm build
 ```
 
