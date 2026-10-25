@@ -49,11 +49,10 @@ def test_full_flow_logs_no_field_values(monkeypatch, tmp_path):
     path = _use_log(monkeypatch, tmp_path)
     fields = {k: {"value": v, "src": "《审批表.pdf》"} for k, v in _SECRETS.items()}
     fields |= {k: {"value": v, "src": "《审批表.pdf》"} for k, v in _AMOUNTS.items()}
-    ok = {"can_proceed": True, "missing": [], "notes": ""}
     monkeypatch.setattr(
         nodes_mod,
         "chat",
-        AsyncMock(side_effect=[ok, fields, "说明\n---HIGHLIGHT---\n- 1"]),
+        AsyncMock(side_effect=[fields, "说明\n---HIGHLIGHT---\n- 1"]),
     )
     text = "审批表\n" + "\n".join(
         str(v) for v in (*_SECRETS.values(), *_AMOUNTS.values())

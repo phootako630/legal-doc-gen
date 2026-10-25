@@ -13,7 +13,6 @@ from app.agent import nodes as nodes_mod
 from app.services import auth_store
 
 _FILES = [{"filename": "审批表.pdf", "text": "虚构审批表"}]
-_CHECKLIST = {"can_proceed": True, "missing": [], "notes": ""}
 # 金额不勾稽 → 校验断点，会话停在待律师决定处，可以测 resume
 _FIELDS = {
     "total_amount": {"value": 900000, "src": "《审批表》"},
@@ -24,7 +23,7 @@ _FIELDS = {
 
 def _patch_chat(monkeypatch, runs: int = 1):
     monkeypatch.setattr(
-        nodes_mod, "chat", AsyncMock(side_effect=[_CHECKLIST, _FIELDS] * runs)
+        nodes_mod, "chat", AsyncMock(side_effect=[_FIELDS] * runs)
     )
 
 
@@ -68,7 +67,7 @@ def test_result_by_key_only_for_owner(monkeypatch):
 
 def test_result_of_running_analysis_only_for_owner(monkeypatch):
     gate = asyncio.Event()
-    replies = iter([_CHECKLIST, _FIELDS])
+    replies = iter([_FIELDS])
 
     async def slow_chat(*_a, **_k):
         await gate.wait()

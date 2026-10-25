@@ -57,10 +57,12 @@ from app.services.derived_fields import (
     retention_is_guarantee,
 )
 from app.services.llm_client import chat
+from app.services.materials import material_note, material_status
 from app.services.ocr_engine import ocr_page, pdf_page_count
 from app.services.prompt_loader import load_prompt
 from app.services.validators import (
     ValidationCheck,
+    check_materials,
     check_to_dict,
     parse_date,
     parse_qty,
@@ -251,27 +253,25 @@ async def _ocr_in_batches(pdf: bytes, page_nums: list[int]) -> list[dict]:
 
 
 async def checklist_node(state: GraphState) -> dict:
-    """材料清点：LLM 判断三类材料是否齐全；不足则设 pending（missing）并终止。"""
+    """材料清点：按律师在上传页确认的文件类型用代码判定齐全与否（不调 LLM，#69）。
+
+    不终止、不暂停：律师在上传页已看到缺什么，点了「材料不全，仍然分析」就照常继续，
+    缺的字段留【待补充】，缺材料的提醒放进校验面板（#70）。
+    """
     llm_progress.start_stage("材料清点", 1)
-    combined = build_combined_text(state["files"])
-    prompt = load_prompt("prompt-a-checklist.md", {"files_text": combined})
-    checklist: dict = await chat(  # type: ignore[assignment]
-        [{"role": "user", "content": prompt}], json_mode=True
-    )
-    update: dict = {"checklist": checklist}
-    if not checklist.get("can_proceed", True):
-        missing = checklist.get("missing", [])
-        notes = checklist.get("notes", "")
-        q = f"材料不足，无法继续处理。缺少：{'、'.join(missing) if missing else '未知'}"
-        if notes:
-            q += f"。备注：{notes}"
-        update["pending"] = {
-            "kind": "missing",
-            "question": q,
-            "options": [],
-            "field_keys": [],
-        }
-    return update
+    files = state.get("files", [])
+    status = material_status(f.get("identified_type", "未知") for f in files)
+    present = {f.get("identified_type") for f in files}
+    # 结构与旧版 LLM 清点结果一致：抽取提示词的「材料清点结果」不用改
+    checklist = {
+        "has_approval": "审批表" in present,
+        "has_contract": "合同" in present,
+        "has_acceptance": "验收报告" in present,
+        "can_proceed": status.can_proceed,
+        "missing": status.missing,
+        "notes": material_note(status),
+    }
+    return {"checklist": checklist}
 
 
 async def extract_node(state: GraphState) -> dict:
@@ -312,12 +312,21 @@ async def extract_node(state: GraphState) -> dict:
     return {"extracted_fields": fields}
 
 
+def _all_checks(state: GraphState, fields: dict) -> list[ValidationCheck]:
+    """字段校验 + 材料是否齐全（清点节点的结论，缺材料只提醒）。"""
+    checks = run_all_checks(fields)
+    checklist = state.get("checklist")
+    if checklist:  # 没跑过清点（如单测直接调本节点）时不报「材料齐全」
+        checks.append(check_materials(checklist.get("missing") or [], checklist.get("notes") or ""))
+    return checks
+
+
 async def validate_node(state: GraphState) -> dict:
     """确定性校验：有冲突则 interrupt 问律师，resume 后应用决定并复核。"""
     fields = copy.deepcopy(state["extracted_fields"])
     # 派生字段（逾期利息标准、管辖法院辖区）进审核页，律师可见可改
     apply_derived_fields(fields)
-    checks = run_all_checks(fields)
+    checks = _all_checks(state, fields)
     conflicts = [c for c in checks if c.is_conflict]
 
     if conflicts:
@@ -330,7 +339,7 @@ async def validate_node(state: GraphState) -> dict:
         decisions = interrupt(payload)
         fields = _apply_decisions(fields, decisions or {})
         apply_derived_fields(fields)  # 律师改了工程地点等依赖字段时刷新推定
-        checks = run_all_checks(fields)
+        checks = _all_checks(state, fields)
 
     # 冲突消解（若有）之后才进入 LLM 说明文本生成，进度对齐"校验高亮"阶段
     llm_progress.start_stage("校验高亮", 3)
@@ -1009,8 +1018,3 @@ async def retention_node(state: GraphState) -> dict:
     fields = copy.deepcopy(fields)
     fields["payable_ratio"] = {"value": answer, "src": "律师确认"}
     return {"extracted_fields": fields}
-
-
-def after_checklist(state: GraphState) -> str:
-    """清点后条件跳转：材料不足（pending）→ 终止；否则进入抽取。"""
-    return "end" if state.get("pending") else "extract"

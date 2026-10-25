@@ -32,7 +32,6 @@ def test_code_validation_drives_conflict_and_llm_only_phrases(monkeypatch):
     seen = _patch(
         monkeypatch,
         [
-            {"can_proceed": True},  # Step1 清点
             extracted,  # Step2 抽取
             "校验报告文本\n---HIGHLIGHT---\n- 高亮项1",  # Step3b 说明文本
         ],
@@ -74,7 +73,6 @@ def test_all_consistent_yields_no_conflict(monkeypatch):
     _patch(
         monkeypatch,
         [
-            {"can_proceed": True},
             extracted,
             "无冲突\n---HIGHLIGHT---\n",
         ],

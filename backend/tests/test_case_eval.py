@@ -142,12 +142,8 @@ _FIELDS = {
 
 
 async def _fake_chat(messages, json_mode=False):
-    content = messages[-1]["content"]
     if not json_mode:
         return "校验说明\n---HIGHLIGHT---\n- 无"
-    if "核查案件材料是否齐全" in content:  # 清点提示词（prompt-a-checklist.md）
-        return {"has_approval": True, "has_contract": True, "has_acceptance": False,
-                "can_proceed": True, "missing": [], "notes": ""}
     return json.loads(json.dumps(_FIELDS))
 
 
@@ -184,8 +180,8 @@ def test_run_case_live_then_strict_replay(tmp_path, monkeypatch):
     first = asyncio.run(run_case(case, mode="replay"))
     assert first["error"] is None, first["error"]
     assert first["summary"] == {CORRECT: 4, WRONG: 0, MISSING: 0, PENDING: 1}
-    # 清点 + 抽取两次；校验说明在 eval 里不生成（只供展示，且会让规则改动后回放未命中）
-    assert first["stats"]["llm_calls"] == 2 and "【待补充】" in first["complaint"]
+    # 只有抽取一次（清点由代码判定）；校验说明在 eval 里不生成（只供展示，且会让规则改动后回放未命中）
+    assert first["stats"]["llm_calls"] == 1 and "【待补充】" in first["complaint"]
     asyncio.run(reset_graph())  # 下一次 asyncio.run 是新的事件循环
 
     # 改规则后的典型用法：严格回放，不调用任何接口，结论不变
@@ -193,7 +189,7 @@ def test_run_case_live_then_strict_replay(tmp_path, monkeypatch):
     again = asyncio.run(run_case(case, mode="replay", strict=True))
     assert again["error"] is None, again["error"]
     assert again["summary"] == first["summary"]
-    assert again["stats"]["llm_calls"] == 0 and again["stats"]["llm_hits"] == 2
+    assert again["stats"]["llm_calls"] == 0 and again["stats"]["llm_hits"] == 1
 
     # 报告：results.json + report.md；第二次运行能找到上一次并对比
     runs = str(tmp_path / "_runs")

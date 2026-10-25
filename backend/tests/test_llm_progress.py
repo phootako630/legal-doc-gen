@@ -83,8 +83,6 @@ def test_concurrent_analyses_report_their_own_stages(monkeypatch):
         tid = llm_progress._table.current()  # noqa: SLF001 —— 断言 contextvar 已传入节点
         seen.append((tid, llm_progress.snapshot(tid)["stage"]))
         await asyncio.sleep(0)  # 让两个分析交错执行
-        if prompt == "prompt-a-checklist.md":
-            return {"can_proceed": True, "missing": [], "notes": ""}
         if prompt == "prompt-a-extract.md":
             return {"defendant_name": {"value": "某公司", "src": "《审批表.pdf》"}}
         return {} if json_mode else "说明\n---HIGHLIGHT---\n"
@@ -104,8 +102,9 @@ def test_concurrent_analyses_report_their_own_stages(monkeypatch):
     by_task: dict[str | None, list[str]] = {}
     for tid, stage in seen:
         by_task.setdefault(tid, []).append(stage)
-    expected = ["材料清点", "字段抽取", "校验高亮"]
-    # 每个分析都完整看到自己的三阶段，且没有落到“未绑定”(None) 名下
+    # 材料清点由代码判定、不调 LLM（#69），LLM 调用只发生在后两个阶段
+    expected = ["字段抽取", "校验高亮"]
+    # 每个分析的 LLM 调用都记在自己名下，且没有落到“未绑定”(None) 名下
     assert by_task["key-lawyer-0001"] == expected
     assert by_task["key-developer-02"] == expected
     assert None not in by_task

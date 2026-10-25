@@ -37,7 +37,7 @@ const STAGE_SUMMARIES: Record<StageKey, string> = {
 
 /** 各阶段的预计耗时提示（基于 DeepSeek 实际观测，帮律师建立等待预期） */
 const STAGE_HINTS: Record<StageKey, string> = {
-  checklist: '正在核对材料是否齐全，通常需要 10–30 秒',
+  checklist: '正在核对材料是否齐全（扫描版审批表要先识别文字，稍慢一些）',
   extract: '正在逐字段抽取并标注出处，本步最耗时，通常需要 1–2 分钟',
   validate: '正在交叉校验各文件间的数据一致性，通常需要 30–60 秒',
 };

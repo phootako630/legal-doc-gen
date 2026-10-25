@@ -1,4 +1,4 @@
-# LangGraph 状态图：清点 →(材料足)→ 抽取 → 校验(可 interrupt) → 结束
+# LangGraph 状态图：清点 → 抽取 → 校验(可 interrupt) → 结束
 #
 # interrupt/resume 的 checkpoint 存 SQLite（见 agent/checkpoint.py），服务重启后仍可恢复；
 # 未来接 PostgreSQL 时替换 checkpointer 即可，节点/工具层零改动。
@@ -8,7 +8,6 @@ from langgraph.graph import END, StateGraph
 
 from app.agent import checkpoint
 from app.agent.nodes import (
-    after_checklist,
     approval_ocr_node,
     checklist_node,
     contract_scan_node,
@@ -49,9 +48,8 @@ async def get_graph():
 
         builder.set_entry_point("approval_ocr")
         builder.add_edge("approval_ocr", "intake")
-        builder.add_conditional_edges(
-            "intake", after_checklist, {"extract": "extract", "end": END}
-        )
+        # 缺材料不终止：律师在上传页已选择「仍然分析」（#70）
+        builder.add_edge("intake", "extract")
         builder.add_edge("extract", "ocr_augment")
         builder.add_edge("ocr_augment", "report_ocr")
         builder.add_edge("report_ocr", "contract_scan")

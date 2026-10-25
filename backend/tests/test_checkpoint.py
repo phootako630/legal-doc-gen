@@ -8,14 +8,6 @@ from app.agent import nodes as nodes_mod
 from app.agent.graph import reset_graph
 from app.agent.runner import run_analyze, run_resume
 
-_OK = {
-    "has_approval": True,
-    "has_contract": True,
-    "has_acceptance": True,
-    "can_proceed": True,
-    "missing": [],
-    "notes": "",
-}
 _CONFLICT = {
     "total_amount": {"value": 900000, "src": "《审批表》"},
     "paid_amount": {"value": 638667.2, "src": "《审批表》"},
@@ -28,7 +20,7 @@ def test_resume_survives_restart(monkeypatch):
     monkeypatch.setattr(
         nodes_mod,
         "chat",
-        AsyncMock(side_effect=[_OK, _CONFLICT, "说明\n---HIGHLIGHT---\n- 1"]),
+        AsyncMock(side_effect=[_CONFLICT, "说明\n---HIGHLIGHT---\n- 1"]),
     )
     state = asyncio.run(run_analyze([{"filename": "审批表.pdf", "text": "x"}], True))
     assert state.pending is not None
@@ -53,7 +45,7 @@ def test_purge_expired_removes_old_runs(monkeypatch):
     monkeypatch.setattr(
         nodes_mod,
         "chat",
-        AsyncMock(side_effect=[_OK, _CONFLICT, "说明\n---HIGHLIGHT---\n- 1"]),
+        AsyncMock(side_effect=[_CONFLICT, "说明\n---HIGHLIGHT---\n- 1"]),
     )
 
     async def scenario():
@@ -101,7 +93,7 @@ def test_resume_refuses_expired_run_without_any_cleanup_having_run(monkeypatch):
     monkeypatch.setattr(
         nodes_mod,
         "chat",
-        AsyncMock(side_effect=[_OK, _CONFLICT, "说明\n---HIGHLIGHT---\n- 1"]),
+        AsyncMock(side_effect=[_CONFLICT, "说明\n---HIGHLIGHT---\n- 1"]),
     )
 
     async def scenario():

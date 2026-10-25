@@ -15,7 +15,6 @@ from app.agent import runner
 from app.agent.runner import IdempotencyConflict, run_analyze_once
 
 _FILES = [{"filename": "审批表.pdf", "text": "虚构审批表"}]
-_CHECKLIST = {"can_proceed": True, "missing": [], "notes": ""}
 _FIELDS = {
     "total_amount": {"value": 894934, "src": "《审批表》"},
     "paid_amount": {"value": 638667.2, "src": "《审批表》"},
@@ -27,7 +26,7 @@ _PROSE = "无冲突\n---HIGHLIGHT---\n"
 
 def _one_run():
     """恰好够一次完整分析的 LLM 回复：清点、抽取、校验说明。"""
-    return [_CHECKLIST, _FIELDS, _PROSE]
+    return [_FIELDS, _PROSE]
 
 
 def _patch_chat(monkeypatch, side_effect) -> AsyncMock:
@@ -46,7 +45,7 @@ def test_same_key_twice_runs_once(monkeypatch):
 
     first, second = asyncio.run(scenario())
     assert second.run_id == first.run_id
-    assert chat.await_count == 3  # 只有第一次调用了 LLM
+    assert chat.await_count == 2  # 只有第一次调用了 LLM
 
 
 def test_concurrent_same_key_shares_one_run(monkeypatch):
@@ -61,7 +60,7 @@ def test_concurrent_same_key_shares_one_run(monkeypatch):
 
     a, b = asyncio.run(scenario())
     assert a.run_id == b.run_id
-    assert chat.await_count == 3
+    assert chat.await_count == 2
 
 
 def test_different_keys_run_separately(monkeypatch):
@@ -74,7 +73,7 @@ def test_different_keys_run_separately(monkeypatch):
 
     a, b = asyncio.run(scenario())
     assert a.run_id != b.run_id
-    assert chat.await_count == 6
+    assert chat.await_count == 4
 
 
 def test_same_key_with_other_materials_is_rejected(monkeypatch):
@@ -92,7 +91,7 @@ def test_same_key_with_other_materials_is_rejected(monkeypatch):
 def test_failed_run_is_not_remembered(monkeypatch):
     # 第一次抽取阶段 LLM 报错 → 分析失败；同编号重试应重新分析并成功
     chat = _patch_chat(
-        monkeypatch, [_CHECKLIST, RuntimeError("模拟 LLM 故障")] + _one_run()
+        monkeypatch, [RuntimeError("模拟 LLM 故障")] + _one_run()
     )
 
     async def scenario():
@@ -102,7 +101,7 @@ def test_failed_run_is_not_remembered(monkeypatch):
 
     case = asyncio.run(scenario())
     assert case.run_id
-    assert chat.await_count == 5  # 失败的 2 次 + 重试的完整 3 次
+    assert chat.await_count == 3  # 失败的 1 次 + 重试的完整 2 次
 
 
 def test_replay_survives_restart(monkeypatch):
@@ -113,7 +112,7 @@ def test_replay_survives_restart(monkeypatch):
     asyncio.run(reset_graph())
     second = asyncio.run(run_analyze_once("key-restart-01", _FILES, True))
     assert second.run_id == first.run_id
-    assert chat.await_count == 3
+    assert chat.await_count == 2
 
 
 def test_expired_key_is_purged_and_reanalyzed(monkeypatch):
@@ -128,7 +127,7 @@ def test_expired_key_is_purged_and_reanalyzed(monkeypatch):
 
     first, second = asyncio.run(scenario())
     assert second.run_id != first.run_id  # 过期后按新请求重新分析
-    assert chat.await_count == 6
+    assert chat.await_count == 4
 
 
 def test_http_header_validation_and_conflict(monkeypatch):
@@ -173,7 +172,7 @@ def test_without_header_each_request_is_new(monkeypatch):
     a = client.post("/api/analyze", json=body).json()
     b = client.post("/api/analyze", json=body).json()
     assert a["run_id"] != b["run_id"]
-    assert chat.await_count == 6
+    assert chat.await_count == 4
 
 
 def test_dropped_request_does_not_cancel_analysis(monkeypatch):
@@ -201,7 +200,7 @@ def test_dropped_request_does_not_cancel_analysis(monkeypatch):
 
     case = asyncio.run(scenario())
     assert case.run_id
-    assert calls == 3  # 只跑了一次完整分析
+    assert calls == 2  # 只跑了一次完整分析
 
 
 def test_get_case_returns_current_state_and_404s(monkeypatch):

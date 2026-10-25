@@ -286,6 +286,14 @@ def check_payment_progress(
     )
 
 
+def check_materials(missing: list[str], note: str) -> ValidationCheck:
+    """材料是否齐全（缺什么由 services/materials.py 按文件类型判定）：缺了只提醒，不算冲突。"""
+    key = "materials"
+    if not missing:
+        return ValidationCheck(key, True, "审批表、合同、验收报告均已上传。")
+    return ValidationCheck(key, True, note, needs_review=True)
+
+
 def _field_value(fields: dict, key: str) -> object:
     """从 extracted_fields[key] 取 value；兼容 {value,src} 结构与裸值。"""
     node = fields.get(key)

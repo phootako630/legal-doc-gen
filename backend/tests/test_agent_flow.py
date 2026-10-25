@@ -1,4 +1,4 @@
-# agent 流程测试：analyze → (冲突) interrupt → resume → pending=null；缺材料 → pending=missing
+# agent 流程测试：analyze → (冲突) interrupt → resume → pending=null；缺材料照常分析、只提醒
 #
 # mock 掉 nodes.chat，不触网、不消耗配额。用 asyncio.run 驱动 async runner。
 import asyncio
@@ -6,16 +6,6 @@ from unittest.mock import AsyncMock
 
 from app.agent import nodes as nodes_mod
 from app.agent.runner import run_analyze, run_resume
-
-_OK_CHECKLIST = {
-    "has_approval": True,
-    "has_contract": True,
-    "has_acceptance": True,
-    "can_proceed": True,
-    "missing": [],
-    "notes": "",
-}
-
 
 def _patch_chat(monkeypatch, side_effect):
     monkeypatch.setattr(nodes_mod, "chat", AsyncMock(side_effect=side_effect))
@@ -35,7 +25,6 @@ def test_conflict_triggers_interrupt_then_resume_clears(monkeypatch):
     _patch_chat(
         monkeypatch,
         [
-            _OK_CHECKLIST,  # 清点
             _conflict_fields(),  # 抽取
             "校验说明\n---HIGHLIGHT---\n- 项1",  # resume 后的 validate prose
         ],
@@ -58,15 +47,35 @@ def test_conflict_triggers_interrupt_then_resume_clears(monkeypatch):
     assert resumed.readiness > 0
 
 
-def test_missing_materials_ends_with_pending(monkeypatch):
-    _patch_chat(
-        monkeypatch,
-        [{"can_proceed": False, "missing": ["验收报告"], "notes": "缺少监检报告"}],
+def test_missing_materials_continues_and_reminds(monkeypatch):
+    # 律师在上传页点了「材料不全，仍然分析」：不终止、不暂停，缺材料的提醒进校验面板（#70）；
+    # 清点由代码按文件类型判定，不调 LLM（#69）：只有抽取与说明文本两次调用
+    chat = AsyncMock(
+        side_effect=[
+            {"defendant_name": {"value": "某被告", "src": "《安装合同.pdf》"}},
+            "说明\n---HIGHLIGHT---\n",
+        ]
     )
-    state = asyncio.run(run_analyze([{"filename": "合同.pdf", "text": "x"}], True))
-    assert state.pending is not None
-    assert state.pending.kind == "missing"
-    assert "验收报告" in state.pending.question
+    monkeypatch.setattr(nodes_mod, "chat", chat)
+    files = [{"filename": "安装合同.pdf", "text": "x", "identified_type": "合同"}]
+    state = asyncio.run(run_analyze(files, True))
+    assert state.pending is None
+    assert chat.await_count == 2
+    check = next(v for v in state.validations if v["key"] == "materials")
+    assert check["needs_review"] and not check["is_conflict"]
+    assert check["message"] == "未上传审批表、验收报告，律师已选择按现有材料继续分析，相关字段留待补充。"
+
+
+def test_complete_materials_pass_without_reminder(monkeypatch):
+    _patch_chat(monkeypatch, [{}, "说明\n---HIGHLIGHT---\n"])
+    files = [
+        {"filename": "审批表.pdf", "text": "x", "identified_type": "审批表"},
+        {"filename": "安装合同.pdf", "text": "x", "identified_type": "合同"},
+        {"filename": "监检报告.pdf", "text": "x", "identified_type": "验收报告"},
+    ]
+    state = asyncio.run(run_analyze(files, True))
+    check = next(v for v in state.validations if v["key"] == "materials")
+    assert check["passed"] and not check["needs_review"]
 
 
 def test_no_conflict_completes_without_interrupt(monkeypatch):
@@ -79,7 +88,7 @@ def test_no_conflict_completes_without_interrupt(monkeypatch):
     }
     _patch_chat(
         monkeypatch,
-        [_OK_CHECKLIST, consistent, "无冲突\n---HIGHLIGHT---\n"],
+        [consistent, "无冲突\n---HIGHLIGHT---\n"],
     )
     state = asyncio.run(run_analyze([{"filename": "审批表.pdf", "text": "x"}], True))
     assert state.pending is None
