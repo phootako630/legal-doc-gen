@@ -178,7 +178,7 @@ def _source_check(r: dict[str, Any]) -> str:
     if r.get("source_ok") is None:
         return "—"
     found = r.get("verified_source")
-    got = f"《{found}》" if found else "原文未命中"
+    got = f"《{_cell(found)}》" if found else "原文未命中"  # 文件名可能含「|」，转义后再进表格
     return f"{'✓' if r['source_ok'] else '✗'} 应为「{_cell(r.get('expected_source'))}」，实际{got}"
 
 

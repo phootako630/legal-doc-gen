@@ -35,7 +35,30 @@ SHOWN_NORMAL = "正常"
 SHOWN_REVIEW = "待核实"
 SHOWN_CONFLICT = "冲突"
 SHOWN_MISSING = "缺失"
+SHOWN_HIDDEN = "不展示"  # 不在审核表格里的字段（如三个来源口径的台数）：律师看不到，不算静默错误
 REVIEWS = (SHOWN_REVIEW,)
+
+# 审核表格展示的字段，与前端 lib/field-map.ts 的 reviewFieldKeys 一致
+# （eval 在后端容器里跑，读不到前端代码；tests/test_case_eval_source.py 校验两边没改岔）
+REVIEW_FIELD_KEYS = (
+    "plaintiff_name_final", "plaintiff_credit_code", "plaintiff_person_in_charge",
+    "plaintiff_address", "plaintiff_phone", "defendant_name", "defendant_credit_code",
+    "defendant_legal_rep", "defendant_address", "defendant_address_ref", "contacts",
+    "contract_no", "contract_title", "document_kind", "contract_type", "contract_party_b",
+    "contract_party_a", "contract_sign_date", "elevator_qty_contract", "elevator_qty",
+    "elevator_qty_vge", "total_amount", "supplement_agreement", "contract_total_in_contract",
+    "contract_total_stated", "supplement_sentence", "paid_amount", "unpaid_amount", "paid_note",
+    "unpaid_note", "debt_term", "payable_amount", "acceptance_latest_date", "retention_ratio",
+    "retention_clause_text", "retention_unpaid_amount", "payable_ratio", "handover_text",
+    "handover_clause_text", "payment_cite_location", "payment_cite_text",
+    "payment_clause_location", "payment_clause_summary", "payment_clause_text",
+    "breach_interest_clause_location", "breach_clause_text", "interest_term",
+    "breach_interest_rate_text", "interest_rate_basis", "penalty_cap", "penalty_amount",
+    "penalty_daily_text", "penalty_start_date", "penalty_until_date", "warranty_period",
+    "warranty_expiry_sentence", "dispute_clause_location", "dispute_clause_text", "project_site",
+    "delivery_place", "contract_sign_place", "contract_sign_place_cover", "install_address",
+    "court_district", "jurisdiction_text", "arbitration_institution", "addressee",
+)
 
 _FULL_DATE_RE = re.compile(r"^\s*\d{4}\s*[年\-/.]\s*\d{1,2}\s*[月\-/.]\s*\d{1,2}\s*[日号]?\s*$")
 
@@ -133,11 +156,40 @@ def _equal(match: str, expected: Any, actual: Any) -> bool:
     return _norm_text(expected) == _norm_text(actual)
 
 
+def _contacts_text(node: Any) -> str | None:
+    """联系人数组按前端的方式汇总成「姓名（电话）；…」；姓名电话都没有的条目丢弃。"""
+    parts = []
+    for c in node if isinstance(node, list) else []:
+        c = c if isinstance(c, dict) else {}
+        name, phone = (
+            (c.get(k) or {}).get("value") if isinstance(c.get(k), dict) else None
+            for k in ("name", "phone")
+        )
+        if name is None and phone is None:
+            continue
+        parts.append(f"{name if name is not None else '？'}（{phone if phone is not None else '？'}）")
+    return "；".join(parts) or None
+
+
+def _actual(key: str, node: Any) -> tuple[Any, str]:
+    """系统的取值与出处；联系人数组按审核页的汇总写法取值（没有出处）。"""
+    if key == "contacts" or isinstance(node, list):
+        return _contacts_text(node), ""
+    if isinstance(node, dict):
+        return node.get("value"), str(node.get("src") or "")
+    return None, ""
+
+
 def shown_status(key: str, node: Any, conflict_keys: set[str] | frozenset[str] = frozenset()) -> str:
-    """审核页上该字段显示的状态，判定与前端 buildReviewFields.inferStatus 一致。"""
+    """审核页上该字段显示的状态，判定与前端 buildReviewFields 一致：只看表格里展示的字段，
+    冲突优先，联系人按汇总后有没有值。"""
+    if key not in REVIEW_FIELD_KEYS:
+        return SHOWN_HIDDEN
     if key in conflict_keys:
         return SHOWN_CONFLICT
-    value = node.get("value") if isinstance(node, dict) else None
+    value, _ = _actual(key, node)
+    if key == "contacts":
+        return SHOWN_NORMAL if value else SHOWN_MISSING
     if value is None:
         return SHOWN_MISSING
     src = str(node.get("src") or "").lower()
@@ -158,8 +210,7 @@ def score_field(
     """比对单个字段。node 为系统的 FieldValue（dict）或缺失；files 为分析结束时的材料
     （含 OCR 补读的文字），填了 source 时用来回原文核对来源。"""
     parsed = parse_spec(spec)
-    actual = node.get("value") if isinstance(node, dict) else None
-    src = str(node.get("src") or "") if isinstance(node, dict) else ""
+    actual, src = _actual(key, node)
     expected, match, note = parsed["value"], parsed["match"], parsed["note"]
 
     if parsed["pending"]:

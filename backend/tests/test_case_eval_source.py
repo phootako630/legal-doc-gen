@@ -8,10 +8,13 @@ import pytest
 
 from app.agent import nodes as nodes_mod
 from app.agent.graph import reset_graph
-from scripts.case_eval.report import diff_runs, find_previous, write_report
+from scripts.case_eval.report import _source_check, diff_runs, find_previous, write_report
 from scripts.case_eval.runner import run_case
 from scripts.case_eval.scoring import (
     CORRECT,
+    REVIEW_FIELD_KEYS,
+    SHOWN_HIDDEN,
+    SHOWN_MISSING,
     MISSING,
     SHOWN_CONFLICT,
     SHOWN_NORMAL,
@@ -105,6 +108,42 @@ def test_quality_summary_and_bad_spec():
         parse_spec({"value": "x", "review": "正常"})
     with pytest.raises(ValueError, match="source"):
         parse_spec({"value": "x", "source": ""})
+
+
+# ── 审核页显示状态与前端一致（#100 评审）──────────────────────────────────────
+def test_hidden_field_is_not_silent():
+    # 三个来源口径的台数不在审核表格里，律师看不到：值错也不算「显示正常」的静默错误
+    r = score_field("elevator_qty_by_approval", 6, _node(8, "《虚构审批表.pdf》"))
+    assert r.verdict == WRONG and r.shown == SHOWN_HIDDEN and not r.silent
+
+
+def test_contacts_scored_like_review_page():
+    # 联系人是数组：按审核页的汇总写法「姓名（电话）」取值，有值显示正常
+    contacts = [{"name": {"value": "虚构张三"}, "phone": {"value": "13800000000"}}, {"name": None}]
+    ok = score_field("contacts", "虚构张三（13800000000）", contacts)
+    assert ok.verdict == CORRECT and ok.shown == SHOWN_NORMAL and not ok.silent
+    bad = score_field("contacts", "虚构李四（13900000000）", contacts)
+    assert bad.verdict == WRONG and bad.silent
+    empty = score_field("contacts", "虚构张三（13800000000）", [{"name": None, "phone": None}])
+    assert empty.verdict == MISSING and empty.shown == SHOWN_MISSING and not empty.silent
+
+
+def test_review_field_keys_match_frontend():
+    # eval 在后端容器里跑、读不到前端，展示字段清单只能抄一份：两边改岔了这里会失败
+    import re
+
+    path = os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "src", "lib", "field-map.ts")
+    with open(path, encoding="utf-8") as fh:
+        ts = fh.read()
+    body = ts[ts.index("export const reviewFieldKeys"):]
+    body = body[body.index("[") + 1 : body.index("];")]
+    assert tuple(re.findall(r"'([a-z_]+)'", body)) == REVIEW_FIELD_KEYS
+
+
+def test_source_cell_escapes_table_separator():
+    # 文件名含「|」时不能把报告的明细表拆成多列
+    r = {"source_ok": False, "expected_source": "安装合同", "verified_source": "虚构|审批表.pdf"}
+    assert "|" not in _source_check(r)
 
 
 # ── 整条链路：标准答案 → 跑案件 → 报告 → 与上次对比 ─────────────────────────
