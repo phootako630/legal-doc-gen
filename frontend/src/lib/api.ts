@@ -11,10 +11,12 @@ import type {
   FeedbackRequest,
 } from './types';
 import { noteLoginRequired } from './auth-api';
+import { noteServerError } from './error-report';
 
 const BASE = '/api';
 
-/** fetch 包装：将网络层异常（TypeError: Failed to fetch）转为中文错误；登录失效时通知回登录页 */
+/** fetch 包装：将网络层异常（TypeError: Failed to fetch）转为中文错误；登录失效时通知回登录页；
+ * 后端 5xx 上报（只报接口名与状态码） */
 async function safeFetch(url: string, opts?: RequestInit): Promise<Response> {
   let res: Response;
   try {
@@ -23,6 +25,14 @@ async function safeFetch(url: string, opts?: RequestInit): Promise<Response> {
     throw new Error('网络连接失败，请检查网络设置后重试');
   }
   noteLoginRequired(res);
+  noteServerError(url, res);
+  return res;
+}
+
+/** 进度轮询用：失败由调用方静默处理，但后端 5xx 仍上报（只报接口名与状态码） */
+async function pollFetch(url: string): Promise<Response> {
+  const res = await fetch(url);
+  noteServerError(url, res);
   return res;
 }
 
@@ -56,7 +66,7 @@ export async function uploadFiles(files: File[], progressId: string): Promise<Up
 /** 查询某次上传的处理进度（上传期间轮询用；失败静默返回 null，不打断上传流程） */
 export async function fetchUploadProgress(progressId: string): Promise<UploadProgress | null> {
   try {
-    const res = await fetch(`${BASE}/upload/progress?progress_id=${encodeURIComponent(progressId)}`);
+    const res = await pollFetch(`${BASE}/upload/progress?progress_id=${encodeURIComponent(progressId)}`);
     if (!res.ok) return null;
     return (await res.json()) as UploadProgress;
   } catch {
@@ -67,7 +77,7 @@ export async function fetchUploadProgress(progressId: string): Promise<UploadPro
 /** 查询抽取任务的 LLM 处理阶段（抽取期间轮询用；失败静默返回 null，不打断流程） */
 export async function fetchExtractProgress(): Promise<LlmProgress | null> {
   try {
-    const res = await fetch(`${BASE}/extract/progress`);
+    const res = await pollFetch(`${BASE}/extract/progress`);
     if (!res.ok) return null;
     return (await res.json()) as LlmProgress;
   } catch {
@@ -105,7 +115,7 @@ export async function extractFields(
  */
 export async function fetchAnalyzeProgress(requestKey: string): Promise<LlmProgress | null> {
   try {
-    const res = await fetch(`${BASE}/analyze/progress?progress_id=${encodeURIComponent(requestKey)}`);
+    const res = await pollFetch(`${BASE}/analyze/progress?progress_id=${encodeURIComponent(requestKey)}`);
     if (!res.ok) return null;
     return (await res.json()) as LlmProgress;
   } catch {

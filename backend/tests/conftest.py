@@ -8,6 +8,7 @@ from app import config
 from app.agent import checkpoint, runner
 from app.agent.graph import reset_graph
 from app.services import file_store, run_log
+from app.routers import client_errors
 from app.services.login_guard import guard
 
 
@@ -24,6 +25,7 @@ def isolated_case_storage(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DAILY_SUMMARY_DIR", str(tmp_path / "daily_summary"))
     monkeypatch.setattr(config, "DAILY_SUMMARY_ENABLED", False)
     guard.reset()
+    client_errors.limiter.reset()
     yield
     # 进行中的分析任务属于测试自己的事件循环，跨测试复用会出错，清空
     runner._inflight.clear()
