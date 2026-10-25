@@ -29,6 +29,7 @@ from app.services.acceptance_report import (
     report_first_page_ids,
 )
 from app.services.complaint_renderer import fill_status
+from app.services.conflict_options import conflict_options
 from app.services.doc_search import locate_clause_bodies
 from app.services.equipment_list import count_vge_units
 from app.services.extraction import (
@@ -131,8 +132,8 @@ def _readiness(fields: dict, checks: list[ValidationCheck]) -> int:
     return round(good / len(keys) * 100)
 
 
-def _build_conflict_pending(conflicts: list[ValidationCheck]) -> dict:
-    """把确定性冲突汇成一个待决断点（field_keys 去重保序）。"""
+def _build_conflict_pending(conflicts: list[ValidationCheck], fields: dict) -> dict:
+    """把确定性冲突汇成一个待决断点（field_keys 去重保序），附各字段的候选值与来源。"""
     field_keys: list[str] = []
     msgs: list[str] = []
     for c in conflicts:
@@ -148,6 +149,8 @@ def _build_conflict_pending(conflicts: list[ValidationCheck]) -> dict:
         "question": "检测到数据冲突，请律师核实并确定取值：\n" + "；".join(msgs),
         "options": [],
         "field_keys": deduped,
+        # 各字段的候选值（{key: [{value, source}]}），前端逐字段显示成可点选的按钮
+        "field_options": conflict_options(conflicts, fields),
     }
 
 
@@ -331,7 +334,7 @@ async def validate_node(state: GraphState) -> dict:
 
     if conflicts:
         payload = {
-            "pending": _build_conflict_pending(conflicts),
+            "pending": _build_conflict_pending(conflicts, fields),
             "validations": [check_to_dict(c) for c in checks],
             "readiness": _readiness(fields, checks),
         }

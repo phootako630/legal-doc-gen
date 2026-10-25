@@ -143,7 +143,7 @@ LLM 调用：     OpenAI SDK（兼容 DeepSeek API），启用 function calling 
 - agent 在抽取节点可多轮：抽取 → 自校验（值回原文命中？）→ 命中失败标待核实 → 缺关键字段则 `search_in_docs` / `ocr_page` 定向补齐。
 - 护栏：成本上限（全案 OCR 总页数 `AGENT_MAX_TOTAL_OCR_PAGES`，用完时在出处注明可能未读到）。
 - **材料清点**：按上传页律师确认的文件类型，由代码判定齐全与否（`services/materials.py`，与上传接口、前端 `lib/materials.ts` 同一口径），不调 LLM。缺材料不终止、不暂停：律师在上传页已看到缺什么，点了「材料不全，仍然分析」就照常继续，缺的字段留【待补充】，校验面板琥珀色提醒（`materials` 检查）。
-- **interrupt 断点**：字段冲突、需联网确认名称时，agent 通过 LangGraph `interrupt` 暂停，把决策抛到前端审核页；律师给出选择后 `resume` 继续。Step 3 审核页即此断点的 UI 呈现，支持多次往返。
+- **interrupt 断点**：字段冲突、需联网确认名称时，agent 通过 LangGraph `interrupt` 暂停，把决策抛到前端审核页；律师给出选择后 `resume` 继续。Step 3 审核页即此断点的 UI 呈现，支持多次往返。冲突断点附各字段的候选值与来源（`pending.field_options`，`services/conflict_options.py`）：金额勾稽给出三项现值及用另两项推出的值，台数给出各来源的台数，信用代码 / 日期给出现值与出处；律师点选或自填。断点节点内不放 OCR / LLM 等昂贵或有副作用的操作：resume 时 LangGraph 会从头重跑被打断的节点（`contract_scan` 与 `qty_check` 分开即为此）。
 
 ---
 
@@ -654,8 +654,9 @@ export interface ValidationCheck {
 export interface PendingDecision {
   kind: 'missing' | 'conflict' | 'confirm';
   question: string;            // 中文，问律师
-  options?: string[];          // 冲突时的候选值
+  options?: string[];          // 各字段共用的候选值（台数 / 质保金确认）
   field_keys: string[];
+  field_options?: Record<string, { value: string; source: string }[]>; // 冲突断点：各字段的候选值及来源
 }
 
 /** agent 会话状态（贯穿 analyze/resume） */

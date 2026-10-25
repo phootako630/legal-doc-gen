@@ -88,6 +88,27 @@ export function PendingResolver({
                 placeholder="请输入确认后的取值（留空表示该字段缺失）"
                 onChange={(e) => setValues((s) => ({ ...s, [key]: e.target.value }))}
               />
+              {/* 冲突字段的候选值：各来源的值及推算值，点选即回填，来源写在值下方 */}
+              {(pending.field_options?.[key] ?? []).length > 0 && (
+                <div className="flex flex-wrap gap-2 pt-0.5">
+                  {(pending.field_options?.[key] ?? []).map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      disabled={loading}
+                      onClick={() => setValues((s) => ({ ...s, [key]: opt.value }))}
+                      className={`flex max-w-full flex-col items-start rounded border px-2.5 py-1 text-left disabled:opacity-50 ${
+                        values[key] === opt.value
+                          ? 'border-primary bg-primary/5'
+                          : 'border-border bg-white hover:border-primary'
+                      }`}
+                    >
+                      <span className="text-sm font-medium text-foreground">{opt.value}</span>
+                      <span className="text-xs text-muted-foreground">{opt.source}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
               {/* 若 agent 提供候选值，作为快捷填充 */}
               {pending.options.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 pt-0.5">
