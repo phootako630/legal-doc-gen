@@ -253,7 +253,7 @@ Login is off by default in local development (`AUTH_ENABLED=0`). Case data is st
 Checks and tests:
 
 ```bash
-cd backend && ruff check . && python -m pytest
+cd backend && python -m ruff check . && python -m pytest
 cd frontend && pnpm lint && pnpm build
 ```
 
