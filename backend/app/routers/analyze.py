@@ -86,7 +86,9 @@ async def analyze(
             raise HTTPException(status_code=400, detail="请求编号格式不正确")
         try:
             # 进度记录在 run_analyze_once 的任务里做：重复请求不会把进度条重置
-            return await run_analyze_once(idempotency_key, files, req.internet_allowed)
+            return await run_analyze_once(
+                idempotency_key, files, req.internet_allowed, run_log.current_user()
+            )
         except Draining as e:
             raise HTTPException(status_code=503, detail=DRAINING_DETAIL) from e
         except IdempotencyConflict as e:
@@ -99,7 +101,7 @@ async def analyze(
 
     # 不带请求编号的旧客户端：照常分析，但没有 id 可挂进度，故不记录进度
     try:
-        return await run_analyze(files, req.internet_allowed)
+        return await run_analyze(files, req.internet_allowed, run_log.current_user())
     except Draining as e:
         raise HTTPException(status_code=503, detail=DRAINING_DETAIL) from e
     except RuntimeError as e:
@@ -114,7 +116,7 @@ async def get_analyze_result(key: str = Query(...)) -> CaseState:
     if not _KEY_RE.fullmatch(key):
         raise HTTPException(status_code=400, detail="请求编号格式不正确")
     try:
-        case = await analyze_result(key)
+        case = await analyze_result(key, run_log.current_user())
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=f"分析失败：{e}") from e
     if case is None:

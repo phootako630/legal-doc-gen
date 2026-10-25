@@ -35,6 +35,11 @@ def set_user(user: str | None) -> None:
     _user.set(user)
 
 
+def current_user() -> str | None:
+    """当前请求的登录账号（登录中间件设置；未开启登录时为 None）。路由据此按账号隔离案件。"""
+    return _user.get()
+
+
 def log_event(event: str, run_id: str | None = None, **data: Any) -> None:
     """追加一条事件；未启用或写失败时静默返回。"""
     if not RUN_LOG_ENABLED:

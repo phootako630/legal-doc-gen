@@ -134,16 +134,20 @@ def _end_run() -> None:
     _active_runs -= 1
 
 
-async def run_analyze(files: list[dict], internet_allowed: bool) -> CaseState:
-    """启动一次 agent 会话，返回结果 CaseState（可能带 pending 断点）。"""
+async def run_analyze(
+    files: list[dict], internet_allowed: bool, owner: str | None = None
+) -> CaseState:
+    """启动一次 agent 会话，返回结果 CaseState（可能带 pending 断点）。owner 为发起的登录账号。"""
     _begin_run()
     try:
-        return await _run_analyze(files, internet_allowed)
+        return await _run_analyze(files, internet_allowed, owner)
     finally:
         _end_run()
 
 
-async def _run_analyze(files: list[dict], internet_allowed: bool) -> CaseState:
+async def _run_analyze(
+    files: list[dict], internet_allowed: bool, owner: str | None = None
+) -> CaseState:
     run_id = uuid.uuid4().hex
     config = _config(run_id)
     run_log.set_run_id(run_id)
@@ -160,15 +164,20 @@ async def _run_analyze(files: list[dict], internet_allowed: bool) -> CaseState:
         "pending": None,
     }
     t0 = time.monotonic()
-    await checkpoint.record_run(run_id)
+    await checkpoint.record_run(run_id, owner)
     graph = await get_graph()
     await graph.ainvoke(initial, config)
     run_log.log_event("run_pass", duration_ms=round((time.monotonic() - t0) * 1000))
     return await _collect(run_id, config)
 
 
-async def run_resume(run_id: str, decisions: dict) -> CaseState:
-    """在断点处提交律师决定并恢复 agent。run_id 未知则抛 KeyError。"""
+async def run_resume(run_id: str, decisions: dict, user: str | None = None) -> CaseState:
+    """
+    在断点处提交律师决定并恢复 agent。run_id 未知，或不是该账号发起的会话，抛 KeyError
+    （按「不存在」处理，不透露别人的会话是否存在）。
+    """
+    if not await checkpoint.can_access(run_id, user):
+        raise KeyError(run_id)
     _begin_run()
     try:
         return await _run_resume(run_id, decisions)
@@ -209,14 +218,16 @@ class IdempotencyConflict(Exception):
     """同一请求编号被用于另一组材料。"""
 
 
-# 请求编号 → (请求摘要, 正在运行的分析任务)。单进程部署，进程内字典即可
-_inflight: dict[str, tuple[str, asyncio.Task[CaseState]]] = {}
+# 请求编号 → (请求摘要, 正在运行的分析任务, 发起账号)。单进程部署，进程内字典即可
+_inflight: dict[str, tuple[str, asyncio.Task[CaseState], str | None]] = {}
 
 
-def request_fingerprint(files: list[dict], internet_allowed: bool) -> str:
-    """请求内容的摘要：材料（含全文）与联网开关任一不同，摘要就不同。"""
+def request_fingerprint(
+    files: list[dict], internet_allowed: bool, owner: str | None = None
+) -> str:
+    """请求内容的摘要：材料（含全文）、联网开关与发起账号任一不同，摘要就不同。"""
     raw = json.dumps(
-        {"files": files, "internet_allowed": internet_allowed},
+        {"files": files, "internet_allowed": internet_allowed, "owner": owner},
         ensure_ascii=False,
         sort_keys=True,
     )
@@ -228,7 +239,7 @@ def _running_task(key: str, fingerprint: str) -> asyncio.Task[CaseState] | None:
     entry = _inflight.get(key)
     if entry is None:
         return None
-    entry_fp, task = entry
+    entry_fp, task, _owner = entry
     if entry_fp != fingerprint:
         raise IdempotencyConflict(key)
     if task.done() and (task.cancelled() or task.exception() is not None):
@@ -236,12 +247,12 @@ def _running_task(key: str, fingerprint: str) -> asyncio.Task[CaseState] | None:
     return task
 
 
-async def get_case(run_id: str) -> CaseState | None:
+async def get_case(run_id: str, user: str | None = None) -> CaseState | None:
     """
-    已有会话的当前状态（含律师之后在断点处的决定）；会话已过期或不存在则 None。
+    已有会话的当前状态（含律师之后在断点处的决定）；会话已过期、不存在或不是该账号发起的则 None。
     幂等重放与前端刷新后「继续上次的案件」共用。
     """
-    if await checkpoint.is_expired(run_id):
+    if await checkpoint.is_expired(run_id) or not await checkpoint.can_access(run_id, user):
         return None
     graph = await get_graph()
     config = _config(run_id)
@@ -251,13 +262,13 @@ async def get_case(run_id: str) -> CaseState | None:
     return await _collect(run_id, config)
 
 
-async def delivered_fields(run_id: str) -> dict | None:
+async def delivered_fields(run_id: str, user: str | None = None) -> dict | None:
     """
     交给律师审核时的字段（checkpoint 里的 extracted_fields；律师在断点处的决定已并入），
     generate 时据此统计律师在审核页的改动。会话过期 / 不存在则 None。
-    落在 checkpoint 里，服务重启后仍可对比，随会话一起过期清除。
+    落在 checkpoint 里，服务重启后仍可对比，随会话一起过期清除。不是该账号的会话也返回 None。
     """
-    if await checkpoint.is_expired(run_id):
+    if await checkpoint.is_expired(run_id) or not await checkpoint.can_access(run_id, user):
         return None
     graph = await get_graph()
     snapshot = await graph.aget_state(_config(run_id))
@@ -266,40 +277,49 @@ async def delivered_fields(run_id: str) -> dict | None:
 
 
 async def _analyze_and_remember(
-    key: str, fingerprint: str, files: list[dict], internet_allowed: bool
+    key: str,
+    fingerprint: str,
+    files: list[dict],
+    internet_allowed: bool,
+    owner: str | None = None,
 ) -> CaseState:
     """
     真正跑一次分析；成功后记下编号。进度以请求编号为 id、跟着任务走：
     重复请求接上同一个任务时共用这条进度，不会把进度条重置，也不会串到别人的分析。
     """
     with llm_progress.track(key, total_stages=3):
-        case = await _run_analyze(files, internet_allowed)
+        case = await _run_analyze(files, internet_allowed, owner)
     # 运行计数要覆盖到这里：编号落盘前重启，刷新后的页面就找不回这次分析（#86 评审）
     await checkpoint.save_analyze_key(key, fingerprint, case.run_id)
     return case
 
 
-async def analyze_result(key: str) -> CaseState | None:
+async def analyze_result(key: str, user: str | None = None) -> CaseState | None:
     """
     按请求编号取分析结果（前端在处理页刷新后接回）：还在跑就等它跑完，已跑完返回会话当前状态；
-    没有这次分析（失败、服务重启、已过期）返回 None，失败的任务抛出原异常。
-    只凭编号、不比对材料：编号是前端随机生成的，与 run_id 一样只有发起的标签页知道。
+    没有这次分析（失败、服务重启、已过期）或不是该账号发起的，返回 None。
+    不比对材料：编号是前端随机生成的，与 run_id 一样只有发起的标签页知道。
     """
     entry = _inflight.get(key)
     if entry is not None:
+        if user is not None and entry[2] is not None and entry[2] != user:
+            return None
         try:
             return await asyncio.shield(entry[1])  # 同 run_analyze_once：请求断开不取消分析
         except Exception:  # noqa: BLE001 — 接上的分析失败：与「找不到」同样处理（404，重新上传）
             return None
     saved = await checkpoint.find_analyze_key(key)
-    return await get_case(saved[1]) if saved is not None else None
+    return await get_case(saved[1], user) if saved is not None else None
 
 
 async def run_analyze_once(
-    key: str, files: list[dict], internet_allowed: bool
+    key: str, files: list[dict], internet_allowed: bool, owner: str | None = None
 ) -> CaseState:
-    """带请求编号的分析：重复请求复用正在运行的任务或已完成的会话，不重复消耗 OCR / LLM。"""
-    fingerprint = request_fingerprint(files, internet_allowed)
+    """
+    带请求编号的分析：重复请求复用正在运行的任务或已完成的会话，不重复消耗 OCR / LLM。
+    发起账号算在请求摘要里：别的账号用同一编号按「编号对应别的请求」拒绝，接不上别人的分析。
+    """
+    fingerprint = request_fingerprint(files, internet_allowed, owner)
 
     task = _running_task(key, fingerprint)
     if task is None:
@@ -308,7 +328,7 @@ async def run_analyze_once(
             saved_fp, run_id = saved
             if saved_fp != fingerprint:
                 raise IdempotencyConflict(key)
-            case = await get_case(run_id)
+            case = await get_case(run_id, owner)
             if case is not None:
                 run_log.log_event("analyze_replay", run_id=run_id)
                 return case
@@ -322,13 +342,13 @@ async def run_analyze_once(
         # /busy 不会在任务刚建好、还没开始跑时读到 0
         _begin_run()
         task = asyncio.create_task(
-            _analyze_and_remember(key, fingerprint, files, internet_allowed)
+            _analyze_and_remember(key, fingerprint, files, internet_allowed, owner)
         )
-        _inflight[key] = (fingerprint, task)
+        _inflight[key] = (fingerprint, task, owner)
 
         def _forget(done: asyncio.Task[CaseState], key: str = key) -> None:
             _end_run()
-            if _inflight.get(key, (None, None))[1] is done:
+            if _inflight.get(key, (None, None, None))[1] is done:
                 _inflight.pop(key, None)
 
         task.add_done_callback(_forget)

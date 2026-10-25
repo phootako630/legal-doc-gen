@@ -184,6 +184,8 @@ POST /api/resume             # 律师在断点处给出决定后恢复 agent
   输出：同 /api/analyze（可能再次 pending，直至 pending=null）
 
 GET /api/case/{run_id}       # 取回会话当前状态（刷新页面后「继续上次的案件」）；过期 / 不存在 404
+#   按账号隔离：会话记下发起分析的登录账号（run_meta.owner），case / resume / analyze/result / feedback / generate
+#   的改动统计只认本人，别人的会话一律按不存在（404）处理；未开启登录不限制，升级前的旧会话（无 owner）不限制
 GET /api/analyze/result?key=<请求编号>  # 处理页刷新后接回同一次分析：还在跑就等它跑完，已跑完直接返回；失败 / 重启 / 过期 404
 POST /drain、GET /busy（不在 /api 下，nginx 不转发）  # deploy.sh 重启前先 drain（新的分析 / 恢复 503「系统正在更新」），再等 busy 归零（含编号落盘）
 
@@ -993,7 +995,7 @@ pnpm dev                   # 默认 http://localhost:5173
 ## 不包含（后续迭代预留）
 
 - 数据库（PostgreSQL）— 案件持久化（agent checkpoint 届时落 DB）
-- 账号权限分级（目前所有登录账号权限相同；原告信息表更新另凭管理员口令）
+- 账号权限分级（目前所有登录账号权限相同，只是各自只能访问自己发起的案件；原告信息表更新另凭管理员口令）
 - 多模态 LLM 直传扫描件（替代 OCR，进一步砍误差链）
 - 批量案件处理
 - Node.js 后端（Fastify）
