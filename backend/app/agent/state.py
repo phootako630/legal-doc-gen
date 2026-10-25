@@ -39,6 +39,8 @@ class PendingDecision(BaseModel):
     question: str                  # 中文，问律师
     options: list[str] = []        # 冲突时的候选值（可空，律师自由编辑）
     field_keys: list[str] = []     # 涉及的字段 key
+    # 冲突断点：各字段的候选值及来源 {字段 key: [{value, source}]}；options 是所有字段共用的候选
+    field_options: dict[str, list[dict[str, str]]] = {}
 
 
 class CaseState(BaseModel):

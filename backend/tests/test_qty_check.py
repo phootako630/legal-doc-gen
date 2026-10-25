@@ -113,3 +113,29 @@ def test_mismatch_ocrs_rest_of_scanned_contract(monkeypatch):
     assert state.pending is None
     assert ocr.await_count == 3
     assert state.extracted_fields["elevator_qty_vge"]["value"] == 1
+
+
+def test_resume_does_not_repeat_ocr(monkeypatch):
+    # 断点恢复时 LangGraph 从头重跑被打断的节点：OCR 在断点之前的节点里做完，
+    # 律师作答后不会再识别一遍（#70 验收标准）
+    fid = file_store.put(b"%PDF-fake")
+    files = [
+        {
+            "filename": "合同.pdf",
+            "identified_type": "合同",
+            "is_scanned": True,
+            "file_id": fid,
+            "page_count": 3,
+            "text": "",
+            "pages": [],
+        }
+    ]
+    ocr = AsyncMock(return_value="正文，无设备清单")
+    state = _run(monkeypatch, _qty(15, 13), files, ocr=ocr)
+    assert state.pending is not None and state.pending.field_keys == ["elevator_qty"]
+    before = ocr.await_count
+    assert before > 0
+
+    resumed = asyncio.run(run_resume(state.run_id, {"elevator_qty": "13"}))
+    assert resumed.pending is None
+    assert ocr.await_count == before

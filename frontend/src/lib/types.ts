@@ -169,6 +169,14 @@ export interface PendingDecision {
   question: string; // 中文，问律师
   options: string[]; // 冲突时的候选值（可空，律师可自由编辑）
   field_keys: string[]; // 涉及的字段 key
+  /** 冲突断点：各字段的候选值及来源（旧会话可能没有） */
+  field_options?: Record<string, FieldOption[]>;
+}
+
+/** 冲突字段的一个候选值：value 可直接回填，source 说明出处或算法 */
+export interface FieldOption {
+  value: string;
+  source: string;
 }
 
 /**
