@@ -135,7 +135,7 @@ def _post_with_fallback(payload: dict):
             # 不打印 key，只记状态码，方便排查免费额度何时用完
             logger.warning("主 key 被拒（HTTP %s），改用付费备用 key", resp.status_code)
             # 从这里起开始产生费用：单独记一条事件（#75），汇总时一眼能看到
-            run_log.log_event("dashscope_key_switch", reason=resp.status_code)
+            run_log.log_event("dashscope_key_switch", reason=resp.status_code, path="ocr")
             _use_backup = True
             continue
         resp.raise_for_status()

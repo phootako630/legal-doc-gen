@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import statistics
 import time
 
 from langgraph.types import interrupt
@@ -439,7 +440,7 @@ async def _ocr_batch(pdf: bytes, page_nums: list[int]) -> list[dict]:
         "ocr_batch",
         requested=len(page_nums),
         ok=len(pages),
-        p50_ms=round(durations[len(durations) // 2]) if durations else None,
+        p50_ms=round(statistics.median(durations)) if durations else None,
         max_ms=round(durations[-1]) if durations else None,
         timeouts=failed.count(OCR_TIMEOUT),
         rate_limited=failed.count(OCR_RATE_LIMIT),

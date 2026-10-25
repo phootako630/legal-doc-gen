@@ -292,13 +292,17 @@ async def _chat_fallback(messages: list[Message], json_mode: bool) -> Any:
     """用备用模型完成调用；主 key 被拒（401/403）时换备用 key，与 OCR 一致。"""
     extra = {"enable_thinking": LLM_FALLBACK_ENABLE_THINKING}
     last: Exception | None = None
-    for key in _fallback_keys():
+    keys = _fallback_keys()
+    for i, key in enumerate(keys):
         try:
             return await _complete(
                 _get_fallback_client(key), LLM_FALLBACK_MODEL, messages, json_mode, extra
             )
         except (openai.AuthenticationError, openai.PermissionDeniedError) as e:
             last = e
+            if i < len(keys) - 1:
+                # 改用付费备用 key，与 OCR 同一事件（#75）；这里不记住切换，每次被拒都记一条
+                run_log.log_event("dashscope_key_switch", reason=e.status_code, path="llm")
             continue
         except _Unavailable as u:
             raise RuntimeError(

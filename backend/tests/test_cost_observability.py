@@ -212,3 +212,82 @@ def test_cost_report_summary():
     text = cost_report.render(s, "2026-10-25")
     assert "成本最高的节点：extract" in text and "放弃率 50%" in text and "2.0 分钟" in text
     assert "未配置单价" in text
+
+
+# ── #101 评审回归 ─────────────────────────────────────────────────────────────
+def test_ocr_batch_p50_is_true_median(monkeypatch, tmp_path):
+    # 偶数页取两个中间值的平均，不是上中位值
+    path = _use_log(monkeypatch, tmp_path)
+    durations = {1: 1.0, 2: 2.0, 3: 100.0, 4: 100.0}
+
+    async def fake_timed(_pdf, n):
+        return f"第{n}页", durations[n]
+
+    monkeypatch.setattr(nodes_mod, "_timed_ocr", fake_timed)
+    asyncio.run(nodes_mod._ocr_batch(b"%PDF", [1, 2, 3, 4]))
+    (batch,) = _events(path, "ocr_batch")
+    assert batch["p50_ms"] == 51 and batch["max_ms"] == 100
+
+
+def test_llm_fallback_key_switch_event(monkeypatch, tmp_path):
+    # DeepSeek 不可用 → 备用模型主 key 被拒、改用付费备用 key：同样记 dashscope_key_switch
+    path = _use_log(monkeypatch, tmp_path)
+    req = httpx.Request("POST", "http://x")
+    monkeypatch.setattr(llm_client, "_primary_down_until", 0.0)
+    monkeypatch.setattr(llm_client, "LLM_FALLBACK_MODEL", "qwen-test")
+    monkeypatch.setattr(llm_client, "_fallback_keys", lambda: ["虚构主key", "虚构备用key"])
+    ok = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content="备用"), finish_reason="stop")],
+        usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    )
+    creates = {
+        "虚构主key": AsyncMock(side_effect=openai.PermissionDeniedError(
+            "拒绝", response=httpx.Response(403, request=req), body=None)),
+        "虚构备用key": AsyncMock(return_value=ok),
+    }
+    monkeypatch.setattr(llm_client, "_get_fallback_client", lambda key: SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=creates[key]))))
+    primary = AsyncMock(side_effect=openai.APITimeoutError(request=req))
+    monkeypatch.setattr(llm_client, "_get_client", lambda: SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=primary))))
+    assert asyncio.run(llm_client.chat([{"role": "user", "content": "x"}])) == "备用"
+    (switch,) = _events(path, "dashscope_key_switch")
+    assert switch["reason"] == 403 and switch["path"] == "llm"
+    assert "虚构主key" not in path.read_text(encoding="utf-8")
+
+
+def test_purge_continues_when_abandoned_scan_fails(monkeypatch, tmp_path):
+    # 某个过期会话读不出状态：放弃统计跳过它，保留期清理照常执行
+    path = _use_log(monkeypatch, tmp_path)
+    monkeypatch.setattr(checkpoint, "expired_run_ids", AsyncMock(return_value=["坏会话", "好会话"]))
+
+    class Graph:
+        async def aget_state(self, config):
+            if config["configurable"]["thread_id"] == "坏会话":
+                raise ValueError("checkpoint 损坏")
+            return SimpleNamespace(tasks=[], values={})
+
+    import app.agent.runner as runner_mod
+
+    monkeypatch.setattr(runner_mod, "get_graph", AsyncMock(return_value=Graph()))
+    purge = AsyncMock(return_value=2)
+    monkeypatch.setattr(checkpoint, "purge_expired", purge)
+    asyncio.run(purge_expired_cases())
+    assert purge.await_count == 1
+    (done,) = _events(path, "purge")
+    assert done["runs"] == 2
+    assert not _events(path, "purge_error")
+
+
+def test_cost_report_model_cost_and_ocr_failed():
+    lines = [
+        _line("llm_call", node="extract", model="m1", prompt_tokens=1_000_000, completion_tokens=0),
+        _line("llm_call", node="extract", model="没配价", prompt_tokens=10, completion_tokens=0),
+        _line("ocr_batch", node="ocr_augment", requested=5, ok=1, failed=4, timeouts=1, rate_limited=1),
+    ]
+    s = cost_report.summarize(lines, None, {"m1": {"input": 2.0, "output": 8.0}})
+    assert s["models"]["m1"]["cost"] == pytest.approx(2.0) and not s["models"]["m1"]["unpriced"]
+    assert s["models"]["没配价"]["unpriced"]
+    assert s["errors"] == {"ocr_timeout": 1, "ocr_rate_limit": 1, "ocr_failed": 2}
+    text = cost_report.render(s, "")
+    assert "m1\t1\t1000000\t0\t¥2.00" in text

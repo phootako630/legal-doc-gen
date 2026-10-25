@@ -4,7 +4,7 @@
     python scripts/cost_report.py [运行日志路径] [--days 30]
 Docker 部署时：docker compose exec backend python scripts/cost_report.py --days 7
 
-输出：每案成本、成本最高的节点、各模型用量、各错误类别次数、断点等待时长中位数与放弃率、
+输出：每案成本、成本最高的节点、各模型用量与金额、各错误类别次数、断点等待时长中位数与放弃率、
 付费备用 key 切换次数。金额按 config.COST_PRICES（.env 的 COST_PRICES）换算，单价没配时只列用量。
 口径：LLM 按每次调用的输入 / 输出 token 计；OCR 按识别成功的页数计；放弃率 = 过期时仍停在断点的
 会话数 ÷ 停过断点的会话数（同一会话停多次只算一次）。
@@ -41,7 +41,9 @@ def summarize(lines: list[str], since: datetime | None, prices: dict) -> dict[st
     """把日志行汇总成报告需要的各项；坏行跳过。金额为 None 表示有用量但缺单价。"""
     runs: dict[str, dict[str, Any]] = defaultdict(lambda: {"cost": 0.0, "unpriced": False})
     nodes: dict[str, dict[str, Any]] = defaultdict(lambda: {"cost": 0.0, "unpriced": False, "ms": 0})
-    models: dict[str, dict[str, int]] = defaultdict(lambda: {"calls": 0, "prompt": 0, "completion": 0})
+    models: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {"calls": 0, "prompt": 0, "completion": 0, "cost": 0.0, "unpriced": False}
+    )
     errors: Counter[str] = Counter()
     waits: list[float] = []
     interrupted: set[str] = set()
@@ -49,8 +51,11 @@ def summarize(lines: list[str], since: datetime | None, prices: dict) -> dict[st
     key_switches = 0
     ocr_pages = 0
 
-    def add_cost(run_id: str | None, node: str, cost: float | None) -> None:
-        for bucket in (runs[run_id or "（无编号）"], nodes[node]):
+    def add_cost(run_id: str | None, node: str, cost: float | None, model: str | None = None) -> None:
+        buckets = [runs[run_id or "（无编号）"], nodes[node]]
+        if model is not None:
+            buckets.append(models[model])
+        for bucket in buckets:
             if cost is None:
                 bucket["unpriced"] = True
             else:
@@ -72,14 +77,17 @@ def summarize(lines: list[str], since: datetime | None, prices: dict) -> dict[st
             m["calls"] += 1
             m["prompt"] += prompt
             m["completion"] += completion
-            add_cost(run_id, node, _llm_cost(model, prompt, completion, prices))
+            add_cost(run_id, node, _llm_cost(model, prompt, completion, prices), model)
         elif event == "ocr_batch":
             ok = rec.get("ok") or 0
             ocr_pages += ok
             price = prices.get("ocr_page")
             add_cost(run_id, node, ok * price if isinstance(price, (int, float)) else (0.0 if not ok else None))
-            errors["ocr_timeout"] += rec.get("timeouts") or 0
-            errors["ocr_rate_limit"] += rec.get("rate_limited") or 0
+            timeouts, limited = rec.get("timeouts") or 0, rec.get("rate_limited") or 0
+            errors["ocr_timeout"] += timeouts
+            errors["ocr_rate_limit"] += limited
+            # failed 是失败页总数：除去超时、限流，其余都是普通 OCR 失败（节点照常结束，不走 node 错误）
+            errors["ocr_failed"] += max(0, (rec.get("failed") or 0) - timeouts - limited)
         elif event == "node":
             nodes[rec.get("node") or _NO_NODE]["ms"] += rec.get("duration_ms") or 0
             if rec.get("outcome") == "error":
@@ -128,8 +136,11 @@ def render(s: dict[str, Any], prices_date: str) -> str:
         out.append(f"成本最高的节点：{nodes[0][0]}")
     out.append("")
     out.append("## 各模型用量")
-    out.append("模型\t调用次数\t输入 token\t输出 token")
-    out += [f"{m}\t{v['calls']}\t{v['prompt']}\t{v['completion']}" for m, v in sorted(s["models"].items())]
+    out.append("模型\t调用次数\t输入 token\t输出 token\t金额")
+    out += [
+        f"{m}\t{v['calls']}\t{v['prompt']}\t{v['completion']}\t{_money(v)}"
+        for m, v in sorted(s["models"].items())
+    ]
     out.append(f"OCR 识别成功页数：{s['ocr_pages']}；付费备用 key 切换：{s['key_switches']} 次")
     out.append("")
     out.append("## 错误类别")

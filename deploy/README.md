@@ -173,7 +173,7 @@ docker compose exec backend python scripts/usage_report.py --days 7   # 最近 7
 ```
 
   本功能上线前的旧记录没有账号名，归在「（未登录 / 旧记录）」下。统计脚本会读当前日志和全部切分文件。
-- 成本、耗时与错误汇总（每案成本、成本最高的节点、各模型用量、错误类别次数、律师在断点停留时长中位数与放弃率、付费备用 key 切换次数；不含案件内容）：
+- 成本、耗时与错误汇总（每案成本、成本最高的节点、各模型用量与金额、错误类别次数、律师在断点停留时长中位数与放弃率、付费备用 key 切换次数；不含案件内容）：
 
 ```bash
 docker compose exec backend python scripts/cost_report.py --days 7

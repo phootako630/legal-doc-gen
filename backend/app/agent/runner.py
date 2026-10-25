@@ -92,6 +92,9 @@ async def purge_expired_cases() -> None:
     """清除过期的 checkpoint 与上传文件。清理失败只记日志，不影响服务。"""
     try:
         await _log_abandoned()
+    except Exception as exc:  # noqa: BLE001 — 统计失败不能挡住保留期清理
+        run_log.log_event("abandoned_scan_error", error=type(exc).__name__)
+    try:
         runs = await checkpoint.purge_expired()
         files = await asyncio.to_thread(file_store.purge_expired)
         logs = await asyncio.to_thread(run_log.purge_old)
@@ -101,10 +104,15 @@ async def purge_expired_cases() -> None:
 
 
 async def _log_abandoned() -> None:
-    """过期时仍停在断点、律师一直没作答的会话记 abandoned（统计放弃率）；只记断点类型。"""
+    """过期时仍停在断点、律师一直没作答的会话记 abandoned（统计放弃率）；只记断点类型。
+    单个会话读不出状态时跳过它（记一条 abandoned_scan_error），不影响其余会话和随后的清理。"""
     graph = await get_graph()
     for run_id in await checkpoint.expired_run_ids():
-        payload = _interrupt_payload(await graph.aget_state(_config(run_id)))
+        try:
+            payload = _interrupt_payload(await graph.aget_state(_config(run_id)))
+        except Exception as exc:  # noqa: BLE001
+            run_log.log_event("abandoned_scan_error", run_id=run_id, error=type(exc).__name__)
+            continue
         if payload:
             pending = payload.get("pending") if isinstance(payload, dict) else None
             kind = pending.get("kind") if isinstance(pending, dict) else None
