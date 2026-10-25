@@ -131,26 +131,97 @@ def test_purge_old_summaries(monkeypatch):
     assert sorted(os.listdir(config.DAILY_SUMMARY_DIR)) == ["2026-10-01.md", "说明.txt"]
 
 
-def test_due_day_waits_for_hour_and_skips_existing(monkeypatch):
+def _touch(day):
+    os.makedirs(config.DAILY_SUMMARY_DIR, exist_ok=True)
+    open(ds.summary_path(day), "w").close()
+
+
+def test_due_days_waits_for_hour_and_skips_existing(monkeypatch):
     monkeypatch.setattr(config, "DAILY_SUMMARY_HOUR", 8)
     bj = timezone(timedelta(hours=8))
-    assert ds.due_day(datetime(2026, 10, 25, 7, 59, tzinfo=bj)) is None
-    assert ds.due_day(datetime(2026, 10, 25, 8, 0, tzinfo=bj)) == DAY
-    # UTC 00:30 = 北京 08:30
-    assert ds.due_day(datetime(2026, 10, 25, 0, 30, tzinfo=timezone.utc)) == DAY
-    os.makedirs(config.DAILY_SUMMARY_DIR)
-    open(ds.summary_path(DAY), "w").close()
-    assert ds.due_day(datetime(2026, 10, 25, 9, 0, tzinfo=bj)) is None  # 已写过不重复
+    # 刚上线、一份没写过：只写昨天，且要过 8 点
+    assert ds.due_days(datetime(2026, 10, 25, 7, 59, tzinfo=bj)) == []
+    assert ds.due_days(datetime(2026, 10, 25, 8, 0, tzinfo=bj)) == [DAY]
+    assert ds.due_days(datetime(2026, 10, 25, 0, 30, tzinfo=timezone.utc)) == [DAY]  # UTC 00:30 = 北京 08:30
+    _touch(DAY)
+    assert ds.due_days(datetime(2026, 10, 25, 9, 0, tzinfo=bj)) == []  # 已写过不重复
+
+
+def test_due_days_backfills_after_outage(monkeypatch):
+    # 10-22 写过，服务停到 10-26 09:00 才恢复：10-23、10-24、10-25 逐日补
+    monkeypatch.setattr(config, "DAILY_SUMMARY_HOUR", 8)
+    _touch(date(2026, 10, 22))
+    now = datetime(2026, 10, 26, 9, 0, tzinfo=ds.BEIJING)
+    assert ds.due_days(now) == [date(2026, 10, 23), date(2026, 10, 24), date(2026, 10, 25)]
+    # 8 点前：昨天还没到期，只补到前天
+    assert ds.due_days(now.replace(hour=7))[-1] == date(2026, 10, 24)
+    # 最多回溯运行日志保留期
+    monkeypatch.setattr(config, "RUN_LOG_RETENTION_DAYS", 2)
+    assert ds.due_days(now) == [date(2026, 10, 24), date(2026, 10, 25)]
+
+
+def test_partial_write_leaves_no_summary(monkeypatch):
+    # 写到一半失败（如磁盘满）：不留正式文件、不留临时文件，下一轮仍判为该写
+    def broken_fdopen(fd, *a, **k):
+        os.close(fd)
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(ds.os, "fdopen", broken_fdopen)
+    with pytest.raises(OSError):
+        ds.deliver(DAY, "小结", [])
+    assert os.listdir(config.DAILY_SUMMARY_DIR) == []
+    assert ds.due_days(datetime(2026, 10, 25, 9, 0, tzinfo=ds.BEIJING)) == [DAY]
+
+
+def test_log_rotated_while_reading_is_retried(monkeypatch):
+    # 列出文件后当前日志被按天切分改名：重新列一次再读，不漏数据
+    rotated = run_log.RUN_LOG_PATH.replace(".jsonl", "-2026-10-24.jsonl")
+    with open(rotated, "w", encoding="utf-8") as f:
+        f.write(_line("run_start") + "\n")
+    calls = []
+
+    def fake_log_files():
+        calls.append(1)
+        return [run_log.RUN_LOG_PATH] if len(calls) == 1 else [rotated]
+
+    monkeypatch.setattr(run_log, "log_files", fake_log_files)
+    assert ds.collect(ds._read_log_lines(), DAY, {}).analyses == 1
+
+
+def test_unreadable_log_fails_run_without_writing(monkeypatch):
+    monkeypatch.setattr(run_log, "log_files", lambda: [run_log.RUN_LOG_PATH + ".不存在"])
+    with pytest.raises(OSError):
+        ds.run_for(DAY, with_key_check=False)
+    assert not os.path.exists(ds.summary_path(DAY))
+
+
+def test_daily_loop_backfills_and_checks_keys_only_for_latest(monkeypatch):
+    days = [date(2026, 10, 23), DAY]
+    calls = []
+
+    def fake_run_for(day, with_key_check):
+        calls.append((day, with_key_check))
+
+    monkeypatch.setattr(ds, "due_days", lambda _now: days if not calls else [])
+    monkeypatch.setattr(ds, "run_for", fake_run_for)
+
+    async def go():
+        task = asyncio.create_task(ds.daily_loop(interval_s=0.01))
+        await asyncio.sleep(0.05)
+        task.cancel()
+
+    asyncio.run(go())
+    assert calls == [(date(2026, 10, 23), False), (DAY, True)]
 
 
 def test_daily_loop_survives_failure(monkeypatch, caplog):
     calls = []
 
-    def boom(day):
+    def boom(day, with_key_check):
         calls.append(day)
         raise OSError("磁盘已满")
 
-    monkeypatch.setattr(ds, "due_day", lambda _now: DAY)
+    monkeypatch.setattr(ds, "due_days", lambda _now: [date(2026, 10, 23), DAY])
     monkeypatch.setattr(ds, "run_for", boom)
 
     async def go():
@@ -159,7 +230,7 @@ def test_daily_loop_survives_failure(monkeypatch, caplog):
         task.cancel()
 
     asyncio.run(go())
-    assert len(calls) >= 2  # 失败后下一轮仍会重试
+    assert len(calls) >= 2 and DAY not in calls  # 某天失败就停在那天，下一轮从它重试
     assert "每日小结生成失败：OSError" in caplog.text
 
 
@@ -189,7 +260,7 @@ def test_service_starts_daily_loop_when_enabled(monkeypatch):
 
     seen = []
     monkeypatch.setattr(config, "DAILY_SUMMARY_ENABLED", True)
-    monkeypatch.setattr(ds, "due_day", lambda now: seen.append(now) or None)
+    monkeypatch.setattr(ds, "due_days", lambda now: seen.append(now) or [])
     with TestClient(app) as c:
         assert c.get("/").status_code == 200
         for _ in range(50):

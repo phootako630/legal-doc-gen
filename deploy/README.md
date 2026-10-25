@@ -194,7 +194,7 @@ docker compose exec backend python scripts/cost_report.py --days 7
 ```
 
   金额按 `backend/.env` 的 `COST_PRICES` 换算（格式见 `.env.example`），单价以 DeepSeek / 阿里云百炼控制台价格页为准，并把取值日期写进 `COST_PRICES_DATE`；没配单价时只列 token 与页数，金额显示「未配置单价」。
-- 每日运行小结：后端每天 8 点（北京时间，`DAILY_SUMMARY_HOUR`）后自动汇总前一天，写到数据卷里的 `daily_summary/YYYY-MM-DD.md`（服务重启错过时间点会补写；与运行日志同一保留期）。内容只有次数、比例、金额和 Key 检查结果，不含案件内容：分析次数、分析中断次数与错误类别、OCR 失败率、改用备用模型次数、改用付费 key 次数、成本，以及用各 Key 请求一次模型列表（不计费）的连通性。超过阈值的项列在文件开头「需要关注」，并在 `docker compose logs backend` 里记一条警告。阈值都在 `backend/.env` 里调（变量与默认值见 `backend/app/config.py`「每日运行小结」）：
+- 每日运行小结：后端每天 8 点（北京时间，`DAILY_SUMMARY_HOUR`）后自动汇总前一天，写到数据卷里的 `daily_summary/YYYY-MM-DD.md`（服务停了几天也会从最近一份逐日补写，读日志或写文件失败则下一小时重试；与运行日志同一保留期）。内容只有次数、比例、金额和 Key 检查结果，不含案件内容：分析次数、分析中断次数与错误类别、OCR 失败率、改用备用模型次数、改用付费 key 次数、成本，以及用各 Key 请求一次模型列表（不计费）的连通性。超过阈值的项列在文件开头「需要关注」，并在 `docker compose logs backend` 里记一条警告。阈值都在 `backend/.env` 里调（变量与默认值见 `backend/app/config.py`「每日运行小结」）：
 
 | 变量 | 默认 | 含义 |
 |---|---|---|
