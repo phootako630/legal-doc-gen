@@ -439,7 +439,7 @@ legal-doc-app/
 
 - **依赖导入与异常处理**：必需依赖应在依赖文件中明确声明；缺失或版本不兼容时明确报错并修复依赖配置。不得仅为使代码运行而堆叠 `try/except ImportError`、尝试多个替代库，或在导入失败时静默跳过功能。只有明确设计为可选依赖或兼容层时，才允许导入降级，并须说明触发条件、行为差异及验证方式。按文件格式选择不同解析库不属于导入降级。
 - LLM API：读取超时 120s、单次调用总时限 180s（DeepSeek 排队时回空行保活，读取超时不会触发），失败重试 1 次（关闭 SDK 自带重试，否则一次超时要等 6 分钟），返回中文错误信息；DeepSeek 超时（含总时限）/ 连不上 / 5xx / 429 / 402 时不再重试 DeepSeek，直接改用备用模型 `LLM_FALLBACK_MODEL`（默认 qwen3.8-flash，DashScope key 与 OCR 共用），之后 10 分钟内都走备用模型；key 无效（401）属配置错误，不切换
-- OCR：timeout 120s，失败返回 `{ error: "OCR 处理失败：具体原因" }`
+- OCR：timeout 120s，失败返回 `{ error: "OCR 处理失败：具体原因" }`；同步的 DashScope 请求只在 `ocr_engine` 的专用线程池里跑，全局名额 `OCR_GLOBAL_CONCURRENCY` 排队（排队时间不算单页超时）；上传时 PDF / Word 解析也在专用线程里跑。不要把阻塞调用放进默认线程池（`asyncio.to_thread` / `run_in_executor(None)`），2 核服务器默认池只有 6 个线程，占满后登录校验等所有请求都会卡住
 - 文件解析：不支持格式返回明确错误，不静默失败
 - JSON 解析：优先用结构化输出；仍需兜底去除 markdown 代码块标记后重试
 - Agent：成本超限（OCR 总页数用完）→ 停止 OCR，并在相关字段出处与起诉状里注明「扫描识别页数已达上限」（违约金 / 利息不按「合同未约定」套 LPR，验收报告没读到时日期 / 台数注明可能不全），不静默烧钱、不静默降级
@@ -879,6 +879,7 @@ DASHSCOPE_BASE_URL = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/m
 QWEN_OCR_MODEL = os.getenv("QWEN_OCR_MODEL", "qwen3.8-flash")  # 关闭思考模式调用；可改 qwen3.8-max / qwen-vl-ocr
 
 OCR_TIMEOUT = 120  # 秒
+OCR_GLOBAL_CONCURRENCY = 8  # 全服务同时识别的页数上限（所有律师共用，超出排队；OCR 用专用线程池，不挤占登录校验等请求的默认线程池）
 
 # 扫描件判断阈值：PyMuPDF 提取文字少于此字数 → 判定为扫描件
 SCANNED_PDF_TEXT_THRESHOLD = 50

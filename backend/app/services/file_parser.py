@@ -1,8 +1,10 @@
 # 文件解析调度：根据文件类型选择 PyMuPDF / python-docx / PaddleOCR
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Literal
 
 from fastapi import UploadFile
@@ -11,6 +13,10 @@ from app.config import SCANNED_PAGE_TEXT_THRESHOLD, SCANNED_PDF_TEXT_THRESHOLD
 from app.services import file_store, ocr_engine
 
 logger = logging.getLogger(__name__)
+
+# PDF / Word 解析是同步的 CPU 活（上百页的合同要几秒）：放进专用线程，不卡住事件循环，
+# 一位律师上传大文件时其他律师的页面照常响应；2 核服务器给 2 个线程
+_PARSE_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="parse")
 
 # 文件类型取值（上传页律师可改；分析接口按此校验）
 DocType = Literal["审批表", "合同", "补充协议", "验收报告", "战略合同", "未知"]
@@ -95,21 +101,29 @@ async def parse_file(upload_file: UploadFile) -> dict[str, Any]:
     if filename.lower().endswith(".pdf"):
         return await _parse_pdf(filename, content, identified_type)
     elif filename.lower().endswith((".docx", ".doc")):
-        return _parse_docx(filename, content, identified_type)
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            _PARSE_POOL, _parse_docx, filename, content, identified_type
+        )
     else:
         raise ValueError(f"不支持的文件格式：{filename}，仅支持 .pdf / .docx")
+
+
+def _pdf_page_texts(content: bytes) -> list[str]:
+    """逐页取文字层（同步，在 _PARSE_POOL 里跑）。"""
+    import fitz  # PyMuPDF
+
+    return [page.get_text() for page in fitz.open(stream=content, filetype="pdf")]
 
 
 async def _parse_pdf(
     filename: str, content: bytes, identified_type: str
 ) -> dict[str, Any]:
-    import fitz  # PyMuPDF
-
-    doc = fitz.open(stream=content, filetype="pdf")
-    page_count = doc.page_count
+    loop = asyncio.get_running_loop()
     # 逐页文本单独保留（pages），用于抽取值回原文定位到具体页码（出处可追溯）；
     # text 仍按原方式拼接，保持与既有抽取链路的输入字节一致。
-    per_page = [page.get_text() for page in doc]
+    per_page = await loop.run_in_executor(_PARSE_POOL, _pdf_page_texts, content)
+    page_count = len(per_page)
     text = "".join(per_page)
     pages = [{"page": i + 1, "text": t} for i, t in enumerate(per_page)]
 

@@ -60,6 +60,11 @@ LLM_FALLBACK_COOLDOWN_S = 600
 OCR_TIMEOUT = 300  # 秒——整份文件（所有页并发处理）的总超时，不是单页超时
 OCR_PAGE_TIMEOUT = 60  # 秒——单页请求的超时（原先误用整份文件的超时给单页，太宽松）
 OCR_MAX_CONCURRENCY = 5  # 单份文件内并发 OCR 请求数上限，避免触发 DashScope 限流
+# 全服务同时在识别的页数上限（所有律师的所有分析共用，超出的排队）。OCR 用专用线程池，
+# 不再挤占登录校验等请求共用的默认线程池（2 核服务器只有 6 个线程）。
+# 依据：qwen3.8-flash 等级 1 限额 250 万 TPM，每页约 3,000–5,000 Token、每页 5–15 秒，
+# 并发 8 约每分钟 30–100 页，远低于限额；10 位律师高峰同时分析也只是排队变慢，不被限流
+OCR_GLOBAL_CONCURRENCY = int(os.getenv("OCR_GLOBAL_CONCURRENCY", "8"))
 
 # 扫描件判断阈值：PyMuPDF 提取文字少于此字数 → 判定为扫描件
 SCANNED_PDF_TEXT_THRESHOLD = 50

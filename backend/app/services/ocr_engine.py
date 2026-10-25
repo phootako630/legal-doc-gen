@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import weakref
 from concurrent.futures import ThreadPoolExecutor
 from typing import TypedDict
 
@@ -20,6 +21,7 @@ from app.config import (
     DASHSCOPE_API_KEY,
     DASHSCOPE_API_KEY_BACKUP,
     DASHSCOPE_BASE_URL,
+    OCR_GLOBAL_CONCURRENCY,
     OCR_MAX_CONCURRENCY,
     OCR_PAGE_TIMEOUT,
     OCR_TIMEOUT,
@@ -29,6 +31,31 @@ from app.config import (
 from app.services import upload_progress
 
 logger = logging.getLogger(__name__)
+
+# ── 按需 OCR 的并发控制 ──────────────────────────────────────────────────────
+# DashScope 请求是同步的（requests），一页 5–15 秒。若放在默认线程池里，几个律师同时分析就会
+# 占满默认池（2 核服务器只有 6 个线程），登录校验（asyncio.to_thread）等所有请求跟着排队，
+# 整个网站像卡死一样。故 OCR 用专用线程池，并用全局信号量限制同时识别的页数：超出的在
+# 信号量上排队（单页超时从拿到名额后才开始算，排队不会被当成超时）。
+# 名额要等线程里的请求真正结束才释放：超时 / 取消只是不再等它，requests 还在跑，此时就放出名额，
+# 实际同时发往 DashScope 的请求会超过上限（#92 评审）。线程数与名额相同即可
+_OCR_POOL = ThreadPoolExecutor(
+    max_workers=OCR_GLOBAL_CONCURRENCY, thread_name_prefix="ocr"
+)
+# 渲染页面图片是本地 CPU 活，2 核服务器给 2 个线程
+_RENDER_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ocr-render")
+# 信号量绑定事件循环：服务里只有一个循环；测试里每次 asyncio.run 是新循环，各建一个
+_slots: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _ocr_slot() -> asyncio.Semaphore:
+    loop = asyncio.get_running_loop()
+    sem = _slots.get(loop)
+    if sem is None:
+        sem = _slots[loop] = asyncio.Semaphore(OCR_GLOBAL_CONCURRENCY)
+    return sem
 
 
 class OcrPage(TypedDict):
@@ -187,17 +214,21 @@ async def ocr_page(pdf_bytes: bytes, page_num: int) -> str:
     if not _keys():
         raise RuntimeError(_MISSING_KEY)
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
+    slot = _ocr_slot()
+    await slot.acquire()
+    # 当前在线程里跑的任务：等待时套 shield，超时 / 取消只放弃等待，任务本身要到线程结束才算完成
+    running: asyncio.Future | None = None
     try:
-        img_b64 = await loop.run_in_executor(
-            None, _render_page_b64, pdf_bytes, page_num
+        # 名额里渲染 + 识别：同时渲染出来、占着内存的页图也不超过名额数
+        running = loop.run_in_executor(
+            _RENDER_POOL, _render_page_b64, pdf_bytes, page_num
         )
+        img_b64 = await asyncio.shield(running)
         if img_b64 is None:
             return ""
-        return await asyncio.wait_for(
-            loop.run_in_executor(None, _ocr_image_b64, img_b64),
-            timeout=OCR_PAGE_TIMEOUT,
-        )
+        running = loop.run_in_executor(_OCR_POOL, _ocr_image_b64, img_b64)
+        return await asyncio.wait_for(asyncio.shield(running), timeout=OCR_PAGE_TIMEOUT)
     except asyncio.TimeoutError as exc:
         raise TimeoutError(
             f"第 {page_num} 页 OCR 超时（超过 {OCR_PAGE_TIMEOUT} 秒）"
@@ -206,6 +237,19 @@ async def ocr_page(pdf_bytes: bytes, page_num: int) -> str:
         raise
     except Exception as exc:
         raise RuntimeError(f"第 {page_num} 页 OCR 处理失败：{exc}") from exc
+    finally:
+        if running is None or running.done():
+            slot.release()
+        else:
+            # 线程还在跑（超时或请求被取消）：等它真正结束再放出名额
+            running.add_done_callback(lambda f: _release_after(f, slot))
+
+
+def _release_after(fut: asyncio.Future, slot: asyncio.Semaphore) -> None:
+    """放弃等待的线程任务结束后放出名额；顺手取走它的异常，免得事件循环报「异常没人取」。"""
+    if not fut.cancelled():
+        fut.exception()
+    slot.release()
 
 
 def _ocr_sync_qwen(pdf_bytes: bytes) -> OcrResult:
