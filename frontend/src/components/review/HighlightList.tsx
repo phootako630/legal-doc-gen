@@ -29,7 +29,7 @@ export function HighlightList({ highlightList }: HighlightListProps) {
     .filter(Boolean);
 
   if (lines.length === 0) {
-    return <p className="text-sm text-muted-foreground italic">无高亮项</p>;
+    return <p className="text-sm text-muted-foreground">无高亮项</p>;
   }
 
   return (

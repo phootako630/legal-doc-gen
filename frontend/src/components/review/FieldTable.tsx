@@ -65,20 +65,20 @@ export const FieldTable = forwardRef<FieldTableHandle, FieldTableProps>(
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
           <span className="text-muted-foreground">共 {rows.length} 个字段</span>
           {(counts.missing   ?? 0) > 0 && (
-            <span className="flex items-center gap-1 font-medium text-red-600">
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-red-500" />
+            <span className="flex items-center gap-1 font-medium text-status-missing">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-status-missing" />
               {counts.missing} 项缺失
             </span>
           )}
           {(counts.conflict  ?? 0) > 0 && (
-            <span className="flex items-center gap-1 font-medium text-orange-600">
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-orange-500" />
+            <span className="flex items-center gap-1 font-medium text-status-conflict">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-status-conflict" />
               {counts.conflict} 项冲突
             </span>
           )}
           {(counts.ocr_uncertain ?? 0) > 0 && (
-            <span className="flex items-center gap-1 font-medium text-amber-600">
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400" />
+            <span className="flex items-center gap-1 font-medium text-status-review">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-status-review" />
               {counts.ocr_uncertain} 项待核实
             </span>
           )}

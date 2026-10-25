@@ -143,7 +143,7 @@ export function FeedbackDialog({ open, onOpenChange, runId, target }: FeedbackDi
               placeholder="补充说明（选填）：比如正确的值应该是什么、在哪一页"
               aria-label="补充说明"
             />
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               说明只保存在服务器上，随案件数据一起到期自动删除。
             </p>
             {error && (

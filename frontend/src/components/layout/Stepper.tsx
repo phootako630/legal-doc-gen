@@ -57,7 +57,7 @@ export function Stepper({ currentStep }: StepperProps) {
                 >
                   {step.label}
                 </span>
-                <span className="text-[10px] text-muted-foreground/50 whitespace-nowrap">
+                <span className="text-xs text-muted-foreground/70 whitespace-nowrap">
                   {step.desc}
                 </span>
               </div>
