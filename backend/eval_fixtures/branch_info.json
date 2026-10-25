@@ -1,0 +1,9 @@
+{
+  "updated_at": "2099-01-01T00:00:00+08:00",
+  "source_file": "虚构原告信息表.xlsx",
+  "uploaded_by": null,
+  "entries": [
+    {"name": "日立电梯（中国）有限公司", "credit_code": "91440000000000000X", "address": "广州市天河区虚构大道1号", "representative": "虚构甲", "phone": ""},
+    {"name": "日立电梯（中国）有限公司梧桐分公司", "credit_code": "91320100000000001Y", "address": "南京市鼓楼区虚构大街1号", "representative": "虚构负责人乙", "phone": ""}
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "title": "虚构安装案 A（扫描合同按需 OCR、质保金断点、多份验收报告取最晚批准日期）",
+  "decisions": {
+    "payable_ratio": "100%"
+  },
+  "fields": {
+    "plaintiff_name_final": {
+      "value": "日立电梯（中国）有限公司梧桐分公司",
+      "review": "待核实"
+    },
+    "plaintiff_credit_code": "91320100000000001Y",
+    "plaintiff_person_in_charge": "虚构负责人乙",
+    "defendant_name": {
+      "value": "南京虚构置业有限公司",
+      "review": "待核实"
+    },
+    "contract_no": {
+      "value": "AH9000001",
+      "source": "审批表"
+    },
+    "contract_type": "安装合同",
+    "contract_sign_date": {
+      "value": "2024年3月5日",
+      "review": "待核实"
+    },
+    "total_amount": {
+      "value": 300000,
+      "source": "审批表"
+    },
+    "paid_amount": {
+      "value": 270000,
+      "source": "审批表"
+    },
+    "unpaid_amount": {
+      "value": 30000,
+      "source": "审批表"
+    },
+    "elevator_qty": 3,
+    "elevator_qty_contract": 3,
+    "acceptance_latest_date": {
+      "value": "2024年11月18日",
+      "source": "电梯监督检验报告2"
+    },
+    "retention_unpaid_amount": 30000,
+    "payable_ratio": "100%",
+    "interest_term": "违约金",
+    "document_kind": "民事起诉状",
+    "court_district": {
+      "value": "南京市雨花台区",
+      "match": "contains"
+    },
+    "dispute_clause_location": {
+      "value": "第五条",
+      "match": "contains"
+    }
+  }
+}

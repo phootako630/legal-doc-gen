@@ -266,7 +266,7 @@ Unit tests check each rule in isolation. To see how the whole system does on rea
 - **Free reruns**: OCR and LLM responses are recorded per case, keyed by the request. After a rule change, `--strict` replays the recordings at no cost and without network access; after a model or prompt change, `--mode live` re-records them. Each run is compared field by field with the previous one.
 - **Where the cases live**: real cases contain client information, so they stay on the server under `/srv/eval-cases` and are never committed (see [deploy/README.md](./deploy/README.md)).
 - **Latest result** (real-case set, October 2026): 164 of 165 scored fields correct (about 99%). The one error is a clause number misread by OCR; by design the system does not silently correct OCR text, and it marks scanned values for the lawyer to verify.
-- **Next**: a synthetic case set in the repository, replayed strictly in CI on every pull request, so a rule change that breaks another case fails before it is merged.
+- **Synthetic case set in CI**: [`backend/eval_fixtures/`](./backend/eval_fixtures/README.md) holds four fully synthetic cases (scanned contract read on demand, retention-money breakpoint, a strategic agreement with an arbitration clause, VGE home elevators, a lump-sum penalty, several jurisdiction rules) with their recorded responses. Every pull request replays them strictly in CI and compares each field with a committed baseline. The job fails, naming the case and field, if any field gets worse or if a change makes the system send a request that was never recorded (for example after a prompt edit); the message gives the command to re-record. It needs no API keys and runs in seconds.
 
 ## Deployment (UAT / production)
 

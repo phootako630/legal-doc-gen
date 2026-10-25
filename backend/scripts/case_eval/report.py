@@ -122,6 +122,13 @@ def render_markdown(meta: dict[str, Any], cases: list[dict[str, Any]], changes: 
               f"待定 {total[PENDING]}，准确率 {_pct(accuracy(total))}（待定不计分）；"
               f"来源错误 {_source_cell(total_q)}（填了预期来源的字段中），静默错误 {total_q[SILENT]}"
               "（审核页显示「正常」，但值错 / 应标待核实 / 回原文未命中）。", ""]
+    # 「错误」是看起来正常的错值（「缺失」在文书里显示【待补充】，律师一眼能看到）：单列出来
+    wrong = [(c, r) for c in cases for r in c.get("results") or [] if r["verdict"] == WRONG]
+    lines.append("## 错误字段（看起来正常的错值）")
+    lines.append("")
+    lines += [f"- {c.get('title') or c['case']}：`{r['key']}`（标准值 {_cell(r['expected'])}，"
+              f"系统值 {_cell(r['actual'])}）" for c, r in wrong] or ["无。"]
+    lines.append("")
 
     lines.append(f"## 与上次运行对比{f'（{prev_run}）' if prev_run else ''}")
     lines.append("")
@@ -183,7 +190,7 @@ def _source_check(r: dict[str, Any]) -> str:
 
 
 def write_report(out_dir: str, meta: dict[str, Any], cases: list[dict[str, Any]],
-                 prev: dict[str, Any] | None) -> str:
+                 prev: dict[str, Any] | None, extra: str = "") -> str:
     """写 report.md、results.json、每个案件的 complaint.txt / fields.json，返回 report.md 路径。"""
     os.makedirs(out_dir, mode=0o700, exist_ok=True)
     changes = diff_runs(prev, cases)
@@ -198,7 +205,7 @@ def write_report(out_dir: str, meta: dict[str, Any], cases: list[dict[str, Any]]
     _write(os.path.join(out_dir, "results.json"),
            json.dumps({"meta": meta, "cases": slim}, ensure_ascii=False, indent=1))
     path = os.path.join(out_dir, "report.md")
-    _write(path, render_markdown(meta, cases, changes, prev.get("_run") if prev else None))
+    _write(path, render_markdown(meta, cases, changes, prev.get("_run") if prev else None) + extra)
     return path
 
 

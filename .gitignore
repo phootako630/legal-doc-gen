@@ -56,3 +56,6 @@ deploy/certs/
 # Let's Encrypt 账号与证书、域名验证临时文件（deploy/cert.sh 生成）
 deploy/letsencrypt/
 deploy/certbot/
+
+# 案件 eval 的运行报告（虚构案卷集也不提交，每次运行生成）
+backend/eval_fixtures/_runs/

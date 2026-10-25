@@ -1,4 +1,4 @@
-# CI：PR / master 推送时跑后端 ruff + pytest、前端 lint + vitest + 类型检查与构建
+# CI：PR / master 推送时跑后端 ruff + pytest、虚构案卷集 eval 门槛、前端 lint + vitest + 类型检查与构建
 # 全部离线：后端测试已 mock LLM / OCR，不需要任何 API 密钥
 name: CI
 
@@ -30,6 +30,28 @@ jobs:
       - run: pip install -r requirements.txt
       - run: ruff check .
       - run: pytest -q
+
+  # 虚构案卷集严格回放（#82）：不调用任何 OCR / LLM、不需要密钥；任一字段比基线变差或缓存未命中即失败
+  eval:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: pip install -r requirements.txt
+      - run: python scripts/eval_cases.py eval_fixtures --strict --baseline eval_fixtures/baseline.json --out /tmp/eval-runs
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: /tmp/eval-runs
+          if-no-files-found: ignore
 
   frontend:
     runs-on: ubuntu-latest
