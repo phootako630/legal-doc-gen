@@ -217,6 +217,32 @@ def _source_risk_note(fields: dict, key: str, label: str) -> str:
     return f"（{'；'.join(notes)}）" if notes else ""
 
 
+# 上游字段出处里的「《文件名》」及紧随的「第N页」
+_CITE_RE = re.compile(r"《[^》]+》(?:第\s*\d+\s*页)?")
+
+
+def _cite(fields: dict, key: str) -> dict:
+    """
+    派生值沿用上游字段的出处：src 开头写「《合同.pdf》第5页；」，并带上页码。
+    「以合同为准」的值直接写进起诉状，律师要能看到出自哪份合同哪一页；回原文核对来源时
+    也按 src 里的文件名优先查找，不写文件名就会先命中材料顺序里第一个含该名称的审批表（#113）。
+    """
+    node = _node(fields, key)
+    m = _CITE_RE.search(str(node.get("src") or ""))
+    out: dict = {"prefix": f"{m.group()}；" if m else ""}
+    if isinstance(node.get("page"), int):
+        out["page"] = node["page"]
+    return out
+
+
+def _with_cite(result: dict, fields: dict, key: str) -> dict:
+    cite = _cite(fields, key)
+    result["src"] = cite["prefix"] + result["src"]
+    if "page" in cite:
+        result["page"] = cite["page"]
+    return result
+
+
 def plaintiff_name_field(fields: dict) -> dict | None:
     """
     原告全称。
@@ -239,22 +265,22 @@ def plaintiff_name_field(fields: dict) -> dict | None:
         src = "按律师规则：以合同盖章页乙方为准"
         if derived and derived[0] != party_b:
             src += f"（审批表「合同分公司」推出「{derived[0]}」，仅作参考）"
-        return {
+        return _with_cite({
             "value": party_b,
             "src": src + _source_risk_note(fields, "contract_party_b", "合同乙方"),
             "channel": "text",
-        }
+        }, fields, "contract_party_b")
 
     if derived is None:
         if not party_b:
             return None
         # 审批表「合同分公司」未填（独立工程公司签约时常见）：以合同盖章页乙方为准（第三轮第 12 题）
-        return {
+        return _with_cite({
             "value": party_b,
             "src": "按律师规则：审批表「合同分公司」未识别，取自合同盖章页乙方 / 安装方名称"
             + _source_risk_note(fields, "contract_party_b", "合同乙方"),
             "channel": "text",
-        }
+        }, fields, "contract_party_b")
     name, uncertain = derived
     if kind == "买卖":
         src = "按律师规则：买卖合同原告为总公司"
@@ -267,12 +293,12 @@ def plaintiff_name_field(fields: dict) -> dict | None:
     if party_b_rejected:
         src += f"；合同乙方识别为「{party_b_rejected}」，不像原告，已忽略"
     if party_b and party_b != name:
-        return {
+        return _with_cite({
             "value": party_b,
             "src": f"按律师规则：以合同盖章页乙方名称为准；与审批表推出的「{name}」不一致，待核实"
             + _source_risk_note(fields, "contract_party_b", "合同乙方"),
             "channel": "text",
-        }
+        }, fields, "contract_party_b")
     if party_b:
         src += "；与合同盖章页乙方一致"
     return {"value": name, "src": src, "channel": "text"}
@@ -306,13 +332,13 @@ def defendant_name_field(fields: dict) -> dict | None:
             src += f"（审批表写作「{approval_c}」，括号内为备注）"
         else:
             src += f"；与审批表「{approval_c}」不一致，待核实"
-    return {
+    return _with_cite({
         "value": party_a,
         "src": src + _source_risk_note(fields, "contract_party_a", "合同甲方"),
         "channel": "text",
         "approval_value": approval,
         "approval_src": approval_src,
-    }
+    }, fields, "contract_party_a")
 
 
 def plaintiff_rep_label_field(fields: dict) -> dict:
