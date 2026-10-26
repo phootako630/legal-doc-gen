@@ -28,7 +28,7 @@
       },
       "defendant_name": {
         "silent": false,
-        "source_ok": false,
+        "source_ok": true,
         "verdict": "正确"
       },
       "document_kind": {
