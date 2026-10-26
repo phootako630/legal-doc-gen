@@ -362,9 +362,66 @@ def case_lump_sum_penalty() -> None:
         })
 
 
+def case_unread_page() -> None:
+    """扫描合同 10 页，条款与签章页在前 5 页、质保期只写在第 9 页附件里：按需 OCR 找齐条款就停，
+    第 9 页没读到，质保期缺失 → 错误归因「可能未读到」（#108）。付款写「合同总价的X%」：
+    按需 OCR 靠这种写法认出付款条款正文，写成「合同价款的X%」认不出、会一直读到最后一页。"""
+    case = "虚构未读页案F"
+    os.makedirs(os.path.join(ROOT, case, "materials"), exist_ok=True)
+    _approval(case, "AH9000006常州虚构置业有限公司诉讼审批表.pdf", {
+        "serial": "SS2099-000106", "title": "AH9000006常州虚构置业有限公司虚构湾项目",
+        "contract_no": "AH9000006", "branch_path": "集团/营销网络/梧桐分公司",
+        "buyer": "常州虚构置业有限公司", "contact": "虚构己", "contact_phone": "13800000006",
+        "buyer_address": "常州市武进区虚构路6号", "site": "常州市武进区虚构路6号虚构湾",
+        "contract_type": "安装合同", "amount_label": "安装", "sign_date": "2024-06-01", "qty": "2", "qty_actual": "2",
+        "total": "120,000.00", "paid": "60,000.00", "unpaid": "60,000.00",
+        "gov_accept": "2024-12-10", "last_pay_date": "2024-09-01", "reason": "电梯已验收，买方未付验收款。",
+    })
+    appendix = [f"附件{n}：施工组织说明（第{n}部分）\n本附件仅供施工参考，不构成付款条件。" for n in range(1, 4)]
+    _scanned_pdf(os.path.join(ROOT, case, "materials", "常州虚构湾项目电梯安装合同.pdf"), [
+        """电梯安装合同
+
+合同编号：AH9000006
+甲方：常州虚构置业有限公司
+乙方：日立电梯（中国）有限公司梧桐分公司""",
+        """第一条 工程概况
+工程地点：常州市武进区虚构路6号。乙方负责安装电梯共2台。
+
+第二条 合同价款
+本合同安装总价为人民币120,000元（大写：壹拾贰万元整）。""",
+        """第三条 付款方式
+3.1 电梯进场后10日内，甲方支付合同总价的50%。
+3.2 电梯经政府验收合格后30日内，甲方支付至合同总价的100%。""",
+        """第四条 违约责任
+甲方逾期付款的，每逾期一日按应付未付款的万分之五向乙方支付违约金。
+
+第五条 争议解决
+因本合同发生的争议，双方协商不成的，向工程所在地人民法院提起诉讼。""",
+        """第六条 其他
+本合同自双方盖章之日起生效，附件为本合同组成部分。
+（以下无正文）
+甲方（盖章）：常州虚构置业有限公司
+乙方（盖章）：日立电梯（中国）有限公司梧桐分公司
+签订日期：2024年6月3日""",
+        *appendix,
+        """附件4：质量保修
+质保期：自电梯验收合格之日起24个月。""",
+        """附件5：联系人名单
+甲方现场联系人、乙方项目经理名单另行书面通知。""",
+    ])
+    for i, code in enumerate(["31103204202400000061", "31103204202400000062"], start=1):
+        _report(case, f"电梯监督检验报告{i}.pdf", {
+            "report_no": f"XG-DTJ-2024-96{i:02d}", "user": "常州虚构置业有限公司",
+            "installer": "日立电梯（中国）有限公司梧桐分公司", "device_code": code,
+            "inspect_date": "2024年12月3日", "approve_date": "2024年12月10日",
+            "site": "常州市武进区虚构路6号虚构湾", "model": "HGP",
+        })
+
+
 if __name__ == "__main__":
     case_install_scanned()
     case_sales_arbitration()
     case_install_vge()
     case_lump_sum_penalty()
+    case_unread_page()
     print("已生成：", ", ".join(sorted(n for n in os.listdir(ROOT) if not n.startswith(("_", ".")) and os.path.isdir(os.path.join(ROOT, n)))))

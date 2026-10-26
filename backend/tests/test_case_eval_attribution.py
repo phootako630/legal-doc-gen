@@ -81,3 +81,32 @@ def test_score_field_sets_cause_only_for_wrong_or_missing():
     assert ok.cause is None
     no_files = score_field("dispute_clause_location", "第五条", _node("第四条", 1))
     assert no_files.cause is None  # 没给材料（旧调用方式）不归因
+
+
+# ── #115 评审回归 ─────────────────────────────────────────────────────────────
+def test_empty_ocr_page_counts_as_read():
+    # 两页都 OCR 过，其中一页识别为空：找不到标准值是 OCR 的问题，不是没读到
+    files = _files([(1, "电梯安装合同"), (2, "")])
+    assert attribute("contract_sign_date", "2024年3月5日", _node("2024年3月8日", 2), files) == OCR_SUSPECT
+
+
+def test_ocr_field_not_masked_by_text_material():
+    # OCR 字段的出处没带可解析的文件名，审批表里恰好有正确金额：仍按扫描件归因
+    node = {"value": "306,000.00", "src": "合同第二条（OCR识别，请核实）", "channel": "ocr"}
+    files = _files([(1, "合同总价为人民币306,000元")])
+    assert attribute("total_amount", "300,000.00", node, files) == OCR_SUSPECT
+
+
+def test_branch_table_fields_are_not_ocr():
+    for key in ("plaintiff_credit_code", "plaintiff_address", "plaintiff_person_in_charge"):
+        assert attribute(key, "91320100000000001Y", {"value": None}, _files(_PAGES)) == NOT_OCR
+
+
+def test_every_derived_field_is_classified():
+    # 新增派生字段时必须归入「照抄原文 / 原告信息表 / 规则措辞」之一，否则归因会错分
+    from app.services.derived_fields import _DERIVERS
+    from scripts.case_eval.attribution import BRANCH_TABLE_DERIVED, LITERAL_DERIVED, RULE_DERIVED
+
+    groups = [LITERAL_DERIVED, BRANCH_TABLE_DERIVED, RULE_DERIVED]
+    assert set().union(*groups) == {k for k, _, _ in _DERIVERS}
+    assert sum(len(g) for g in groups) == len(set().union(*groups))  # 不重复归类

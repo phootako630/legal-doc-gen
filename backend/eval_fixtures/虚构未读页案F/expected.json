@@ -1,0 +1,37 @@
+{
+  "title": "虚构未读页案 F（错误归因：质保期在扫描合同第 9 页，按需 OCR 找齐条款后停在第 5 页，归为「可能未读到」）",
+  "fields": {
+    "plaintiff_name_final": {
+      "value": "日立电梯（中国）有限公司梧桐分公司",
+      "review": "待核实"
+    },
+    "defendant_name": {
+      "value": "常州虚构置业有限公司",
+      "review": "待核实"
+    },
+    "contract_no": {
+      "value": "AH9000006",
+      "source": "审批表"
+    },
+    "contract_type": "安装合同",
+    "contract_sign_date": "2024年6月3日",
+    "total_amount": {
+      "value": 120000,
+      "source": "审批表"
+    },
+    "paid_amount": {
+      "value": 60000,
+      "source": "审批表"
+    },
+    "unpaid_amount": {
+      "value": 60000,
+      "source": "审批表"
+    },
+    "acceptance_latest_date": "2024年12月10日",
+    "interest_term": "违约金",
+    "warranty_period": {
+      "value": "24个月",
+      "match": "contains"
+    }
+  }
+}
