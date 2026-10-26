@@ -6,6 +6,7 @@ import json
 import os
 from typing import Any
 
+from scripts.case_eval.attribution import CAUSES
 from scripts.case_eval.scoring import CORRECT, MISSING, PENDING, SILENT, SOURCE_WRONG, WRONG
 
 _CELL_MAX = 60
@@ -66,12 +67,27 @@ def diff_runs(prev: dict[str, Any] | None, cases: list[dict[str, Any]]) -> list[
         for c in prev.get("cases", [])
         for r in c.get("results") or []
     }
+    # 归因（#108）只在两次运行都算过时比较：旧的 results.json 没有这一项，不能算「变了」
+    causes_before = {
+        (c["case"], r["key"]): r.get("cause")
+        for c in prev.get("cases", [])
+        for r in c.get("results") or []
+        if "cause" in r
+    }
     changes = []
     for c in cases:
         for r in c.get("results") or []:
-            old = before.get((c["case"], r["key"]))
-            if old is not None and old != _label(r):
-                changes.append({"case": c["case"], "key": r["key"], "before": old, "after": _label(r)})
+            k = (c["case"], r["key"])
+            old = before.get(k)
+            old_cause, new_cause = causes_before.get(k), r.get("cause")
+            if old is None:
+                continue
+            if old != _label(r) or (k in causes_before and old_cause != new_cause):
+                changes.append({
+                    "case": c["case"], "key": r["key"],
+                    "before": old + (f"（{old_cause}）" if old_cause else ""),
+                    "after": _label(r) + (f"（{new_cause}）" if new_cause else ""),
+                })
     return changes
 
 
@@ -122,6 +138,19 @@ def render_markdown(meta: dict[str, Any], cases: list[dict[str, Any]], changes: 
               f"待定 {total[PENDING]}，准确率 {_pct(accuracy(total))}（待定不计分）；"
               f"来源错误 {_source_cell(total_q)}（填了预期来源的字段中），静默错误 {total_q[SILENT]}"
               "（审核页显示「正常」，但值错 / 应标待核实 / 回原文未命中）。", ""]
+    # 错误 / 缺失按归因计数（#108）：决定该投入改 OCR 还是改抽取 / 规则
+    causes: dict[str, int] = {}
+    for c in cases:
+        for k, n in (c.get("causes") or {}).items():
+            causes[k] = causes.get(k, 0) + n
+    lines.append("## 错误归因（错误 + 缺失字段）")
+    lines.append("")
+    if causes:
+        lines += ["| " + " | ".join(CAUSES) + " |", "|" + "---|" * len(CAUSES),
+                  "| " + " | ".join(str(causes.get(k, 0)) for k in CAUSES) + " |"]
+    else:
+        lines.append("无。")
+    lines.append("")
     # 「错误」是看起来正常的错值（「缺失」在文书里显示【待补充】，律师一眼能看到）：单列出来
     wrong = [(c, r) for c in cases for r in c.get("results") or [] if r["verdict"] == WRONG]
     lines.append("## 错误字段（看起来正常的错值）")
@@ -163,12 +192,12 @@ def render_markdown(meta: dict[str, Any], cases: list[dict[str, Any]], changes: 
         ]
         if bad:
             lines += [
-                "| 字段 | 结论 | 标准值 | 系统值 | 审核页显示 | 来源核对 | 系统出处 |",
-                "|---|---|---|---|---|---|---|",
+                "| 字段 | 结论 | 归因 | 标准值 | 系统值 | 审核页显示 | 来源核对 | 系统出处 |",
+                "|---|---|---|---|---|---|---|---|",
             ]
             lines += [
-                f"| `{r['key']}` | {_label(r)} | {_cell(r['expected'])} | {_cell(r['actual'])} | "
-                f"{r.get('shown') or '—'} | {_source_check(r)} | {_cell(r['src'])} |"
+                f"| `{r['key']}` | {_label(r)} | {r.get('cause') or '—'} | {_cell(r['expected'])} | "
+                f"{_cell(r['actual'])} | {r.get('shown') or '—'} | {_source_check(r)} | {_cell(r['src'])} |"
                 for r in bad
             ]
         else:
