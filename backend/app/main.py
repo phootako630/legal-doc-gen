@@ -42,6 +42,7 @@ from app.routers import (  # noqa: E402
     files,
     generate,
     resume,
+    source_page,
 )
 
 logger = logging.getLogger(__name__)
@@ -90,6 +91,7 @@ app.include_router(generate.router, prefix="/api")
 app.include_router(branches.router, prefix="/api")
 app.include_router(feedback.router, prefix="/api")
 app.include_router(client_errors.router, prefix="/api")
+app.include_router(source_page.router, prefix="/api")
 
 
 

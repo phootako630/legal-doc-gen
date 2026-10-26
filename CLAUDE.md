@@ -187,6 +187,7 @@ POST /api/resume             # 律师在断点处给出决定后恢复 agent
 GET /api/case/{run_id}       # 取回会话当前状态（刷新页面后「继续上次的案件」）；过期 / 不存在 404
 #   按账号隔离：会话记下发起分析的登录账号（run_meta.owner），case / resume / analyze/result / feedback / generate
 #   的改动统计只认本人，别人的会话一律按不存在（404）处理；未开启登录不限制，升级前的旧会话（无 owner）不限制
+GET /api/case/{run_id}/page?file=<文件名>&page=N&field=<字段key>  # 审核页「原件第 N 页」：扫描件该页 PNG（#111）；同上按账号隔离、过期 404，文件只在本会话材料里按名找（file_id 不经客户端），文字版材料 404 并提示打开原文件；禁止缓存；渲染走专用线程（`services/page_image.py`）；运行日志 `source_page_view` 只记字段 key / 页码 / 结果，不记文件名
 GET /api/analyze/result?key=<请求编号>  # 处理页刷新后接回同一次分析：还在跑就等它跑完，已跑完直接返回；失败 / 重启 / 过期 404
 GET /healthz、GET /readyz（不在 /api 下，nginx 不转发）  # 存活（docker 健康检查）/ 就绪（checkpoint 库读写、磁盘余量 `READY_MIN_FREE_MB`、Key 已配置；deploy.sh 用，不就绪回滚）
 POST /api/client-error            # 前端上报未捕获异常 / 接口 5xx（#76）：只收错误类型、步骤、接口名、状态码、run_id（extra=forbid，不收消息原文），记运行日志 client_error，同一账号 / IP 每分钟 `CLIENT_ERROR_RATE_PER_MIN` 条；只在生产构建上报（`lib/error-report.ts`）
@@ -378,6 +379,7 @@ legal-doc-app/
 │   │   │   ├── files.py             # POST /api/upload
 │   │   │   ├── analyze.py           # POST /api/analyze（启动 agent，SSE）
 │   │   │   ├── resume.py            # POST /api/resume（断点恢复）
+│   │   │   ├── source_page.py       # GET /api/case/{run_id}/page（审核页查看扫描件原件页）
 │   │   │   ├── generate.py          # POST /api/generate
 │   │   │   ├── branches.py          # /api/branches（原告信息表，更新须管理员口令）
 │   │   │   └── auth.py              # /api/auth（登录 / 退出 / 改密码）+ 登录校验中间件
@@ -388,6 +390,7 @@ legal-doc-app/
 │   │   │   └── nodes.py             # 清点/抽取/校验/生成节点
 │   │   ├── services/                # 工具层（框架无关，纯函数，可单测）
 │   │   │   ├── file_store.py        # 上传原始字节落盘（按需 OCR 取回；过期清理）
+│   │   │   ├── page_image.py        # 扫描件某页渲染成 PNG（审核页对照原件，专用线程池）
 │   │   │   ├── file_parser.py       # PDF/Word 文本提取调度
 │   │   │   ├── ocr_engine.py        # Qwen-VL-OCR（DashScope）；RapidOCR 备用注释
 │   │   │   ├── llm_client.py        # DeepSeek 封装（OpenAI SDK，结构化输出）
@@ -484,6 +487,7 @@ Step 3: 审核确认 ⭐ 核心页面（agent 断点的 UI）
       「只看需处理的」勾选后只显示缺失 / 冲突 / 待核实的字段
     - 按 confidence 排序，低分默认展开；数字放 hover
     - 冲突字段展开各来源值，律师选择
+    - OCR 来源的字段在来源列显示「原件第 N 页」，点开弹窗看扫描件该页（点图片放大）
     - 所有字段可点击编辑
   - 右侧：校验报告 + 高亮列表
   - 律师决定 → POST /api/resume（可多次往返直至无待决）

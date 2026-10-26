@@ -316,6 +316,20 @@ async def delivered_fields(run_id: str, user: str | None = None) -> dict | None:
     return fields if isinstance(fields, dict) else None
 
 
+async def case_file(run_id: str, filename: str, user: str | None = None) -> dict | None:
+    """
+    会话材料里名为 filename 的那份文件（审核页查看原件用）。只在本会话的材料里找，
+    客户端拿不到也传不进 file_id，不能借别的会话的编号读文件。会话过期、不存在、
+    不是该账号发起的，或没有这份材料，返回 None。同名文件有多份时优先暂存了原件的那份。
+    """
+    if await checkpoint.is_expired(run_id) or not await checkpoint.can_access(run_id, user):
+        return None
+    graph = await get_graph()
+    snapshot = await graph.aget_state(_config(run_id))
+    files = [f for f in (snapshot.values or {}).get("files") or [] if f.get("filename") == filename]
+    return next((f for f in files if f.get("file_id")), files[0] if files else None)
+
+
 async def _analyze_and_remember(
     key: str,
     fingerprint: str,

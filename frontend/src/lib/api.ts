@@ -183,6 +183,22 @@ export async function fetchCase(runId: string, signal?: AbortSignal): Promise<Ca
   return res.json() as Promise<CaseState>;
 }
 
+/** 扫描件原件某一页的图片（审核页「查看原件」，#111）；field 只用于后端统计看过原件的字段 */
+export async function fetchSourcePage(
+  runId: string,
+  file: string,
+  page: number,
+  field: string,
+  signal?: AbortSignal,
+): Promise<Blob> {
+  const query = new URLSearchParams({ file, page: String(page), field });
+  const res = await safeFetch(`${BASE}/case/${encodeURIComponent(runId)}/page?${query}`, {
+    signal,
+  });
+  if (!res.ok) throw await extractError(res, '原件加载失败');
+  return res.blob();
+}
+
 /** 调用 LLM 生成起诉状全文 */
 export async function generateComplaint(
   validatedJson: ExtractedFields,

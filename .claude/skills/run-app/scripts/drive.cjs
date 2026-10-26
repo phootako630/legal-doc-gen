@@ -2,7 +2,7 @@
 //
 // 用法：node drive.cjs <输出目录> <文件1> [文件2 ...] [--resume]
 //   --resume：遇到断点（「提交并继续」）时按页面默认值提交并继续；不加则截图后停止，交给人判断。
-// 输出（输出目录下）：01-upload.png … 06-preview-full.png（02b-materials.png 为材料类型确认）、04-pending-N.png、
+// 输出（输出目录下）：01-upload.png … 06-preview-full.png（02b-materials.png 为材料类型确认，05b-source-page.png 为原件对照弹窗）、04-pending-N.png、
 //   analyze.json（/api/analyze 与 /api/resume 的最后一次响应）、complaint.txt（/api/generate 生成的全文）。
 // 文件名会影响材料类型识别：建议含「审批表」「合同」「检验报告 / 验收报告」等字样。
 const fs = require('fs');
@@ -101,6 +101,17 @@ const ANALYSIS_TIMEOUT_MS = 15 * 60 * 1000;
   await page.waitForTimeout(1000);
   await shot('05-review-top', false);
   await shot('05-review-full');
+  // 有 OCR 来源的字段时打开第一个「原件第 N 页」，截原件对照弹窗（#111）
+  const sourceBtn = page.getByRole('button', { name: /原件第 \d+ 页/ }).first();
+  if (await sourceBtn.count()) {
+    await sourceBtn.scrollIntoViewIfNeeded();
+    await sourceBtn.click();
+    await page.waitForSelector('img[alt*="原件"]', { timeout: 30000 }).catch(() => undefined);
+    await page.waitForTimeout(500);
+    await shot('05b-source-page', false);
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(300);
+  }
   await page.getByRole('button', { name: /确认并生成起诉状/ }).click();
   await page.waitForSelector('text=下载', { timeout: 120000 });
   await page.waitForTimeout(1500);

@@ -168,6 +168,7 @@ export function ReviewStep({
               validations={current.validations}
               initialEdits={edits}
               onEditsChange={onEditsChange}
+              runId={current.run_id}
               onFeedback={(f) =>
                 openFeedback({
                   key: f.key,

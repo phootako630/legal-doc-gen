@@ -5,6 +5,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { cn } from '@/lib/utils';
 import type { ReviewField, FieldStatus } from '@/lib/types';
 import { MessageSquareWarning, Pencil } from 'lucide-react';
+import { sourcePageTarget } from '@/lib/source-page';
+import { SourcePageButton } from './SourcePageButton';
 
 const STATUS_CONFIG: Record<FieldStatus, { label: string; className: string }> = {
   normal:        { label: '正常',   className: 'border-status-ok-border       bg-status-ok-bg       text-status-ok       hover:bg-status-ok-bg' },
@@ -27,9 +29,11 @@ interface FieldRowProps {
   isEven: boolean;
   /** 律师觉得该字段有问题时点「反馈」；不传则不显示按钮 */
   onFeedback?: (field: ReviewField) => void;
+  /** 会话编号：有时 OCR 来源的字段可「查看原件」 */
+  runId?: string;
 }
 
-export function FieldRow({ field, onSave, isEven, onFeedback }: FieldRowProps) {
+export function FieldRow({ field, onSave, isEven, onFeedback, runId }: FieldRowProps) {
   const displayValue = field.editedValue !== undefined ? field.editedValue : field.value;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
@@ -52,6 +56,7 @@ export function FieldRow({ field, onSave, isEven, onFeedback }: FieldRowProps) {
   const cfg = STATUS_CONFIG[field.status];
   const bg  = ROW_BG[field.status];
   const isEdited = field.editedValue !== undefined;
+  const pageTarget = runId ? sourcePageTarget(field) : null;
 
   return (
     <tr
@@ -119,7 +124,14 @@ export function FieldRow({ field, onSave, isEven, onFeedback }: FieldRowProps) {
                 {field.src}
               </TooltipContent>
             </Tooltip>
-            {field.page != null && (
+            {pageTarget && runId ? (
+              <SourcePageButton
+                runId={runId}
+                fieldKey={field.key}
+                fieldLabel={field.label}
+                target={pageTarget}
+              />
+            ) : field.page != null && (
               <Badge
                 variant="outline"
                 className="w-fit border-sky-200 bg-sky-50 px-1.5 py-0 text-xs font-normal text-sky-700"

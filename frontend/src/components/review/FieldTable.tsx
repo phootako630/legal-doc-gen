@@ -18,6 +18,8 @@ interface FieldTableProps {
   initialEdits?: Record<string, string>;
   /** 每次修改后回报全部修改，由流程状态保存 */
   onEditsChange?: (edits: Record<string, string>) => void;
+  /** 会话编号：OCR 来源的字段据此「查看原件」 */
+  runId?: string;
 }
 
 function collectEdits(rows: ReviewField[]): Record<string, string> {
@@ -28,7 +30,7 @@ function collectEdits(rows: ReviewField[]): Record<string, string> {
 
 export const FieldTable = forwardRef<FieldTableHandle, FieldTableProps>(
   function FieldTable(
-    { extractedFields, validations = [], onFeedback, initialEdits, onEditsChange },
+    { extractedFields, validations = [], onFeedback, initialEdits, onEditsChange, runId },
     ref,
   ) {
     const [rows, setRows] = useState<ReviewField[]>(() =>
@@ -144,6 +146,7 @@ export const FieldTable = forwardRef<FieldTableHandle, FieldTableProps>(
                     onSave={handleSave}
                     isEven={idx % 2 === 0}
                     onFeedback={onFeedback}
+                    runId={runId}
                   />
                 ))}
               </tbody>
