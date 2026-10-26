@@ -15,7 +15,7 @@ from app.agent.runner import run_analyze, run_resume
 from app.services.complaint_renderer import render_complaint
 from app.services.file_parser import parse_file
 from scripts.case_eval.cache import ReplayCache, patched
-from scripts.case_eval.scoring import score_case, summarize, summarize_quality
+from scripts.case_eval.scoring import score_case, summarize, summarize_causes, summarize_quality
 
 MATERIAL_EXTS = (".pdf", ".docx", ".doc")
 MAX_RESUMES = 6  # 断点轮数上限：正常案件 0–2 次，超过说明在原地打转
@@ -111,6 +111,7 @@ async def run_case(case_dir: str, mode: str = "replay", strict: bool = False) ->
         result["results"] = [r.as_dict() for r in scored]
         result["summary"] = summarize(scored)
         result["quality"] = summarize_quality(scored)
+        result["causes"] = summarize_causes(scored)
     except Exception as exc:  # noqa: BLE001 — 一个案件出错不影响其他案件
         result["error"] = f"{type(exc).__name__}: {exc}"
     result["stats"] = cache.stats.as_dict()

@@ -3,6 +3,8 @@
 # 按字段比对，不逐句比对诉状全文：律师之间的措辞本就不统一，全文比对会把措辞差异算成错误。
 # expected.json 的写法见 scripts/eval_cases.py 文件头。
 #
+# 错误 / 缺失的字段另做归因（#108，attribution.py）：OCR 认错、抽取取错、没读到还是规则推导。
+#
 # 除了值，还看两件事（#59）：
 #   - 来源：标准答案填了 source 时，把系统值回原文重新锚定（与应用同一个 resolve_provenance），
 #     看实际在哪个文件命中，不看模型在 src 里自称来自哪里
@@ -17,6 +19,7 @@ from typing import Any
 
 from app.services.provenance import resolve_provenance
 from app.services.validators import parse_amount, parse_date
+from scripts.case_eval.attribution import attribute
 
 MATCHES = ("text", "contains", "amount", "date", "absent")
 
@@ -77,6 +80,7 @@ class FieldResult:
     verified_source: str | None = None  # 值回原文实际命中的文件（只在填了 source 时算）
     source_ok: bool | None = None  # None = 没检查来源
     silent: bool = False
+    cause: str | None = None  # 错误 / 缺失字段的归因（#108，见 attribution.py）
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -92,6 +96,7 @@ class FieldResult:
             "verified_source": self.verified_source,
             "source_ok": self.source_ok,
             "silent": self.silent,
+            "cause": self.cause,
         }
 
 
@@ -237,6 +242,8 @@ def score_field(
 
     if result.shown == SHOWN_NORMAL:
         result.silent = verdict == WRONG or parsed["review"] == SHOWN_REVIEW or unanchored
+    if verdict in (WRONG, MISSING) and match != "absent" and files is not None:
+        result.cause = attribute(key, expected, node, files, parsed["source"])
     return result
 
 
@@ -256,6 +263,15 @@ def summarize(results: list[FieldResult]) -> dict[str, int]:
     counts = {CORRECT: 0, WRONG: 0, MISSING: 0, PENDING: 0}
     for r in results:
         counts[r.verdict] += 1
+    return counts
+
+
+def summarize_causes(results: list[FieldResult]) -> dict[str, int]:
+    """错误 / 缺失字段按归因计数（#108）。"""
+    counts: dict[str, int] = {}
+    for r in results:
+        if r.cause:
+            counts[r.cause] = counts.get(r.cause, 0) + 1
     return counts
 
 
