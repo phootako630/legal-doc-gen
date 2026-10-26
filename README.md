@@ -13,6 +13,49 @@ After the lawyer reviews and confirms, the app generates a civil complaint as a 
 >
 > **Current status**: deployed for lawyer trials (UAT), to validate AI extraction accuracy and the lawyer experience. The site has a Chinese login page, admin-created accounts and HTTPS. Case state is stored in a local SQLite database, so review can resume after a restart, and it is purged automatically after 7 days.
 
+## At a glance
+
+### Architecture
+
+- **Three layers.** A React single-page app (upload → processing → review → preview) talks to a FastAPI backend. The backend runs a LangGraph agent, and the agent calls framework-agnostic tools in `backend/app/services/`.
+- **Agent graph.** One case runs through a fixed set of nodes:
+  1. `approval_ocr`: OCR a scanned approval form.
+  2. `intake`: check which materials were uploaded. This is plain code.
+  3. `extract`: the LLM extracts fields as structured output.
+  4. `ocr_augment`, `report_ocr`, `contract_scan`: OCR scanned contracts and reports page by page, stopping once the needed clauses are found.
+  5. `qty_check`, `retention`, `validate`: lawyer breakpoints.
+
+  Each breakpoint is a LangGraph `interrupt`. The case state is checkpointed to SQLite, so the lawyer can answer, refresh or come back later, and the agent resumes from the same point.
+- **Division of labour.** The LLM only reads values and clause text out of the materials. Deterministic Python code does everything else:
+  - matching each value back to its source page;
+  - reconciling amounts and elevator counts;
+  - applying the lawyer-confirmed drafting rules;
+  - filling the complaint template.
+
+  The frontend turns the filled template into a Word file.
+- **External services.** DeepSeek is the LLM, with Qwen as the fallback. Qwen multimodal via DashScope does the OCR. API keys stay on the server.
+
+Details: [System architecture](#system-architecture) and [Data flow](#data-flow-agent-session--human-in-the-loop).
+
+### Evaluation
+
+- **Real cases.** `backend/scripts/eval_cases.py` runs the full pipeline, without the browser, on real cases whose complaints a lawyer has already written. It scores the result field by field. The latest run got 164 of 165 fields right. Real cases stay on the server and are never committed.
+- **Synthetic cases in CI.** Every pull request replays six fully synthetic cases in [`backend/eval_fixtures/`](./backend/eval_fixtures/README.md), using recorded OCR and LLM responses, so it needs no network and costs nothing. The job fails if any field gets worse against the committed baseline, or if a change sends a request that was never recorded.
+- **Beyond accuracy.** Reports also count:
+  - fields taken from the wrong source file;
+  - *silent errors*: wrong values that the review page shows as normal.
+
+  Each wrong or missing field is also attributed to a cause, using only the recorded OCR text:
+  - extraction error;
+  - suspected OCR misread;
+  - page never OCR'd;
+  - value not from OCR;
+  - rule-derived wording.
+
+  The cause shows whether to work on OCR or on extraction next.
+
+Details: [Evaluation](#evaluation).
+
 ---
 
 ## Core principles
@@ -266,7 +309,7 @@ Unit tests check each rule in isolation. To see how the whole system does on rea
 - **Free reruns**: OCR and LLM responses are recorded per case, keyed by the request. After a rule change, `--strict` replays the recordings at no cost and without network access; after a model or prompt change, `--mode live` re-records them. Each run is compared field by field with the previous one.
 - **Where the cases live**: real cases contain client information, so they stay on the server under `/srv/eval-cases` and are never committed (see [deploy/README.md](./deploy/README.md)).
 - **Latest result** (real-case set, October 2026): 164 of 165 scored fields correct (about 99%). The one error is a clause number misread by OCR; by design the system does not silently correct OCR text, and it marks scanned values for the lawyer to verify.
-- **Synthetic case set in CI**: [`backend/eval_fixtures/`](./backend/eval_fixtures/README.md) holds four fully synthetic cases (scanned contract read on demand, retention-money breakpoint, a strategic agreement with an arbitration clause, VGE home elevators, a lump-sum penalty, several jurisdiction rules) with their recorded responses. Every pull request replays them strictly in CI and compares each field with a committed baseline. The job fails, naming the case and field, if any field gets worse or if a change makes the system send a request that was never recorded (for example after a prompt edit); the message gives the command to re-record. It needs no API keys and runs in seconds.
+- **Synthetic case set in CI**: [`backend/eval_fixtures/`](./backend/eval_fixtures/README.md) holds six fully synthetic cases (scanned contract read on demand, retention-money breakpoint, a strategic agreement with an arbitration clause, VGE home elevators, a lump-sum penalty, several jurisdiction rules, plus two cases with deliberate errors that pin down error attribution) with their recorded responses. Every pull request replays them strictly in CI and compares each field with a committed baseline. The job fails, naming the case and field, if any field gets worse or if a change makes the system send a request that was never recorded (for example after a prompt edit); the message gives the command to re-record. It needs no API keys and runs in seconds.
 
 ## Deployment (UAT / production)
 
