@@ -14,6 +14,8 @@ from app.services.confidence import SourceChannel
 
 # 从 src 文本里取出第一个《文件名》，用于优先在该来源文件内定位
 _SRC_FILE_RE = re.compile(r"《([^》]+)》")
+# src 里模型写的页码「第5页」：值在多页都能命中时优先这一页，出处文字与按钮页码才一致（#120）
+SRC_PAGE_RE = re.compile(r"第\s*(\d+)\s*页")
 
 # 锚定质量排序：精确 > 模糊 > 未命中
 _QUALITY_RANK: dict[str, int] = {"exact": 2, "fuzzy": 1, "none": 0}
@@ -38,6 +40,12 @@ def _src_filename(src: str | None) -> str | None:
     return m.group(1) if m else None
 
 
+def src_page(src: str | None) -> int | None:
+    """src 里模型写的页码（「《合同.pdf》第5页盖章页」→ 5）；没写返回 None。"""
+    m = SRC_PAGE_RE.search(src or "")
+    return int(m.group(1)) if m else None
+
+
 def _file_pages(file: dict) -> list[dict]:
     """取文件的逐页文本；无 pages 时退化为整份文本作单页（页码未知→page=None）。"""
     pages = file.get("pages") or []
@@ -55,14 +63,16 @@ def resolve_provenance(
     """
     在各文件逐页锚定 value，返回最佳命中的出处（文件名 + 页码 + 通道 + 质量）。
 
-    命中排序：先按锚定质量（exact>fuzzy），同质量优先 src 引用的文件，
-    再按文件出现顺序、页码升序。精确命中于优先文件时提前返回。
+    命中排序：先按锚定质量（exact>fuzzy），同质量优先 src 引用的文件，其中再优先 src 写的
+    那一页（值在封面和盖章页都出现时，模型说第 5 页就取第 5 页，#120），
+    再按文件出现顺序、页码升序。精确命中于优先文件的引用页（没写页码则任一页）时提前返回。
     value 为空或全部未命中 → Provenance()（page/filename 皆 None，quality=none）。
     """
     if value is None or (isinstance(value, str) and value.strip() == ""):
         return Provenance()
 
     preferred = _src_filename(src)
+    cited_page = src_page(src)
     # 把 src 引用的文件排到最前，其余保持原序
     ordered = sorted(
         files,
@@ -70,7 +80,7 @@ def resolve_provenance(
     )
 
     best: Provenance | None = None
-    best_key: tuple[int, int] = (-1, -1)  # (quality_rank, is_preferred)
+    best_key: tuple[int, int, int] = (-1, -1, -1)  # (quality_rank, is_preferred, is_cited_page)
 
     for file in ordered:
         fname = file.get("filename")
@@ -81,7 +91,8 @@ def resolve_provenance(
             if not result.hit:
                 continue
             rank = _QUALITY_RANK[result.quality]
-            key = (rank, is_preferred)
+            on_cited = 1 if is_preferred and cited_page is not None and pg.get("page") == cited_page else 0
+            key = (rank, is_preferred, on_cited)
             if key > best_key:
                 best_key = key
                 best = Provenance(
@@ -91,8 +102,8 @@ def resolve_provenance(
                     anchor_quality=result.quality,
                     matched_text=result.matched_text,
                 )
-                # 优先文件里的精确命中已是最优，无需再找
-                if rank == _QUALITY_RANK["exact"] and is_preferred:
+                # 优先文件引用页（没写页码则任一页）里的精确命中已是最优，无需再找
+                if rank == _QUALITY_RANK["exact"] and is_preferred and (cited_page is None or on_cited):
                     return best
 
     return best or Provenance()

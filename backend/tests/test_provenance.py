@@ -128,3 +128,57 @@ def test_enrich_provenance_writes_fields():
     assert fields["missing_field"]["confidence"] < 60
     # 嵌套 contacts 也被富化
     assert fields["contacts"][0]["name"]["page"] == 2
+
+
+# ── 出处文字里的页码与锚定页码一致（#120）──────────────────────────────────
+_SEAL_CONTRACT = {
+    "filename": "虚构安装合同.pdf",
+    "is_scanned": True,
+    # 乙方名称在封面（第 1 页）和盖章页（第 3 页）都出现
+    "pages": _pages("乙方：虚构电梯工程有限公司", "付款方式", "乙方（盖章）：虚构电梯工程有限公司"),
+}
+
+
+def test_prefers_cited_page_when_value_appears_on_several_pages():
+    prov = resolve_provenance(
+        "虚构电梯工程有限公司", "《虚构安装合同.pdf》第3页盖章页", [_SEAL_CONTRACT]
+    )
+    assert prov.page == 3
+
+
+def test_cited_page_without_value_falls_back_to_first_hit():
+    prov = resolve_provenance(
+        "虚构电梯工程有限公司", "《虚构安装合同.pdf》第2页", [_SEAL_CONTRACT]
+    )
+    assert prov.page == 1
+
+
+def test_enrich_keeps_cited_page_in_src_and_page_consistent():
+    fields = {
+        "contract_party_b": {
+            "value": "虚构电梯工程有限公司",
+            "src": "《虚构安装合同.pdf》第3页盖章页（OCR识别，请核实）",
+        }
+    }
+    enrich_provenance(fields, [_SEAL_CONTRACT])
+    node = fields["contract_party_b"]
+    assert node["page"] == 3
+    assert "第3页" in node["src"]
+
+
+def test_enrich_rewrites_page_in_src_when_cited_page_misses():
+    # 模型写第 2 页，第 2 页没有这个值，实际命中第 1 页：出处文字改成第 1 页，与按钮一致
+    fields = {
+        "contract_party_b": {
+            "value": "虚构电梯工程有限公司",
+            "src": "《虚构安装合同.pdf》第2页（OCR识别，请核实）",
+        }
+    }
+    enrich_provenance(fields, [_SEAL_CONTRACT])
+    node = fields["contract_party_b"]
+    assert node["page"] == 1
+    assert "第1页" in node["src"] and "第2页" not in node["src"]
+    assert node["src"].endswith("（OCR识别，请核实）")
+    # 再锚定一次（OCR 补读后会重算）结果不变
+    enrich_provenance(fields, [_SEAL_CONTRACT])
+    assert fields["contract_party_b"]["src"] == node["src"]

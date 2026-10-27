@@ -8,7 +8,7 @@ from typing import Any
 
 from app.services.acceptance_report import latest_approved_date
 from app.services.confidence import ConfidenceSignals, compute_confidence
-from app.services.provenance import _src_filename, resolve_provenance
+from app.services.provenance import SRC_PAGE_RE, _src_filename, resolve_provenance, src_page
 from app.services.validators import ValidationCheck, parse_amount, parse_date
 
 
@@ -353,6 +353,11 @@ def _with_verified_source(src: str, prov) -> str:
         # 模型没写文件名（如「合同签订页」）：补上实际命中的文件，出处可追溯，
         # 战略合同把关等按文件判断的规则也能认出来源（#56 复审）
         src = f"《{prov.filename}》{src}"
+    written = src_page(src)
+    if prov.page is not None and written is not None and written != prov.page:
+        # 模型写的那一页没有这个值（值在那一页能命中时锚定会优先取它）：页码改成实际命中页，
+        # 审核页出处文字与「原件第 N 页」按钮一致（#120）
+        src = SRC_PAGE_RE.sub(f"第{prov.page}页", src, count=1)
     return src
 
 
