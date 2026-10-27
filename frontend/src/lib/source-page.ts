@@ -19,3 +19,16 @@ export function sourcePageTarget(
   if (field.channel !== 'ocr' && !OCR_RE.test(field.src)) return null;
   return { file, page: field.page };
 }
+
+/**
+ * 取原件图片并建图片地址。取回时弹窗已关闭（signal 已取消）就不建，返回 null：
+ * 关闭时的清理已经跑过，晚建的地址没人释放（#118 评审）。
+ */
+export async function loadSourcePageUrl(
+  fetchBlob: () => Promise<Blob>,
+  signal: AbortSignal,
+  createUrl: (blob: Blob) => string = (blob) => URL.createObjectURL(blob),
+): Promise<string | null> {
+  const blob = await fetchBlob();
+  return signal.aborted ? null : createUrl(blob);
+}

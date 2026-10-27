@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { FileImage, Loader2, TriangleAlert } from 'lucide-react';
 import { fetchSourcePage } from '@/lib/api';
-import type { SourcePageTarget } from '@/lib/source-page';
+import { loadSourcePageUrl, type SourcePageTarget } from '@/lib/source-page';
 import { cn } from '@/lib/utils';
 
 interface SourcePageButtonProps {
@@ -27,9 +27,13 @@ export function SourcePageButton({ runId, fieldKey, fieldLabel, target }: Source
     let url: string | null = null;
     setLoad({ kind: 'loading' });
     setZoomed(false);
-    fetchSourcePage(runId, target.file, target.page, fieldKey, ctrl.signal)
-      .then((blob) => {
-        url = URL.createObjectURL(blob);
+    loadSourcePageUrl(
+      () => fetchSourcePage(runId, target.file, target.page, fieldKey, ctrl.signal),
+      ctrl.signal,
+    )
+      .then((created) => {
+        if (!created) return; // 弹窗已关闭，没建地址
+        url = created;
         setLoad({ kind: 'ok', url });
       })
       .catch((e: unknown) => {
@@ -46,7 +50,10 @@ export function SourcePageButton({ runId, fieldKey, fieldLabel, target }: Source
     <>
       <button
         type="button"
-        onClick={() => setOpen(true)}
+        onClick={() => {
+          setLoad({ kind: 'loading' });
+          setOpen(true);
+        }}
         title={`查看《${target.file}》第 ${target.page} 页原件`}
         className="flex w-fit items-center gap-1 rounded-md border border-sky-200 bg-sky-50 px-1.5 py-0 text-xs text-sky-700 transition-colors hover:bg-sky-100"
       >
