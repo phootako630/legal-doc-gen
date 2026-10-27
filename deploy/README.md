@@ -245,6 +245,12 @@ sudo sh -c 'cat "$(ls -d /srv/eval-cases/_runs/*/ | tail -1)report.md"'   # 看�
 - 报告里有真实案件的取值，文件 0600；发给开发时只在私聊里发，不贴到 GitHub。
 - eval 用临时目录存会话与扫描件，不写线上 `data/`，也不记运行日志；原告信息表读线上那份。
 
+统计付款条款写法（#116，只读已录制的 OCR 缓存，不调接口；只输出计数，不带原文和案件名，可以贴到 GitHub）：
+
+```bash
+docker compose run --rm -v /srv/eval-cases:/srv/eval-cases backend python scripts/payment_phrasing_stats.py /srv/eval-cases
+```
+
 ---
 
 ### 6.2 备份与恢复
