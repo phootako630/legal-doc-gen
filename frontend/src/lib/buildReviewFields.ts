@@ -1,5 +1,11 @@
 // ExtractedFields → ReviewField[] 转换，以及将编辑结果写回 ExtractedFields
-import type { ExtractedFields, FieldStatus, ReviewField, ValidationCheck } from './types';
+import type {
+  ExtractedFields,
+  FieldStatus,
+  ReviewField,
+  SourceChannel,
+  ValidationCheck,
+} from './types';
 import { fieldNameMap, reviewFieldKeys } from './field-map';
 
 // 用于绕过严格类型，按 key 动态访问 ExtractedFields
@@ -72,10 +78,11 @@ export function buildReviewFields(
     const fv = raw[key];
     if (!fv || typeof fv !== 'object' || !('value' in (fv as object))) continue;
 
-    const { value, src, page } = fv as {
+    const { value, src, page, channel } = fv as {
       value: string | number | null;
       src: string;
       page?: number | null;
+      channel?: SourceChannel;
     };
     // 确定性冲突优先级最高（conflict > missing > ocr_uncertain > normal）
     const status: FieldStatus = conflictKeys.has(key)
@@ -87,6 +94,7 @@ export function buildReviewFields(
       value: value !== null ? String(value) : null,
       src: src ?? '',
       page: page ?? null,
+      channel,
       status,
       isEditing: false,
     });

@@ -223,6 +223,7 @@ export interface ReviewField {
   value: string | null;
   src: string;
   page?: number | null; // 值回原文命中的真实页码（供来源列展示，未命中为 null）
+  channel?: SourceChannel; // 命中所在文件的来源通道（OCR 来源可对照原件）
   status: FieldStatus;
   isEditing: boolean;
   editedValue?: string;
