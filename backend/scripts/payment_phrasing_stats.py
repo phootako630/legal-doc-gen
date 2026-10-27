@@ -5,8 +5,8 @@
 时认不出，会一直读到最后一页。本脚本统计真实材料里这些写法各出现多少次，供 #116 选定要覆盖的写法。
 
 只读各案件 cache/ocr/ 下录制的 OCR 文本，不发任何请求。输出只有计数：不打印原文片段、不打印案件目录名
-（目录名常是案件名），案件按顺序编号。比例前的名词（如「合同价款」）只列出现在 2 个及以上案件里的，
-只出现在一个案件里的合并计数，避免把个别案件特有的字样带出来。
+（目录名常是案件名），案件按顺序编号。比例前的名词只列预先写定的通用付款术语（KNOWN_BASES，如「合同价款」），
+其余捕获到的名词一律只给种数和页数：同一主体常跨案件出现（「支付某某公司款项的50%」），按出现案件数放行也不安全（#123 评审）。
 
 用法（在 backend/ 目录下；Docker 部署见 deploy/README.md「案件 eval」）：
     python scripts/payment_phrasing_stats.py /srv/eval-cases
@@ -26,17 +26,32 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.services.doc_search import CLAUSE_BODY_PATTERNS, is_toc_page  # noqa: E402
 
 # 「支付 / 支付至 / 付至 / 付到 / 按 + 名词 + （的）+ 比例」：名词只取 2–8 个汉字，比例允许全角「％」。
-# 比例后同一分句几个字内出现「违约金」的不算付款（「按合同价款的5%支付违约金」）
 _PAY_RATIO_RE = re.compile(
     r"(?:支付至|支付到|支付|付至|付到|按)\s*([一-龥]{2,8}?)\s*的?\s*\d+(?:\.\d+)?\s*([%％])"
-    r"(?![^。；\n]{0,6}违约金)"
 )
+# 分句边界：比例所在分句里出现违约金 / 滞纳金的不算付款，前后都查
+# （「按合同价款的5%支付违约金」「逾期付款违约金按合同价款的5%计算」，#123 评审）
+_CLAUSE_END = "。；;\n"
+_PENALTY_RE = re.compile(r"违约金|滞纳金")
 # #116 建议补认的名词（含「本合同总价」这类带「本」的写法）
 CANDIDATE_BASES = (
     "合同价款", "合同价", "合同金额", "合同总额", "合同总金额", "合同总价款", "合同总价",
     "本合同总价", "本合同总价款", "本合同价款", "安装费", "安装总价", "安装款", "总价款", "结算价",
 )
-_MIN_CASES_TO_SHOW = 2
+# 报告里允许列出名字的写法：上面的候选 + 现行已认的写法，都是通用付款术语，不含案件内容
+KNOWN_BASES = frozenset(CANDIDATE_BASES)
+
+
+def _clause(text: str, start: int, end: int) -> str:
+    """start..end 所在的分句（到前后最近的句号 / 分号 / 换行为止）。"""
+    left = max(text.rfind(ch, 0, start) for ch in _CLAUSE_END)
+    rights = [i for i in (text.find(ch, end) for ch in _CLAUSE_END) if i != -1]
+    return text[left + 1 : min(rights) if rights else len(text)]
+
+
+def _payment_ratios(text: str) -> list[re.Match]:
+    """页里的「支付……X%」，去掉所在分句是违约金 / 滞纳金的。"""
+    return [m for m in _PAY_RATIO_RE.finditer(text) if not _PENALTY_RE.search(_clause(text, m.start(), m.end()))]
 
 
 @dataclass
@@ -67,7 +82,7 @@ def scan_case(case_dir: Path) -> CaseStats:
             continue
         current = bool(CLAUSE_BODY_PATTERNS["payment"].search(text))
         stats.current_hits += current
-        matches = list(_PAY_RATIO_RE.finditer(text))
+        matches = _payment_ratios(text)
         if not matches:
             continue
         stats.ratio_pages += 1
@@ -112,20 +127,20 @@ def render(cases: list[CaseStats]) -> str:
         "",
         "## 比例前的写法（出现页数）",
         "",
-        f"只列出现在 {_MIN_CASES_TO_SHOW} 个及以上案件里的写法；★ 为 #116 候选，✓ 为现行已认。",
+        "只列通用付款术语；★ 为 #116 候选，✓ 为现行已认。其他写法不列名字，只给种数和页数。",
         "",
         "| 写法 | 页数 | 案件数 | |",
         "|---|---|---|---|",
     ]
-    hidden_pages = hidden_kinds = 0
+    other_pages = other_kinds = 0
     for base, n in total.bases.most_common():
-        if case_count[base] < _MIN_CASES_TO_SHOW:
-            hidden_pages += n
-            hidden_kinds += 1
+        if base not in KNOWN_BASES:
+            other_pages += n
+            other_kinds += 1
             continue
-        mark = "✓" if re.fullmatch(r"合同总价款?", base) else ("★" if base in CANDIDATE_BASES else "")
+        mark = "✓" if re.fullmatch(r"合同总价款?", base) else "★"
         lines.append(f"| {base} | {n} | {case_count[base]} | {mark} |")
-    lines += ["", f"只出现在一个案件里的写法：{hidden_kinds} 种，共 {hidden_pages} 页（不列出）。", ""]
+    lines += ["", f"其他写法：{other_kinds} 种，共 {other_pages} 页（不列名字）。", ""]
     return "\n".join(lines)
 
 
