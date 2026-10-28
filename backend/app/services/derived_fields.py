@@ -1742,15 +1742,45 @@ def payment_cite_location_field(fields: dict) -> dict | None:
     if prefix:
         labels = [labels[0]] + [lb[len(prefix):] if lb.startswith(prefix) else lb for lb in labels[1:]]
     if not labels:
-        # 匹配不上，或付款条款本身没有分项编号：沿用抽取的付款条款位置
-        node = _node(fields, "payment_clause_location")
+        # 匹配不上，或付款条款本身没有分项编号：沿用抽取的付款条款位置（付款条款原文出处写得更细时用更细的）
+        node = _refined_payment_location(fields)
         if node.get("value"):
-            return dict(node)
+            # 节点对不上时写明为何退回条款位置，提醒律师写到具体的项（#132 评审）
+            unmatched = payable_ratio_unmatched_note(fields)
+            if unmatched:
+                node["src"] = f"{node.get('src') or ''}（{unmatched}；引用退回条款位置，请律师核对应写到哪一项，待核实）"
+            return node
         return _payment_unread_by_budget(fields)
     return {
         "value": "、".join(labels),
         "src": "按律师规则：欠款对应的付款节点" + _source_risk_note(fields, "payment_clause_text", "付款条款"),
     }
+
+
+_TOP_ARTICLE_RE = re.compile(r"^第\s*(\d{1,2})\s*条")
+_SUB_ARTICLE_RE = re.compile(r"第\s*(\d{1,2}(?:[.．]\d{1,2}){1,3})\s*条")
+
+
+def _refined_payment_location(fields: dict) -> dict:
+    """
+    付款条款位置只写到「第4条」、而付款条款原文的出处写的是「第4.2条」时，用更细的「第4.2条」（#127：
+    律师写「依据合同第4.2条项下约定」）。只在原文出处的编号以位置的编号开头时替换（4 → 4.2），否则照旧。
+    """
+    node = dict(_node(fields, "payment_clause_location"))
+    top = _TOP_ARTICLE_RE.match(str(node.get("value") or "").strip())
+    text_src = re.sub(r"《[^》]*》", "", str(_node(fields, "payment_clause_text").get("src") or ""))
+    sub = _SUB_ARTICLE_RE.search(text_src)
+    if not top or not sub or re.split(r"[.．]", sub.group(1))[0] != top.group(1):
+        return node
+    refined = f"第{sub.group(1)}条"
+    node["value"] = refined
+    # 细化的编号取自付款条款原文的出处：原文是 OCR / 待核实的，风险标记一并带上（#132 评审）
+    node["src"] = (
+        f"{node.get('src') or ''}（付款条款原文出自{refined}，比抽取的位置「{top.group(0)}」更具体）"
+        + _source_risk_note(fields, "payment_clause_text", "付款条款")
+    )
+    node.pop("anchor", None)
+    return node
 
 
 def _payment_unread_by_budget(fields: dict) -> dict | None:

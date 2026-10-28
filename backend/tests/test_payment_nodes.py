@@ -250,3 +250,65 @@ def test_table_guarantee_row_is_not_a_payment():
     assert "保函" not in str(fields["payment_cite_text"]["value"])
     paid_after = table.replace("乙方向甲方开具保函", "收到乙方保函后支付")
     assert [s.end for s in parse_payment_stages(paid_after)] == [95, 100]
+
+
+# ── 「第一期：……。第二期：……」写法（#127）──────────────────────────────────────
+PERIOD_CLAUSE = (
+    "甲方分三期向乙方支付安装费用，具体如下：第一期：甲方在安装前 7 日向乙方支付本批电梯安装总价的 40%作为动工款；"
+    "第二期：经验收合格后 15 日内，乙方向甲方移交全部资料后，甲方支付已安装完电梯总价的 55%作为验收款。"
+    "该笔款最晚不超过出厂之日起 6 个月。第三期：余款 5%为质保金，质保期满后 30 日内无息付清。"
+)
+
+
+def test_period_markers_split_stages_even_with_full_stops():
+    stages = parse_payment_stages(PERIOD_CLAUSE.replace("；", "。"))
+    assert [(s.start, s.end) for s in stages] == [(0, 40), (40, 95), (95, 100)]
+    assert stages[1].text.startswith("第二期：经验收合格后")
+
+
+def test_single_period_marker_does_not_split():
+    # 只出现一次「第X期」不算分期写法，按原来的分号切
+    stages = parse_payment_stages("第一期：签约后支付合同总价的30%；验收后支付至合同总价的100%。")
+    assert [(s.start, s.end) for s in stages] == [(0, 30), (30, 100)]
+
+
+def _period_case():
+    fields = _case(PERIOD_CLAUSE, 1000000, 400000, 550000)
+    fields["payment_clause_text"]["src"] = "《虚构安装合同.pdf》第4.2条（OCR识别，请核实）"
+    fields["payment_clause_location"] = {"value": "第4条", "src": "《虚构安装合同.pdf》第4条付款条件"}
+    return fields
+
+
+def test_period_clause_cites_refined_location_and_owed_period_text():
+    fields = apply_derived_fields(_period_case())
+    assert fields["payable_ratio"]["value"] == "95%"
+    # 位置只写到「第4条」，付款条款原文出自「第4.2条」：引用写到第4.2条（律师写「依据合同第4.2条项下约定」）
+    loc = fields["payment_cite_location"]
+    assert loc["value"] == "第4.2条"
+    assert "第4.2条" in loc["src"] and "OCR" not in loc["value"]
+    # 细化依据的付款条款原文是 OCR：位置原本没有 OCR 标记，也要带上（#132 评审）
+    assert "OCR" in loc["src"]
+    # 只照抄欠款对应的第二期，「第二期：」小标题不抄
+    assert fields["payment_cite_text"]["value"].startswith("“经验收合格后 15 日内")
+    assert "质保金" not in fields["payment_cite_text"]["value"]
+
+
+def test_location_not_refined_when_numbers_disagree():
+    # 原文出处是第5.2条、位置是第4条：编号对不上，不替换
+    fields = _period_case()
+    fields["payment_clause_text"]["src"] = "《虚构安装合同.pdf》第5.2条"
+    assert apply_derived_fields(fields)["payment_cite_location"]["value"] == "第4条"
+    # 文件名里的数字不算（「《第4.9期工程合同》」）
+    fields = _period_case()
+    fields["payment_clause_text"]["src"] = "《第4.9条工程合同.pdf》付款条款"
+    assert apply_derived_fields(fields)["payment_cite_location"]["value"] == "第4条"
+
+
+def test_unmatched_ratio_fallback_explains_why_and_flags_review():
+    # 已付 40% + 欠款 50% = 90%，节点累计 40/95/100% 对不上：退回条款位置时写明原因、标待核实（#132 评审）
+    fields = _period_case()
+    fields["payment_clause_text"]["src"] = "《虚构安装合同.pdf》第4.2条"
+    fields["unpaid_amount"]["value"] = 500000
+    loc = apply_derived_fields(fields)["payment_cite_location"]
+    assert loc["value"] == "第4.2条"
+    assert "都对不上" in loc["src"] and "待核实" in loc["src"]
