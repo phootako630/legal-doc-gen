@@ -223,12 +223,12 @@ def _has_value(fields: dict, key: str) -> bool:
 
 
 # 合同编号（#125）：审批表标题紧挨合同号栏时，模型会把「AH1234567-某某项目」整段当合同号。
-# 编号本身是「字母 + 数字」，后面跟连字符 / 空格再接中文的，只保留编号；
-# 含中文又切不出编号的不猜，原样保留并标待核实。
-_CONTRACT_NO_TAIL_RE = re.compile(r"^\s*([A-Za-z]{1,6}\d{4,})\s*[-－—–_\s]+\s*[\u4e00-\u9fff]")
-_CONTRACT_NO_TRIM_NOTE = "（合同号后所带项目名已去掉）"
-_CONTRACT_NO_ODD_NOTE = "（合同编号格式不常见，待核实）"
-_HAS_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+# 编号本身是「字母 + 数字」（位数不限），后面跟连字符 / 空格再接中文的，只保留编号作为起诉状用的值，
+# 原抽取串保留在 raw_value，出处写明删掉了什么（证据原文保留，#129 评审）；
+# 不是「字母 + 数字」格式、又切不出编号的不猜，原样保留并标待核实。
+_CONTRACT_NO_RE = re.compile(r"[A-Za-z]+\d+")
+_CONTRACT_NO_TAIL_RE = re.compile(r"^\s*([A-Za-z]+\d+)\s*[-－—–_\s]+\s*[\u4e00-\u9fff]")
+_CONTRACT_NO_ODD_NOTE = "（合同编号不是「字母 + 数字」格式，待核实）"
 _RETENTION_RETURN_RE = re.compile(r"返还[^。；;]{0,6}(保修|质保)|(保修|质保)(款|金)[^。；;]{0,12}返还")
 # 独立的「逾期支付合同价款」义务：动词是支付 / 付款，对象是价款。只出现价款名称不算——
 # 「未按时返还安装费质保金」里的「安装费」只是质保金的前缀（#53 复审）
@@ -342,17 +342,19 @@ def apply_rule_guards(fields: dict) -> None:
 
 
 def _guard_contract_no(fields: dict) -> None:
-    """合同编号只保留编号本身（#125）；见 _CONTRACT_NO_TAIL_RE 的说明。"""
+    """合同编号只保留编号本身（#125）；见 _CONTRACT_NO_TAIL_RE 的说明。重复调用结果不变。"""
     node = fields.get("contract_no")
     if not isinstance(node, dict) or not isinstance(node.get("value"), str):
         return
-    value, src = node["value"], str(node.get("src") or "")
+    value, src = node["value"].strip(), str(node.get("src") or "")
+    if not value or _CONTRACT_NO_RE.fullmatch(value):
+        return
     m = _CONTRACT_NO_TAIL_RE.match(value)
     if m:
+        node["raw_value"] = value
         node["value"] = m.group(1)
-        if _CONTRACT_NO_TRIM_NOTE not in src:
-            node["src"] = f"{src}{_CONTRACT_NO_TRIM_NOTE}"
-    elif _HAS_CJK_RE.search(value) and _CONTRACT_NO_ODD_NOTE not in src:
+        node["src"] = f"{src}（原抽取「{value}」，已去掉编号后的项目名）"
+    elif _CONTRACT_NO_ODD_NOTE not in src:
         node["src"] = f"{src}{_CONTRACT_NO_ODD_NOTE}"
 
 
