@@ -6,7 +6,7 @@
 # 都对不上（如算出 85%，节点为 5%-10%-70%-95%-100%）时，可能调过价、实际台数与合同不同、
 # 质保金到期时间不统一，交律师手动核对，不猜。
 #
-# 付款条款写成表格时按行拆（`_table_stages`）。
+# 付款条款写成表格时按行拆（`_table_stages`）；写成「第一期：……。第二期：……」的按分期标记拆。
 # 纯确定性解析：比例只认「支付 / 付……X%」（本期）与「支付至 / 付至……X%」（累计）两种写法；
 # 「开具……5%……保函」、违约金 / 利息这类不是付款的百分比不计。解析不出、累计倒退、超过或到不了 100% 时
 # 返回空，退回原来的写法。
@@ -32,6 +32,10 @@ _CUMULATIVE_RE = re.compile(rf"(?:支付至|付至|支付到|累计支付|累计
 _STAGE_RE = re.compile(rf"(?:支付|付款|付)(?!至|到)[^%％，,；;。]{{0,30}}?{_PCT}")
 # 余款 / 质保金写法：「余款5%在质保期满后……支付」「质保金为合同总价的5%」
 _REMAINDER_RE = re.compile(rf"(?:余款|尾款|剩余款|质保金|保修金|保修款)[^%％，,；;。]{{0,12}}?{_PCT}")
+
+
+# 「第一期：」「第2期，」这类分期标记
+_PERIOD_RE = re.compile(r"第[一二三四五六七八九十\d]{1,3}期[：:，,]")
 
 
 @dataclass
@@ -151,8 +155,10 @@ def parse_payment_stages(text: str | None) -> list[PaymentStage]:
     stages: list[PaymentStage] = []
     running = 0.0
     for no, body in _segments(text):
-        # 同一项里用分号隔开的多期付款（「进场后支付20%；安装完成后支付60%」）各算一个节点
-        pieces = [p for p in re.split(r"[；;]", body) if p.strip()]
+        # 同一项里用分号隔开的多期付款（「进场后支付20%；安装完成后支付60%」）各算一个节点；
+        # 写成「第一期：……。第二期：……」的按「第X期」切（#127：各期之间是句号，不是分号）
+        splitter = r"[；;]|(?=第[一二三四五六七八九十\d]{1,3}期[：:，,])" if len(_PERIOD_RE.findall(body)) >= 2 else r"[；;]"
+        pieces = [p for p in re.split(splitter, body) if p.strip()]
         for piece in pieces:
             r = _ratio(piece)
             if r is None:

@@ -1,0 +1,29 @@
+{
+  "title": "虚构安装案 H（付款条款写成「第一期：……。第二期：……」，各期之间是句号 → 付至 95%，引用第4.2条第二期原文）",
+  "decisions": {
+    "total_amount": 200000,
+    "paid_amount": 80000,
+    "unpaid_amount": 110000
+  },
+  "fields": {
+    "plaintiff_name_final": "日立电梯（中国）有限公司梧桐分公司",
+    "defendant_name": "徐州虚构置业有限公司",
+    "contract_sign_date": "2024年3月8日",
+    "total_amount": 200000,
+    "paid_amount": 80000,
+    "unpaid_amount": 110000,
+    "elevator_qty": 2,
+    "acceptance_latest_date": "2024年9月20日",
+    "payable_ratio": "95%",
+    "payment_cite_location": {
+      "value": "4.2",
+      "match": "contains"
+    },
+    "payment_cite_text": {
+      "value": "支付已安装完楼号电梯总价的55%安装款作为验收款",
+      "match": "contains"
+    },
+    "interest_term": "逾期付款利息",
+    "court_district": "徐州市鼓楼区"
+  }
+}
