@@ -25,6 +25,7 @@ from datetime import date, datetime, timedelta, timezone
 from app.config import PLAINTIFF_HQ_NAME, PLAINTIFF_HQ_REP_TITLE, PLAINTIFF_PHONE
 from app.services.branch_registry import lookup_plaintiff, resolve_plaintiff_name
 from app.services.branch_table import normalize_name
+from app.services.doc_search import refers_to_strategic
 from app.services.extraction import RATE_MARK_RE, SELLER_RATE_DROPPED_NOTE
 from app.services.payment_nodes import PaymentStage, match_cumulative, owed_stages, parse_payment_stages
 from app.services.validators import parse_amount, parse_date, parse_qty
@@ -1364,10 +1365,16 @@ def supplement_sentence_field(fields: dict) -> dict:
 
 
 # ── 管辖 ──────────────────────────────────────────────────────────────────────
+STRATEGIC_UNRESOLVED_NOTE = (
+    "合同约定争议解决按战略 / 框架合同执行，但没有读到战略合同的争议条款（未上传或未识别）："
+    "请上传战略合同或查看原件后确定文书类型与管辖，待核实"
+)
+
+
 def _jurisdiction(fields: dict) -> tuple[str, str | None, str]:
     """
     按争议条款判定管辖方式，返回 (方式, 法院辖区或法院名, 说明)。
-    方式：arbitration / named / plaintiff / defendant / sign_place / site / delivery / general。
+    方式：arbitration / strategic / named / plaintiff / defendant / sign_place / site / delivery / general。
     """
     dispute = re.sub(r"\s+", "", _str_value(fields, "dispute_clause_text") or "")
     if "仲裁" in dispute:
@@ -1377,6 +1384,11 @@ def _jurisdiction(fields: dict) -> tuple[str, str | None, str]:
     body = _compact(_str_value(fields, "arbitration_institution")) or ""
     if _ARBITRATION_BODY_NAME_RE.search(body) and "法院" not in dispute:
         return "arbitration", None, f"合同约定仲裁机构「{body}」，改为仲裁申请书，待核实"
+    # 主合同把争议解决交给战略 / 框架合同，又没读到战略合同的争议条款（没上传或没识别出）：
+    # 管辖、文书类型都定不了，不按「未约定」去套被告住所地法院（#126）
+    node = _node(fields, "dispute_clause_text")
+    if refers_to_strategic(dispute) or (not dispute and node.get("strategic_ref")):
+        return "strategic", None, STRATEGIC_UNRESOLVED_NOTE
     if _NAMED_COURT_RE.search(dispute) and not (
         _PLAINTIFF_SEAT_RE.search(dispute) or _DEFENDANT_SEAT_RE.search(dispute)
     ):
@@ -1524,9 +1536,14 @@ def arbitration_institution(fields: dict) -> str | None:
 
 def document_kind_field(fields: dict) -> dict:
     """文书类型：争议条款约定仲裁 → 仲裁申请书，否则民事起诉状（补充确认单第 6 题）。"""
-    mode, _, _ = _jurisdiction(fields)
+    mode, _, note = _jurisdiction(fields)
     if mode == "arbitration":
         return {"value": "仲裁申请书", "src": "争议条款约定仲裁，待核实"}
+    if mode == "strategic":
+        return {"value": None, "src": note}  # 诉讼还是仲裁要看战略合同（#126）
+    if not _str_value(fields, "dispute_clause_text"):
+        # 没读到争议条款时不能说「约定诉讼」（#126）
+        return {"value": "民事起诉状", "src": "争议条款未识别，暂按民事起诉状，待核实"}
     return {"value": "民事起诉状", "src": "争议条款约定诉讼"}
 
 
@@ -1547,6 +1564,8 @@ def _inferred_court_note(fields: dict, place: str | None) -> str:
 def jurisdiction_text_field(fields: dict) -> dict:
     """争议条款之后的管辖句（第 13 题、补 6 的各种写法 + 工程所在地的模板原句）。"""
     mode, _, note = _jurisdiction(fields)
+    if mode == "strategic":
+        return {"value": None, "src": note}
     court = _str_value(fields, "court_district") or _MISSING
     if mode == "arbitration":
         body = arbitration_institution(fields) or _MISSING
@@ -1582,6 +1601,8 @@ def addressee_field(fields: dict) -> dict:
     if mode == "arbitration":
         body = arbitration_institution(fields)
         return {"value": body or _MISSING, "src": "合同约定的仲裁机构，待核实"}
+    if mode == "strategic":
+        return {"value": None, "src": note}  # 法院还是仲裁委要看战略合同
     court = _str_value(fields, "court_district")
     if court:
         return {"value": f"{court}人民法院", "src": note}

@@ -1,0 +1,25 @@
+{
+  "title": "虚构买卖案 I（争议解决写在「合同的组成」列表第 2 项、转引战略合同，战略合同未上传 → 文书类型与管辖留空、提醒上传）",
+  "decisions": {},
+  "fields": {
+    "plaintiff_name_final": "日立电梯（中国）有限公司",
+    "defendant_name": "上海虚构置业有限公司",
+    "contract_sign_date": "2024年2月20日",
+    "total_amount": 700000,
+    "paid_amount": 560000,
+    "unpaid_amount": 140000,
+    "elevator_qty": 2,
+    "acceptance_latest_date": "2024年11月12日",
+    "dispute_clause_location": {
+      "value": "第2条",
+      "match": "contains"
+    },
+    "dispute_clause_text": {
+      "value": "战略合同",
+      "match": "contains"
+    },
+    "document_kind": null,
+    "court_district": null,
+    "addressee": null
+  }
+}

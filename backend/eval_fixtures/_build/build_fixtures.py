@@ -523,6 +523,48 @@ def case_period_payment() -> None:
         })
 
 
+def case_strategic_not_uploaded() -> None:
+    """争议解决写在「合同的组成」列表第 2 项、转引战略合同，战略合同没上传（#126）→ 文书类型与管辖留空并提醒。"""
+    case = "虚构买卖案I"
+    os.makedirs(os.path.join(ROOT, case, "materials"), exist_ok=True)
+    _approval(case, "AH9000009上海虚构置业有限公司诉讼审批表.pdf", {
+        "serial": "SS2099-000109", "title": "AH9000009上海虚构置业有限公司虚构湾项目",
+        "contract_no": "AH9000009", "branch_path": "集团/营销网络/梧桐分公司",
+        "buyer": "上海虚构置业有限公司", "contact": "虚构壬", "contact_phone": "13800000009",
+        "buyer_address": "上海市嘉定区虚构路9号", "site": "上海市嘉定区虚构路9号虚构湾",
+        "contract_type": "买卖合同", "amount_label": "买卖", "sign_date": "2024-02-18", "qty": "2", "qty_actual": "2",
+        "total": "700,000.00", "paid": "560,000.00", "unpaid": "140,000.00",
+        "gov_accept": "2024-11-12", "last_pay_date": "2025-01-10", "reason": "电梯已验收交付，买方逾期未付到期货款。",
+    })
+    _text_pdf(os.path.join(ROOT, case, "materials", "上海虚构湾项目电梯设计及供货合同.pdf"), [
+        """电梯设计及供货合同
+
+合同编号：AH9000009
+购货方（甲方）：上海虚构置业有限公司
+供货方（乙方）：日立电梯（中国）有限公司
+就上述项目物料供应采购事宜，通过友好协商后按下列条款签订：
+
+1. 以下文件为本合同的组成部分：（1）本合同书；（2）虚构集团与日立电梯（中国）有限公司签署的电梯战略合作合同文件及其补充协议（以下简称“战略合同”）。
+2. 本合同的供货范围、货款结算和支付、违约责任、争议的解决与其他约定按“战略合同”内相关条款执行，其中：
+（1）本合同供货电梯2台，设备总价为人民币700,000元（大写：柒拾万元整）；
+（2）付款方式：合同签订后10日内，甲方支付合同总价的20%；设备到达工地后15日内，甲方支付至合同总价的80%；电梯经政府验收合格后30日内，甲方支付至合同总价的100%。
+3. 交货地点：上海市嘉定区虚构路9号。""",
+        """4. 本合同自双方盖章之日起生效。
+（以下无正文）
+
+购货方（盖章）：上海虚构置业有限公司
+供货方（盖章）：日立电梯（中国）有限公司
+签订日期：2024年2月20日""",
+    ])
+    for i, code in enumerate(["31103101202400000091", "31103101202400000092"], start=1):
+        _report(case, f"电梯监督检验报告{i}.pdf", {
+            "report_no": f"XG-DTJ-2024-99{i:02d}", "user": "上海虚构置业有限公司",
+            "installer": "虚构电梯工程有限公司", "device_code": code,
+            "inspect_date": "2024年11月5日", "approve_date": "2024年11月12日",
+            "site": "上海市嘉定区虚构路9号虚构湾", "model": "HGP",
+        })
+
+
 if __name__ == "__main__":
     case_install_scanned()
     case_sales_arbitration()
@@ -531,4 +573,5 @@ if __name__ == "__main__":
     case_unread_page()
     case_mixed_breach_clause()
     case_period_payment()
+    case_strategic_not_uploaded()
     print("已生成：", ", ".join(sorted(n for n in os.listdir(ROOT) if not n.startswith(("_", ".")) and os.path.isdir(os.path.join(ROOT, n)))))

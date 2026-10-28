@@ -12,6 +12,7 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 
+from app.services.doc_search import refers_to_strategic
 from app.services.payment_nodes import match_cumulative, parse_payment_stages
 
 # ── 结果模型 ──────────────────────────────────────────────────────────────────
@@ -286,6 +287,26 @@ def check_payment_progress(
     )
 
 
+def check_strategic_dispute(dispute: object, strategic_ref: bool) -> ValidationCheck:
+    """
+    争议解决按战略 / 框架合同执行、却没读到战略合同的争议条款（#126）：管辖与文书类型定不了，
+    琥珀色提醒律师上传战略合同，不算冲突。
+    """
+    key = "strategic_dispute"
+    related = ["dispute_clause_text", "document_kind", "court_district", "addressee"]
+    text = str(dispute) if dispute not in (None, "") else ""
+    if not (refers_to_strategic(text) or (not text and strategic_ref)):
+        return ValidationCheck(key, True, "争议条款未转引战略合同。", related, applicable=False)
+    return ValidationCheck(
+        key,
+        True,
+        "合同约定争议解决按战略 / 框架合同执行，但没有读到战略合同的争议条款：请上传战略合同，"
+        "或查看原件后确定文书类型（起诉状 / 仲裁申请书）与管辖。",
+        related,
+        needs_review=True,
+    )
+
+
 def check_materials(missing: list[str], note: str) -> ValidationCheck:
     """材料是否齐全（缺什么由 services/materials.py 按文件类型判定）：缺了只提醒，不算冲突。"""
     key = "materials"
@@ -322,6 +343,12 @@ def run_all_checks(fields: dict) -> list[ValidationCheck]:
             _field_value(fields, "paid_amount"),
             _field_value(fields, "unpaid_amount"),
             _field_value(fields, "payment_clause_text"),
+        ),
+        check_strategic_dispute(
+            _field_value(fields, "dispute_clause_text"),
+            bool((fields.get("dispute_clause_text") or {}).get("strategic_ref"))
+            if isinstance(fields.get("dispute_clause_text"), dict)
+            else False,
         ),
     ]
     return checks
