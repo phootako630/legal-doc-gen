@@ -286,6 +286,8 @@ def test_period_clause_cites_refined_location_and_owed_period_text():
     loc = fields["payment_cite_location"]
     assert loc["value"] == "第4.2条"
     assert "第4.2条" in loc["src"] and "OCR" not in loc["value"]
+    # 细化依据的付款条款原文是 OCR：位置原本没有 OCR 标记，也要带上（#132 评审）
+    assert "OCR" in loc["src"]
     # 只照抄欠款对应的第二期，「第二期：」小标题不抄
     assert fields["payment_cite_text"]["value"].startswith("“经验收合格后 15 日内")
     assert "质保金" not in fields["payment_cite_text"]["value"]
@@ -300,3 +302,13 @@ def test_location_not_refined_when_numbers_disagree():
     fields = _period_case()
     fields["payment_clause_text"]["src"] = "《第4.9条工程合同.pdf》付款条款"
     assert apply_derived_fields(fields)["payment_cite_location"]["value"] == "第4条"
+
+
+def test_unmatched_ratio_fallback_explains_why_and_flags_review():
+    # 已付 40% + 欠款 50% = 90%，节点累计 40/95/100% 对不上：退回条款位置时写明原因、标待核实（#132 评审）
+    fields = _period_case()
+    fields["payment_clause_text"]["src"] = "《虚构安装合同.pdf》第4.2条"
+    fields["unpaid_amount"]["value"] = 500000
+    loc = apply_derived_fields(fields)["payment_cite_location"]
+    assert loc["value"] == "第4.2条"
+    assert "都对不上" in loc["src"] and "待核实" in loc["src"]

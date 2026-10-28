@@ -1745,6 +1745,10 @@ def payment_cite_location_field(fields: dict) -> dict | None:
         # 匹配不上，或付款条款本身没有分项编号：沿用抽取的付款条款位置（付款条款原文出处写得更细时用更细的）
         node = _refined_payment_location(fields)
         if node.get("value"):
+            # 节点对不上时写明为何退回条款位置，提醒律师写到具体的项（#132 评审）
+            unmatched = payable_ratio_unmatched_note(fields)
+            if unmatched:
+                node["src"] = f"{node.get('src') or ''}（{unmatched}；引用退回条款位置，请律师核对应写到哪一项，待核实）"
             return node
         return _payment_unread_by_budget(fields)
     return {
@@ -1770,7 +1774,11 @@ def _refined_payment_location(fields: dict) -> dict:
         return node
     refined = f"第{sub.group(1)}条"
     node["value"] = refined
-    node["src"] = f"{node.get('src') or ''}（付款条款原文出自{refined}，比抽取的位置「{top.group(0)}」更具体）"
+    # 细化的编号取自付款条款原文的出处：原文是 OCR / 待核实的，风险标记一并带上（#132 评审）
+    node["src"] = (
+        f"{node.get('src') or ''}（付款条款原文出自{refined}，比抽取的位置「{top.group(0)}」更具体）"
+        + _source_risk_note(fields, "payment_clause_text", "付款条款")
+    )
     node.pop("anchor", None)
     return node
 
