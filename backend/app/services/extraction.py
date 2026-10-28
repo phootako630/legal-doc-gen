@@ -237,10 +237,18 @@ _BUYER = r"(?:甲方|买方|发包方|需方|采购方)"
 _BUYER_LATE_PAY_RE = re.compile(
     _BUYER + r"[^。；;]{0,20}?(?:未|没有|逾期|延期|延迟|迟延|拖延|拖欠)[^。；;]{0,15}?(?:付|支付|付款)"
 )
+# 「乙方逾期交货」「乙方未按期交货」「乙方未能按时交付」都算（#130 评审）
 _SELLER_DELAY_RE = re.compile(
-    r"(?:乙方|卖方|供方|承包方)[^。；;]{0,15}?(?:逾期|延期|延迟|迟延)[^。；;]{0,6}?(?:交货|供货|完工|竣工|安装|交付)"
+    r"(?:乙方|卖方|供方|承包方)[^。；;]{0,15}?"
+    r"(?:逾期|延期|延迟|迟延|未能?按期|未能?按时|未能?如期|不能按期|不能按时)[^。；;]{0,6}?"
+    r"(?:交货|供货|完工|竣工|安装|交付)"
     r"|(?:延迟|逾期|迟延)(?:交货|供货|完工|竣工)"
 )
+# 违约条款去掉了乙方的句子后，抽出的「违约利率」若出自去掉的部分，一并去掉（#130 评审）：
+# 否则「违约金」仍留在 breach_interest_rate_text 里，系统照样认成违约金
+SELLER_RATE_DROPPED_NOTE = "（原抽取的违约利率出自乙方延迟交货等其他违约约定，已去掉，待核实）"
+# 留下的甲方句子里有利率写法：去掉的利率不能换成 LPR 常规话术，交律师按原文填写
+RATE_MARK_RE = re.compile(r"万分之|千分之|百分之|[%％‰]|利率")
 _CLAUSE_SPLIT_RE = re.compile(r"[^。；;]+[。；;]?")
 _RETENTION_RETURN_RE = re.compile(r"返还[^。；;]{0,6}(保修|质保)|(保修|质保)(款|金)[^。；;]{0,12}返还")
 # 独立的「逾期支付合同价款」义务：动词是支付 / 付款，对象是价款。只出现价款名称不算——
@@ -379,7 +387,7 @@ def _guard_breach_clause(fields: dict) -> None:
         return
     text = node["value"]
     sentences = [m.group(0) for m in _CLAUSE_SPLIT_RE.finditer(text) if m.group(0).strip()]
-    keep: list[bool] = []
+    keep: list[bool | None] = []
     for sent in sentences:
         if _BUYER_LATE_PAY_RE.search(sent):
             keep.append(True)
@@ -395,6 +403,30 @@ def _guard_breach_clause(fields: dict) -> None:
     node["raw_value"] = text
     node["value"] = "".join(sentences[kept[0] : kept[-1] + 1]).strip()
     node["src"] = f"{node.get('src') or ''}（原条款另含乙方延迟交货等其他违约约定，只取甲方逾期付款部分）"
+    _guard_breach_rate(fields, kept=node["value"], dropped=text)
+
+
+def _squash(text: str) -> str:
+    return re.sub(r"\s+", "", text)
+
+
+def _guard_breach_rate(fields: dict, kept: str, dropped: str) -> None:
+    """
+    违约条款裁掉乙方句子后，违约利率若只在裁掉的部分出现（或本身是乙方延迟交货的写法）就去掉，
+    原值留在 raw_value。dropped 是裁剪前的整条条款，命中留下部分的不算出自裁掉部分。
+    """
+    node = fields.get("breach_interest_rate_text")
+    if not isinstance(node, dict) or not isinstance(node.get("value"), str) or not node["value"].strip():
+        return
+    rate = _squash(node["value"])
+    in_kept = rate in _squash(kept)
+    if in_kept or not (rate in _squash(dropped) or _SELLER_DELAY_RE.search(node["value"])):
+        return
+    fields["breach_interest_rate_text"] = {
+        "value": None,
+        "raw_value": node["value"],
+        "src": f"{node.get('src') or ''}{SELLER_RATE_DROPPED_NOTE}",
+    }
 
 
 # 原文里找不到的抽取值：保留但标「待核实」（审核页与起诉状都按 src 里的「待核实」判定状态）

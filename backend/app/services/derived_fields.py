@@ -25,6 +25,7 @@ from datetime import date, datetime, timedelta, timezone
 from app.config import PLAINTIFF_HQ_NAME, PLAINTIFF_HQ_REP_TITLE, PLAINTIFF_PHONE
 from app.services.branch_registry import lookup_plaintiff, resolve_plaintiff_name
 from app.services.branch_table import normalize_name
+from app.services.extraction import RATE_MARK_RE, SELLER_RATE_DROPPED_NOTE
 from app.services.payment_nodes import PaymentStage, match_cumulative, owed_stages, parse_payment_stages
 from app.services.validators import parse_amount, parse_date, parse_qty
 
@@ -714,6 +715,11 @@ def interest_basis_field(fields: dict) -> dict:
         }
     if unread_by_budget(fields, "breach_interest_rate_text", "breach_clause_text"):
         return {"value": None, "src": _BREACH_UNREAD_SRC}  # 不套用 LPR
+    if SELLER_RATE_DROPPED_NOTE in str(_node(fields, "breach_interest_rate_text").get("src") or "") and (
+        RATE_MARK_RE.search(_str_value(fields, "breach_clause_text") or "")
+    ):
+        # 抽出的利率出自乙方延迟交货、已去掉，而甲方逾期付款的句子另写了利率：不套用 LPR（#130 评审）
+        return {"value": None, "src": "合同甲方逾期付款条款另有利率约定，但未识别出费率，请律师按条款原文填写，不套用 LPR"}
     return {
         "value": LPR_INTEREST_BASIS,
         "src": "常规话术（合同未约定甲方逾期付款利率）",
