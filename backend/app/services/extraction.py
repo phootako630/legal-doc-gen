@@ -284,8 +284,11 @@ STRATEGIC_LABEL = "战略合同"
 _TAG_RE = re.compile(r"<[^>]+>")
 _LI_RE = re.compile(r'<li\b[^>]*?data-bbox="(\d+)[^"]*"[^>]*>(.*?)</li>', re.S)
 _ITEM_NO_RE = re.compile(r"^\s*(?:第\s*([一二三四五六七八九十\d]{1,3})\s*条|[（(]?(\d{1,2})[)）]?\s*[.、．](?!\d))")
-_SENTENCE_START = "。；;"  # 文字版 PDF 会折行，换行不算句子边界
-_SENTENCE_END = "。；;：:"  # 「……按战略合同内相关条款执行，其中：」到冒号为止
+# OCR HTML 的列表项 / 段落边界：去标签前换成分隔符，免得相邻两项粘成一句（#133 评审）
+_BLOCK_END_RE = re.compile(r"</(?:li|p|td|th|div|h\d)>|<br\s*/?>", re.I)
+_BLOCK = "\x00"
+_SENTENCE_START = "。；;" + _BLOCK  # 文字版 PDF 会折行，换行不算句子边界
+_SENTENCE_END = "。；;：:" + _BLOCK  # 「……按战略合同内相关条款执行，其中：」到冒号为止
 _LI_INDENT_TOL = 10  # 同一级列表项左边距相差不超过的像素
 
 
@@ -326,13 +329,14 @@ def apply_strategic_dispute_ref(fields: dict, files: list[dict]) -> None:
         pages = f.get("pages") or [{"page": 1, "text": f.get("text") or ""}]
         for pg in pages:
             raw = pg.get("text") or ""
-            plain = _TAG_RE.sub("", raw)
+            plain = _TAG_RE.sub("", _BLOCK_END_RE.sub(_BLOCK, raw))
             m = STRATEGIC_DISPUTE_REF_RE.search(plain)
             if not m:
                 continue
             left = max(plain.rfind(ch, 0, m.start()) for ch in _SENTENCE_START) + 1
             rights = [i for i in (plain.find(ch, m.end()) for ch in _SENTENCE_END) if i != -1]
-            sentence = re.sub(r"\s*\n\s*", "", plain[left : min(rights) + 1 if rights else len(plain)]).strip()
+            sentence = plain[left : min(rights) + 1 if rights else len(plain)].replace(_BLOCK, "")
+            sentence = re.sub(r"\s*\n\s*", "", sentence).strip()
             no, guessed = _clause_no(raw, sentence)
             sentence = _ITEM_NO_RE.sub("", sentence, count=1).strip()  # 编号已写进条款位置
             src = f"《{f.get('filename', '合同')}》第{pg.get('page', 1)}页"

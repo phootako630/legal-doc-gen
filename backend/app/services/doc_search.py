@@ -115,10 +115,19 @@ STRATEGIC_REF_RE = re.compile(r"(?:战略|框架)(?:合同|协议|合作)")
 FORUM_RE = re.compile(r"仲裁|法院|诉讼|管辖")
 # 主合同里把争议解决交给战略合同的那句（常写在「合同的组成及解释」列表里，不在争议解决章节）
 # 文字版 PDF 长句会折行，中间允许换行
-STRATEGIC_DISPUTE_REF_RE = re.compile(r"争议[^。；;]{0,40}?按\s*[“\"「『]?\s*(?:战略|框架)(?:合同|协议)")
+STRATEGIC_DISPUTE_REF_RE = re.compile(r"争议[^。；;\x00]{0,40}?按\s*[“\"「『]?\s*(?:战略|框架)(?:合同|协议)")
+
+
+# 转引那一段本身（「按双方签订的《战略合作协议》约定执行」「按战略合同关于管辖的条款执行」）：
+# 里面提到的「管辖 / 仲裁」说的是战略合同的条款，不是主合同自己的约定（#133 评审）
+_STRATEGIC_REF_SPAN_RE = re.compile(
+    r"(?:按|依|依据|按照|适用)[^。；;]{0,20}?(?:战略|框架)(?:合同|协议|合作)[^。；;]{0,30}?(?:执行|办理|处理|约定|为准)"
+)
 
 
 def refers_to_strategic(text: str | None) -> bool:
-    """争议条款只是转引战略 / 框架合同，自己没写仲裁机构或法院。"""
+    """争议条款只是转引战略 / 框架合同，主合同自己没写仲裁机构或法院（转引段里的字眼不算）。"""
     compact = re.sub(r"\s+", "", text or "")
-    return bool(STRATEGIC_REF_RE.search(compact)) and not FORUM_RE.search(compact)
+    if not STRATEGIC_REF_RE.search(compact):
+        return False
+    return not FORUM_RE.search(_STRATEGIC_REF_SPAN_RE.sub("", compact))

@@ -107,3 +107,33 @@ def test_reference_wrapped_across_lines_in_text_pdf():
     apply_strategic_dispute_ref(fields, _files(page))
     assert fields["dispute_clause_text"]["value"] == _REF
     assert fields["dispute_clause_location"]["value"] == "第2条"
+
+
+
+def test_reference_mentioning_forum_words_is_still_unresolved():
+    # 「按战略合同关于管辖 / 仲裁的条款执行」说的是战略合同的条款：仍是没读到的转引（#133 评审）
+    for text in ("争议解决按战略合同关于管辖的条款执行。", "争议解决按战略合同关于仲裁的条款执行。",
+                 "本合同争议的解决，按双方签订的《电梯战略合作协议》约定执行。"):
+        fields = apply_derived_fields({"dispute_clause_text": {"value": text, "src": "《虚构供货合同.pdf》第2条"}})
+        assert fields["document_kind"]["value"] is None, text
+        assert fields["court_district"]["src"] == STRATEGIC_UNRESOLVED_NOTE, text
+        assert next(c for c in run_all_checks(fields) if c.key == "strategic_dispute").needs_review, text
+
+
+def test_main_contract_forum_outside_reference_still_counts():
+    # 转引段之外主合同自己写了仲裁机构：按主合同的约定，不当未读到的转引
+    text = "本合同其他事项按战略合同执行；争议提交虚构仲裁委员会仲裁。"
+    fields = apply_derived_fields({"dispute_clause_text": {"value": text, "src": "《虚构供货合同.pdf》第9条"}})
+    assert fields["document_kind"]["value"] == "仲裁申请书"
+
+
+def test_adjacent_ocr_list_items_without_punctuation_not_merged():
+    # 前一项「合同附件清单」没有句号 / 分号：只取命中的那一项（#133 评审）
+    page = (
+        '<ol><li data-bbox="137 100 300 110">合同附件清单</li></ol>\n'
+        '<ol><li data-bbox="137 120 600 130">争议解决按战略合同执行。</li></ol>'
+    )
+    fields = _missing()
+    apply_strategic_dispute_ref(fields, _files(page, scanned=True))
+    assert fields["dispute_clause_text"]["value"] == "争议解决按战略合同执行。"
+    assert fields["dispute_clause_location"]["value"] == "第2条"

@@ -1377,6 +1377,12 @@ def _jurisdiction(fields: dict) -> tuple[str, str | None, str]:
     方式：arbitration / strategic / named / plaintiff / defendant / sign_place / site / delivery / general。
     """
     dispute = re.sub(r"\s+", "", _str_value(fields, "dispute_clause_text") or "")
+    # 主合同把争议解决交给战略 / 框架合同，又没读到战略合同的争议条款（没上传或没识别出）：
+    # 管辖、文书类型都定不了，不按「未约定」去套被告住所地法院（#126）；先于「仲裁」判断：
+    # 「按战略合同关于仲裁的条款执行」不是主合同约定了仲裁（#133 评审）
+    node = _node(fields, "dispute_clause_text")
+    if refers_to_strategic(dispute) or (not dispute and node.get("strategic_ref")):
+        return "strategic", None, STRATEGIC_UNRESOLVED_NOTE
     if "仲裁" in dispute:
         return "arbitration", None, "合同约定仲裁，改为仲裁申请书，待核实"
     # 仲裁机构只写在合同附录里、争议条款正文没出现「仲裁」二字（律师新案例：徐州九里苏宁安装，
@@ -1384,11 +1390,6 @@ def _jurisdiction(fields: dict) -> tuple[str, str | None, str]:
     body = _compact(_str_value(fields, "arbitration_institution")) or ""
     if _ARBITRATION_BODY_NAME_RE.search(body) and "法院" not in dispute:
         return "arbitration", None, f"合同约定仲裁机构「{body}」，改为仲裁申请书，待核实"
-    # 主合同把争议解决交给战略 / 框架合同，又没读到战略合同的争议条款（没上传或没识别出）：
-    # 管辖、文书类型都定不了，不按「未约定」去套被告住所地法院（#126）
-    node = _node(fields, "dispute_clause_text")
-    if refers_to_strategic(dispute) or (not dispute and node.get("strategic_ref")):
-        return "strategic", None, STRATEGIC_UNRESOLVED_NOTE
     if _NAMED_COURT_RE.search(dispute) and not (
         _PLAINTIFF_SEAT_RE.search(dispute) or _DEFENDANT_SEAT_RE.search(dispute)
     ):
