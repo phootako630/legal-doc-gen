@@ -222,6 +222,13 @@ def _has_value(fields: dict, key: str) -> bool:
     return isinstance(node, dict) and node.get("value") not in (None, "")
 
 
+# 合同编号（#125）：审批表标题紧挨合同号栏时，模型会把「AH1234567-某某项目」整段当合同号。
+# 编号本身是「字母 + 数字」（位数不限），后面跟连字符 / 空格再接中文的，只保留编号作为起诉状用的值，
+# 原抽取串保留在 raw_value，出处写明删掉了什么（证据原文保留，#129 评审）；
+# 不是「字母 + 数字」格式、又切不出编号的不猜，原样保留并标待核实。
+_CONTRACT_NO_RE = re.compile(r"[A-Za-z]+\d+")
+_CONTRACT_NO_TAIL_RE = re.compile(r"^\s*([A-Za-z]+\d+)\s*[-－—–_\s]+\s*[\u4e00-\u9fff]")
+_CONTRACT_NO_ODD_NOTE = "（合同编号不是「字母 + 数字」格式，待核实）"
 _RETENTION_RETURN_RE = re.compile(r"返还[^。；;]{0,6}(保修|质保)|(保修|质保)(款|金)[^。；;]{0,12}返还")
 # 独立的「逾期支付合同价款」义务：动词是支付 / 付款，对象是价款。只出现价款名称不算——
 # 「未按时返还安装费质保金」里的「安装费」只是质保金的前缀（#53 复审）
@@ -315,6 +322,7 @@ def apply_rule_guards(fields: dict) -> None:
     if _RETENTION_RETURN_RE.search(clause) and not _CONTRACT_PRICE_RE.search(clause):
         for key in ("breach_clause_text", "breach_interest_rate_text", "breach_interest_clause_location"):
             fields[key] = {"value": None, "src": "按律师规则：该条款是逾期返还保修款 / 质保金的约定，不是逾期支付合同价款的违约条款"}
+    _guard_contract_no(fields)
     # 合同当事人只能取自合同：曾把验收报告上的「施工单位」「使用单位」当成合同乙方 / 甲方（律师反馈）
     for key in ("contract_party_a", "contract_party_b"):
         node = fields.get(key)
@@ -331,6 +339,23 @@ def apply_rule_guards(fields: dict) -> None:
         src = str(node.get("src") or "")
         if _SUMMARY_MARK not in src:
             node["src"] = f"{src}（{_SUMMARY_MARK}）" if src else f"（{_SUMMARY_MARK}）"
+
+
+def _guard_contract_no(fields: dict) -> None:
+    """合同编号只保留编号本身（#125）；见 _CONTRACT_NO_TAIL_RE 的说明。重复调用结果不变。"""
+    node = fields.get("contract_no")
+    if not isinstance(node, dict) or not isinstance(node.get("value"), str):
+        return
+    value, src = node["value"].strip(), str(node.get("src") or "")
+    if not value or _CONTRACT_NO_RE.fullmatch(value):
+        return
+    m = _CONTRACT_NO_TAIL_RE.match(value)
+    if m:
+        node["raw_value"] = value
+        node["value"] = m.group(1)
+        node["src"] = f"{src}（原抽取「{value}」，已去掉编号后的项目名）"
+    elif _CONTRACT_NO_ODD_NOTE not in src:
+        node["src"] = f"{src}{_CONTRACT_NO_ODD_NOTE}"
 
 
 # 原文里找不到的抽取值：保留但标「待核实」（审核页与起诉状都按 src 里的「待核实」判定状态）
