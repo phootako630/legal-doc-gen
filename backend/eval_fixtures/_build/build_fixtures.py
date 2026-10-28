@@ -418,10 +418,64 @@ def case_unread_page() -> None:
         })
 
 
+def case_mixed_breach_clause() -> None:
+    """同一条违约责任里既有乙方未按期交货的违约金、又有甲方逾期付款的利息（#124）→ 逾期付款利息。"""
+    case = "虚构买卖案G"
+    os.makedirs(os.path.join(ROOT, case, "materials"), exist_ok=True)
+    _approval(case, "AH9000007苏州虚构置业有限公司诉讼审批表.pdf", {
+        "serial": "SS2099-000107", "title": "AH9000007苏州虚构置业有限公司虚构花园项目",
+        "contract_no": "AH9000007", "branch_path": "集团/营销网络/梧桐分公司",
+        "buyer": "苏州虚构置业有限公司", "contact": "虚构庚", "contact_phone": "13800000007",
+        "buyer_address": "苏州市吴江区虚构路7号", "site": "苏州市吴江区虚构路7号虚构花园",
+        "contract_type": "买卖合同", "amount_label": "买卖", "sign_date": "2024-05-08", "qty": "2", "qty_actual": "2",
+        "total": "600,000.00", "paid": "480,000.00", "unpaid": "120,000.00",
+        "gov_accept": "2024-12-10", "last_pay_date": "2025-01-20", "reason": "电梯已验收交付，买方逾期未付到期货款。",
+    })
+    _text_pdf(os.path.join(ROOT, case, "materials", "苏州虚构花园项目电梯买卖合同.pdf"), [
+        """电梯买卖合同
+
+合同编号：AH9000007
+买方（甲方）：苏州虚构置业有限公司
+卖方（乙方）：日立电梯（中国）有限公司
+
+第一条 标的
+乙方向甲方供应电梯2台，用于苏州虚构花园项目，交货地点：苏州市吴江区虚构路7号。
+
+第二条 合同价款
+本合同设备总价为人民币600,000元（大写：陆拾万元整）。
+
+第三条 付款方式
+3.1 合同签订后10日内，甲方支付合同总价的20%。
+3.2 设备到达工地后15日内，甲方支付至合同总价的80%。
+3.3 电梯经政府验收合格后30日内，甲方支付至合同总价的100%。""",
+        """第四条 违约责任
+4.1 乙方未按期交货的，每逾期一日按迟交部分货款的万分之五向甲方支付违约金；甲方未按期付款的，应就逾期未付款项向乙方支付逾期付款利息。
+
+第五条 争议解决
+5.1 因本合同发生的争议，双方协商解决；协商不成的，向工程所在地人民法院提起诉讼。
+
+第六条 其他
+本合同自双方盖章之日起生效。
+（以下无正文）
+
+买方（盖章）：苏州虚构置业有限公司
+卖方（盖章）：日立电梯（中国）有限公司
+签订日期：2024年5月10日""",
+    ])
+    for i, code in enumerate(["31103205202400000071", "31103205202400000072"], start=1):
+        _report(case, f"电梯监督检验报告{i}.pdf", {
+            "report_no": f"XG-DTJ-2024-97{i:02d}", "user": "苏州虚构置业有限公司",
+            "installer": "虚构电梯工程有限公司", "device_code": code,
+            "inspect_date": "2024年12月3日", "approve_date": "2024年12月10日",
+            "site": "苏州市吴江区虚构路7号虚构花园", "model": "HGP",
+        })
+
+
 if __name__ == "__main__":
     case_install_scanned()
     case_sales_arbitration()
     case_install_vge()
     case_lump_sum_penalty()
     case_unread_page()
+    case_mixed_breach_clause()
     print("已生成：", ", ".join(sorted(n for n in os.listdir(ROOT) if not n.startswith(("_", ".")) and os.path.isdir(os.path.join(ROOT, n)))))

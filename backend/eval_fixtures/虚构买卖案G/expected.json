@@ -1,0 +1,39 @@
+{
+  "title": "虚构买卖案 G（同一条违约责任里既有乙方未按期交货违约金、又有甲方逾期付款利息 → 逾期付款利息）",
+  "decisions": {},
+  "fields": {
+    "plaintiff_name_final": "日立电梯（中国）有限公司",
+    "plaintiff_credit_code": "91440000000000000X",
+    "plaintiff_person_in_charge": "虚构甲，董事长",
+    "defendant_name": {
+      "value": "苏州虚构置业有限公司",
+      "source": "买卖合同"
+    },
+    "contract_type": "买卖合同",
+    "contract_sign_date": {
+      "value": "2024年5月10日",
+      "source": "买卖合同"
+    },
+    "total_amount": 600000,
+    "paid_amount": 480000,
+    "unpaid_amount": 120000,
+    "elevator_qty": 2,
+    "acceptance_latest_date": "2024年12月10日",
+    "payable_ratio": "100%",
+    "document_kind": "民事起诉状",
+    "breach_clause_text": {
+      "value": "甲方未按期付款的，应就逾期未付款项向乙方支付逾期付款利息。",
+      "match": "contains"
+    },
+    "interest_term": "逾期付款利息",
+    "interest_rate_basis": {
+      "value": "贷款市场报价利率",
+      "match": "contains"
+    },
+    "court_district": "苏州市吴江区",
+    "addressee": {
+      "value": "苏州市吴江区人民法院",
+      "match": "contains"
+    }
+  }
+}

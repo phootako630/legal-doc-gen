@@ -229,6 +229,27 @@ def _has_value(fields: dict, key: str) -> bool:
 _CONTRACT_NO_RE = re.compile(r"[A-Za-z]+\d+")
 _CONTRACT_NO_TAIL_RE = re.compile(r"^\s*([A-Za-z]+\d+)\s*[-－—–_\s]+\s*[\u4e00-\u9fff]")
 _CONTRACT_NO_ODD_NOTE = "（合同编号不是「字母 + 数字」格式，待核实）"
+# 违约条款只留甲方逾期付款那一句（#124）：模型常把整条违约责任抽进 breach_clause_text，
+# 乙方延迟交货的「违约金」会让系统把甲方的逾期付款利息认成违约金。按句号 / 分号切句：
+# 甲方（买方 / 发包方 / 需方）未按期付款的句子留下，乙方（卖方）延迟交货 / 完工的句子去掉，
+# 两样都不像的句子跟随上一句（「此违约金最高不得超过……」）。认不出谁逾期付款的整条不动。
+_BUYER = r"(?:甲方|买方|发包方|需方|采购方)"
+_BUYER_LATE_PAY_RE = re.compile(
+    _BUYER + r"[^。；;]{0,20}?(?:未|没有|逾期|延期|延迟|迟延|拖延|拖欠)[^。；;]{0,15}?(?:付|支付|付款)"
+)
+# 「乙方逾期交货」「乙方未按期交货」「乙方未能按时交付」都算（#130 评审）
+_SELLER_DELAY_RE = re.compile(
+    r"(?:乙方|卖方|供方|承包方)[^。；;]{0,15}?"
+    r"(?:逾期|延期|延迟|迟延|未能?按期|未能?按时|未能?如期|不能按期|不能按时)[^。；;]{0,6}?"
+    r"(?:交货|供货|完工|竣工|安装|交付)"
+    r"|(?:延迟|逾期|迟延)(?:交货|供货|完工|竣工)"
+)
+# 违约条款去掉了乙方的句子后，抽出的「违约利率」若出自去掉的部分，一并去掉（#130 评审）：
+# 否则「违约金」仍留在 breach_interest_rate_text 里，系统照样认成违约金
+SELLER_RATE_DROPPED_NOTE = "（原抽取的违约利率出自乙方延迟交货等其他违约约定，已去掉，待核实）"
+# 留下的甲方句子里有利率写法：去掉的利率不能换成 LPR 常规话术，交律师按原文填写
+RATE_MARK_RE = re.compile(r"万分之|千分之|百分之|[%％‰]|利率")
+_CLAUSE_SPLIT_RE = re.compile(r"[^。；;]+[。；;]?")
 _RETENTION_RETURN_RE = re.compile(r"返还[^。；;]{0,6}(保修|质保)|(保修|质保)(款|金)[^。；;]{0,12}返还")
 # 独立的「逾期支付合同价款」义务：动词是支付 / 付款，对象是价款。只出现价款名称不算——
 # 「未按时返还安装费质保金」里的「安装费」只是质保金的前缀（#53 复审）
@@ -323,6 +344,7 @@ def apply_rule_guards(fields: dict) -> None:
         for key in ("breach_clause_text", "breach_interest_rate_text", "breach_interest_clause_location"):
             fields[key] = {"value": None, "src": "按律师规则：该条款是逾期返还保修款 / 质保金的约定，不是逾期支付合同价款的违约条款"}
     _guard_contract_no(fields)
+    _guard_breach_clause(fields)
     # 合同当事人只能取自合同：曾把验收报告上的「施工单位」「使用单位」当成合同乙方 / 甲方（律师反馈）
     for key in ("contract_party_a", "contract_party_b"):
         node = fields.get(key)
@@ -356,6 +378,55 @@ def _guard_contract_no(fields: dict) -> None:
         node["src"] = f"{src}（原抽取「{value}」，已去掉编号后的项目名）"
     elif _CONTRACT_NO_ODD_NOTE not in src:
         node["src"] = f"{src}{_CONTRACT_NO_ODD_NOTE}"
+
+
+def _guard_breach_clause(fields: dict) -> None:
+    """违约条款只留甲方逾期付款的句子（#124）；见 _BUYER_LATE_PAY_RE 的说明。重复调用结果不变。"""
+    node = fields.get("breach_clause_text")
+    if not isinstance(node, dict) or not isinstance(node.get("value"), str):
+        return
+    text = node["value"]
+    sentences = [m.group(0) for m in _CLAUSE_SPLIT_RE.finditer(text) if m.group(0).strip()]
+    keep: list[bool | None] = []
+    for sent in sentences:
+        if _BUYER_LATE_PAY_RE.search(sent):
+            keep.append(True)
+        elif _SELLER_DELAY_RE.search(sent):
+            keep.append(False)
+        else:
+            keep.append(keep[-1] if keep else None)  # 跟随上一句；开头认不出的先待定
+    if True not in keep or all(k is not False for k in keep):
+        return  # 认不出甲方逾期付款，或没有要去掉的句子
+    kept = [i for i, k in enumerate(keep) if k]
+    if kept != list(range(kept[0], kept[-1] + 1)):
+        return  # 甲方的句子不连续：拼接后回原文对不上，宁可不动
+    node["raw_value"] = text
+    node["value"] = "".join(sentences[kept[0] : kept[-1] + 1]).strip()
+    node["src"] = f"{node.get('src') or ''}（原条款另含乙方延迟交货等其他违约约定，只取甲方逾期付款部分）"
+    _guard_breach_rate(fields, kept=node["value"], dropped=text)
+
+
+def _squash(text: str) -> str:
+    return re.sub(r"\s+", "", text)
+
+
+def _guard_breach_rate(fields: dict, kept: str, dropped: str) -> None:
+    """
+    违约条款裁掉乙方句子后，违约利率若只在裁掉的部分出现（或本身是乙方延迟交货的写法）就去掉，
+    原值留在 raw_value。dropped 是裁剪前的整条条款，命中留下部分的不算出自裁掉部分。
+    """
+    node = fields.get("breach_interest_rate_text")
+    if not isinstance(node, dict) or not isinstance(node.get("value"), str) or not node["value"].strip():
+        return
+    rate = _squash(node["value"])
+    in_kept = rate in _squash(kept)
+    if in_kept or not (rate in _squash(dropped) or _SELLER_DELAY_RE.search(node["value"])):
+        return
+    fields["breach_interest_rate_text"] = {
+        "value": None,
+        "raw_value": node["value"],
+        "src": f"{node.get('src') or ''}{SELLER_RATE_DROPPED_NOTE}",
+    }
 
 
 # 原文里找不到的抽取值：保留但标「待核实」（审核页与起诉状都按 src 里的「待核实」判定状态）

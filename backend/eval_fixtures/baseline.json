@@ -87,6 +87,98 @@
         "verdict": "正确"
       }
     },
+    "虚构买卖案G": {
+      "acceptance_latest_date": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "addressee": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "breach_clause_text": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "contract_sign_date": {
+        "silent": false,
+        "source_ok": true,
+        "verdict": "正确"
+      },
+      "contract_type": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "court_district": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "defendant_name": {
+        "silent": false,
+        "source_ok": true,
+        "verdict": "正确"
+      },
+      "document_kind": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "elevator_qty": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "interest_rate_basis": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "interest_term": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "paid_amount": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "payable_ratio": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "plaintiff_credit_code": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "plaintiff_name_final": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "plaintiff_person_in_charge": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "total_amount": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "unpaid_amount": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      }
+    },
     "虚构安装案A": {
       "acceptance_latest_date": {
         "silent": false,
