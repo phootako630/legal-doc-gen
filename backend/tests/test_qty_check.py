@@ -38,6 +38,37 @@ def test_count_vge_seen_but_unparsed():
     assert count_vge_units("| 编号 | 2#DT1 |\n| 型号规格 | VGE-320 |") == (0, True)
 
 
+# 文字版 PDF 的设备清单（#112）：空格 / 制表符对齐的纯文字，虚构
+_PLAIN_TABLE = """二、设备清单
+序号  型号      层站      台数
+1    HGP       18/18/18  3
+2    VGE-2     3/3/3     1
+合计                     4
+"""
+
+
+def test_count_vge_plain_text_space_aligned():
+    # 层站「3/3/3」「18/18/18」不能当台数；合计行不重复计
+    assert count_vge_units(_PLAIN_TABLE) == (1, True)
+
+
+def test_count_vge_plain_text_tab_separated():
+    text = "序号\t型号\t载重\t数量\n1\tVGE 320\t320\t2台\n2\tLGE-1000\t1000\t5台\n"
+    assert count_vge_units(text) == (2, True)
+
+
+def test_count_vge_plain_text_misaligned_row_not_guessed():
+    # VGE 行切出的列数与表头不同（层站与台数粘在一起）：不猜，交给律师
+    text = "序号  型号      层站      台数\n1    VGE-2     3/3/3 1\n"
+    assert count_vge_units(text) == (0, True)
+
+
+def test_count_vge_plain_text_prose_after_table_ignored():
+    # 表格之后的正文提到 VGE 不算一行清单
+    text = _PLAIN_TABLE + "说明：VGE 型号为家用电梯，无需取得监督检验报告。\n"
+    assert count_vge_units(text) == (1, True)
+
+
 def _run(monkeypatch, extracted, files, ocr=None):
     monkeypatch.setattr(
         nodes_mod,
@@ -74,6 +105,16 @@ def test_vge_explains_difference_no_pause(monkeypatch):
     assert f["elevator_qty"]["value"] == 14
     assert "家用电梯" in f["elevator_qty"]["src"]
     assert f["elevator_qty_contract"]["value"] == 15
+
+
+def test_text_contract_plain_list_vge_no_pause(monkeypatch):
+    # 文字版合同的设备清单是空格对齐的纯文字（#112）：合同 4 台含 VGE 1 台、验收 3 台 → 不再停在台数断点
+    files = [{"filename": "合同.pdf", "identified_type": "合同", "text": _PLAIN_TABLE}]
+    state = _run(monkeypatch, _qty(4, 3), files)
+    assert state.pending is None
+    f = state.extracted_fields
+    assert f["elevator_qty_vge"]["value"] == 1
+    assert f["elevator_qty"]["value"] == 3
 
 
 def test_mismatch_pauses_then_lawyer_decides(monkeypatch):
