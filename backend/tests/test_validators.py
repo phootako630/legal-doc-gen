@@ -44,7 +44,7 @@ def test_parse_date_validity():
 
 # ── 金额勾稽 ──────────────────────────────────────────────────────────────
 def test_amount_reconcile_pass_real_sample():
-    # CLAUDE.md 真实样例：638667.2 + 256266.8 == 894934
+    # 审批表勾稽样例：638667.2 + 256266.8 == 894934
     c = check_amounts("894934", "638667.2", "256266.8")
     assert c.passed is True
     assert c.applicable is True

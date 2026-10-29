@@ -2,7 +2,7 @@
 #
 # 为什么落盘：in-memory checkpointer 在服务重启后丢失所有进行中的案件（resume 404）。
 # 单进程、少量律师使用，SQLite 足够；将来多实例时只需替换这里的 saver 实现，
-# 图与节点层零改动（见 CLAUDE.md「未来接 DB 时零重构」）。
+# 图与节点层零改动（见 docs/agents/agent-pipeline.md「关于 agent 框架的取舍」）。
 #
 # 保密：checkpoint 里含案件字段与全文，属客户机密。库文件 0600（SQLite 的 -wal/-shm
 # 会沿用主库权限），且不依赖 umask；run_meta 记录每个会话的创建时间，供 purge_expired 按

@@ -184,7 +184,8 @@ sequenceDiagram
 
 ```
 legal-doc-gen/
-├── CLAUDE.md                        # AI 编码助手项目指令（详细规范与律师规则）
+├── CLAUDE.md                        # AI 编码助手项目指令（总纲与索引）
+├── docs/agents/                     # 按需阅读的分支文档（律师规则、agent 流程、API、eval 等）
 ├── README.md / README.zh-CN.md      # 本文件（英 / 中）
 ├── prompts/                         # LLM Prompt 与起诉状模板
 │   ├── prompt-a-extract.md          # 字段抽取（结构化）

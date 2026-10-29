@@ -18,7 +18,7 @@ from app.services.anchoring import AnchorQuality
 SourceChannel = Literal["text", "ocr", "multimodal"]
 FieldStatus = Literal["normal", "missing", "conflict", "ocr_uncertain"]
 
-# 低于此 confidence 标记为"待核实"（对齐 CLAUDE.md config 的 CONFIDENCE_UNCERTAIN_BELOW）
+# 低于此 confidence 标记为"待核实"（对齐 docs/agents/code-reference.md「后端配置」的 CONFIDENCE_UNCERTAIN_BELOW）
 CONFIDENCE_UNCERTAIN_BELOW = 60
 
 # ── 软信号权重（Σ=100）与取值表 ─────────────────────────────────────────────

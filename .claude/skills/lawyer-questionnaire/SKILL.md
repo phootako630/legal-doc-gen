@@ -51,7 +51,7 @@ soffice --headless --convert-to 'txt:Text (encoded):UTF8' --outdir "$SCRATCH/rep
 
 逐题整理成「题号 → 选择 → 说明」，再落实：
 - 规则写进 `backend/app/services/derived_fields.py` 等代码；
-- 同步 `CLAUDE.md`「律师确认的填写规则」；
+- 同步 `docs/agents/complaint-rules.md`「律师确认的填写规则」，并按其「落实律师答复时的改动点」逐项检查；
 - 补测试。
 
 答得不清楚的追问，放进下一份确认单。

@@ -1,6 +1,6 @@
 # 企业信息联网查询（预留）：按统一社会信用代码补全法人全称，替代 LLM 猜名称。
 #
-# 现状（对应 CLAUDE.md「联网工具」第 7 步）：
+# 现状（对应 docs/agents/agent-pipeline.md「工具清单」lookup_company）：
 #   查询 API（企查查 / 天眼查 / 国家企业信用信息公示系统）暂未接入——本模块只
 #   定义好接口与数据结构，lookup_company 恒返回 None；agent 据此走 HITL（human-in-
 #   the-loop）：暂停问律师，由律师自行查询后键入法人全称。

@@ -37,7 +37,7 @@ function collectConflictKeys(validations: ValidationCheck[]): Set<string> {
 /**
  * 将后端 ExtractedFields 转换为审核表格所需的 ReviewField[]。
  * validations 为确定性校验结论：命中冲突的字段状态直接置为 conflict（优先级最高，
- * 覆盖 src 文本启发式），对齐 CLAUDE.md「硬信号定状态」。
+ * 覆盖 src 文本启发式），对齐 docs/agents/validation.md「确定性硬信号」。
  */
 export function buildReviewFields(
   fields: ExtractedFields,

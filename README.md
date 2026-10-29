@@ -237,7 +237,8 @@ sequenceDiagram
 
 ```
 legal-doc-gen/
-├── CLAUDE.md                        # Instructions for AI coding assistants (full spec + lawyer rules)
+├── CLAUDE.md                        # Instructions for AI coding assistants (index; details in docs/agents/)
+├── docs/agents/                     # Agent reference read on demand (lawyer rules, pipeline, API, eval…)
 ├── README.md / README.zh-CN.md      # This file (English / Chinese)
 ├── prompts/                         # LLM prompts and the complaint template
 │   ├── prompt-a-extract.md          # Field extraction (structured)

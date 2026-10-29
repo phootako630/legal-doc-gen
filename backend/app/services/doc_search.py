@@ -1,6 +1,6 @@
 # 文档内关键词检索：在（已 OCR 的）逐页文本里定位条款所在页与片段。
 #
-# 设计意图（对应 CLAUDE.md「search_in_docs」）：
+# 设计意图（对应 docs/agents/agent-pipeline.md「工具清单」search_in_docs）：
 #   扫描合同逐页 OCR 后，用关键词定位付款/违约/争议三类条款出现在第几页，
 #   供 agent 判断“是否已拿到该找的条款、可以停止继续 OCR”。纯函数、可单测。
 from __future__ import annotations

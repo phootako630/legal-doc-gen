@@ -71,7 +71,7 @@ _REPORT_NO_RE = re.compile(r"报告编号\s*[:：]\s*([0-9A-Za-z\-()（）]{6,})
 
 def count_acceptance_units(files: list[dict]) -> tuple[int, str] | None:
     """
-    数验收报告覆盖的电梯台数（确定性代码，对应 CLAUDE.md「验收口径 = 报告份数/设备代码数」）。
+    数验收报告覆盖的电梯台数（确定性代码，对应 docs/agents/agent-pipeline.md「验收口径 = 报告份数/设备代码数」）。
     优先按不同设备代码计数，取不到再按不同报告编号计数；都取不到返回 None。
     返回 (台数, 出处说明)。
     """
