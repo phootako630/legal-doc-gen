@@ -22,7 +22,7 @@ def test_rmb_with_jiao():
 
 
 def test_rmb_reconcile_sample_sum():
-    # CLAUDE.md 真实样例：638667.2 + 256266.8 = 894934
+    # 审批表勾稽样例：638667.2 + 256266.8 = 894934
     assert amount_to_chinese_rmb(894934) == "捌拾玖万肆仟玖佰叁拾肆元整"
 
 

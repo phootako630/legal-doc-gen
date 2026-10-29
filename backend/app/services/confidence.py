@@ -1,6 +1,6 @@
 # ③ 可信度分层评分：硬信号定状态（是/否），软信号给 0-100 confidence（仅排序用）
 #
-# 设计意图（对应 CLAUDE.md「可信度分层」）：
+# 设计意图（对应 AGENTS.md「可信度分层」）：
 #   律师不信任黑盒总分。confidence 只服务 UI 优先级（排序、默认展开），不替代判断。
 #   状态（FieldStatus）由确定性硬信号决定，与 confidence 分离：
 #     勾稽冲突/台数不一致        → conflict（最高优先级）
@@ -18,7 +18,7 @@ from app.services.anchoring import AnchorQuality
 SourceChannel = Literal["text", "ocr", "multimodal"]
 FieldStatus = Literal["normal", "missing", "conflict", "ocr_uncertain"]
 
-# 低于此 confidence 标记为"待核实"（对齐 CLAUDE.md config 的 CONFIDENCE_UNCERTAIN_BELOW）
+# 低于此 confidence 标记为"待核实"
 CONFIDENCE_UNCERTAIN_BELOW = 60
 
 # ── 软信号权重（Σ=100）与取值表 ─────────────────────────────────────────────

@@ -184,7 +184,10 @@ sequenceDiagram
 
 ```
 legal-doc-gen/
-├── CLAUDE.md                        # AI 编码助手项目指令（详细规范与律师规则）
+├── AGENTS.md                        # AI 编码助手项目指令（总纲与索引）
+├── CLAUDE.md                        # 供 Claude Code 导入 AGENTS.md
+├── CODING_STANDARDS.md              # 编码规范（写、改或评审代码前读）
+├── docs/agents/                     # 按需阅读的分支文档（律师规则、agent 流程、API、eval 等）
 ├── README.md / README.zh-CN.md      # 本文件（英 / 中）
 ├── prompts/                         # LLM Prompt 与起诉状模板
 │   ├── prompt-a-extract.md          # 字段抽取（结构化）
@@ -289,4 +292,4 @@ cd frontend && pnpm lint && pnpm test && pnpm build
 
 ## 不包含（后续迭代预留）
 
-账号权限分级（目前所有账号权限相同，原告信息表更新另凭管理员口令）、批量案件处理、向量检索、LangChain 本体等，详见 [CLAUDE.md](./CLAUDE.md)。
+账号权限分级（目前所有账号权限相同，原告信息表更新另凭管理员口令）、批量案件处理、向量检索、LangChain 本体等，详见 [AGENTS.md](./AGENTS.md)。

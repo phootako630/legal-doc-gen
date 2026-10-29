@@ -1,4 +1,4 @@
-# 进程内滑动窗口限流：同一来源（登录账号或 IP）在 window_s 秒内最多 limit 次（单进程部署，见 CLAUDE.md）
+# 进程内滑动窗口限流：同一来源（登录账号或 IP）在 window_s 秒内最多 limit 次（单进程部署，见 AGENTS.md「技术选择」）
 from __future__ import annotations
 
 import threading

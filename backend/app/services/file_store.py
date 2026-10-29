@@ -1,6 +1,6 @@
 # 上传文件原始字节的磁盘暂存：支持 agent 在 analyze 阶段按需对扫描件逐页 OCR。
 #
-# 设计意图（对应 CLAUDE.md「按需 OCR」）：
+# 设计意图（对应 docs/agents/agent-pipeline.md「按需 OCR」）：
 #   上传时不再整份 OCR 扫描件，只把原始 PDF 字节存到 UPLOAD_DIR，返回一个 file_id；
 #   agent 在缺条款字段时凭 file_id 取回字节，对需要的页调用 ocr_page。
 #   落盘（而非内存）使服务重启后仍可 resume；超过保留期的文件由 purge_expired 清除。
