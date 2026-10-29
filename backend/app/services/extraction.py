@@ -8,6 +8,7 @@ from typing import Any
 
 from app.services.acceptance_report import latest_approved_date
 from app.services.confidence import ConfidenceSignals, compute_confidence
+from app.services.doc_search import STRATEGIC_DISPUTE_REF_RE, refers_to_strategic
 from app.services.provenance import (
     _src_filename,
     replace_src_page,
@@ -261,9 +262,6 @@ _CONTRACT_PRICE_RE = re.compile(
 )
 
 
-# 主合同只写「争议的解决……按战略合同内相关条款执行」，本身没有约定仲裁 / 法院（律师反馈：徐州苏宁）
-_STRATEGIC_REF_RE = re.compile(r"(?:战略|框架)(?:合同|协议|合作)")
-_FORUM_RE = re.compile(r"仲裁|法院|诉讼|管辖")
 # 战略 / 框架合同只能提供这些条款：它不是本案合同（与 agent/nodes.py 的按需 OCR 白名单一致）
 STRATEGIC_CLAUSE_KEYS = frozenset({
     "payment_clause_location",
@@ -282,10 +280,74 @@ STRATEGIC_CLAUSE_KEYS = frozenset({
 STRATEGIC_LABEL = "战略合同"
 
 
-def refers_to_strategic(text: str | None) -> bool:
-    """争议条款只是转引战略 / 框架合同，自己没写仲裁机构或法院。"""
-    compact = re.sub(r"\s+", "", text or "")
-    return bool(_STRATEGIC_REF_RE.search(compact)) and not _FORUM_RE.search(compact)
+# 从主合同原文补抽转引句用（#126）：OCR 输出常是 HTML，列表编号丢在 <li> 里
+_TAG_RE = re.compile(r"<[^>]+>")
+_LI_RE = re.compile(r'<li\b[^>]*?data-bbox="(\d+)[^"]*"[^>]*>(.*?)</li>', re.S)
+_ITEM_NO_RE = re.compile(r"^\s*(?:第\s*([一二三四五六七八九十\d]{1,3})\s*条|[（(]?(\d{1,2})[)）]?\s*[.、．](?!\d))")
+# OCR HTML 的列表项 / 段落边界：去标签前换成分隔符，免得相邻两项粘成一句（#133 评审）
+_BLOCK_END_RE = re.compile(r"</(?:li|p|td|th|div|h\d)>|<br\s*/?>", re.I)
+_BLOCK = "\x00"
+_SENTENCE_START = "。；;" + _BLOCK  # 文字版 PDF 会折行，换行不算句子边界
+_SENTENCE_END = "。；;：:" + _BLOCK  # 「……按战略合同内相关条款执行，其中：」到冒号为止
+_LI_INDENT_TOL = 10  # 同一级列表项左边距相差不超过的像素
+
+
+def _clause_no(raw: str, sentence: str) -> tuple[str | None, bool]:
+    """
+    转引句所在条款的编号：先看句首写没写「2.」「第二条」；OCR 把列表编号丢了（只剩 <ol><li>）时，
+    按同一页同一缩进的列表项数到第几项（返回 guessed=True，出处标「推算，待核实」）。
+    """
+    m = _ITEM_NO_RE.match(sentence)
+    if m:
+        return m.group(1) or m.group(2), False
+    items = [(int(x), _TAG_RE.sub("", body)) for x, body in _LI_RE.findall(raw)]
+    hit = next((i for i, (_, body) in enumerate(items) if STRATEGIC_DISPUTE_REF_RE.search(body)), None)
+    if hit is None:
+        return None, False
+    indent = items[hit][0]
+    n = sum(1 for x, _ in items[: hit + 1] if abs(x - indent) <= _LI_INDENT_TOL)
+    return str(n), True
+
+
+def apply_strategic_dispute_ref(fields: dict, files: list[dict]) -> None:
+    """
+    争议条款没抽到（或抽到了转引句却没给位置）、主合同原文里有「争议……按战略合同执行」时，
+    由代码补上这句及其条款位置（#126）。
+    这句常写在「合同的组成及解释」列表里，不在争议解决章节，模型容易漏。条款原文照抄；
+    战略合同已上传时，随后的 apply_strategic_guards 会清空内容、转去战略合同里读。
+    """
+    node = fields.get("dispute_clause_text")
+    text = node.get("value") if isinstance(node, dict) else None
+    loc = fields.get("dispute_clause_location")
+    loc_missing = not (isinstance(loc, dict) and loc.get("value"))
+    # 模型抽到了转引句却没给条款位置时只补位置（虚构买卖案I）；抽到了别的争议条款不动
+    if (text and not (refers_to_strategic(text) and loc_missing)) or (isinstance(node, dict) and node.get("strategic_ref")):
+        return
+    for f in files:
+        if f.get("identified_type") != "合同":
+            continue
+        pages = f.get("pages") or [{"page": 1, "text": f.get("text") or ""}]
+        for pg in pages:
+            raw = pg.get("text") or ""
+            plain = _TAG_RE.sub("", _BLOCK_END_RE.sub(_BLOCK, raw))
+            m = STRATEGIC_DISPUTE_REF_RE.search(plain)
+            if not m:
+                continue
+            left = max(plain.rfind(ch, 0, m.start()) for ch in _SENTENCE_START) + 1
+            rights = [i for i in (plain.find(ch, m.end()) for ch in _SENTENCE_END) if i != -1]
+            sentence = plain[left : min(rights) + 1 if rights else len(plain)].replace(_BLOCK, "")
+            sentence = re.sub(r"\s*\n\s*", "", sentence).strip()
+            no, guessed = _clause_no(raw, sentence)
+            sentence = _ITEM_NO_RE.sub("", sentence, count=1).strip()  # 编号已写进条款位置
+            src = f"《{f.get('filename', '合同')}》第{pg.get('page', 1)}页"
+            if f.get("is_scanned"):
+                src += "（OCR识别，请核实）"
+            if not text:
+                fields["dispute_clause_text"] = {"value": sentence, "src": src}
+            if no and loc_missing:
+                note = "（条款号按扫描页列表顺序推算，待核实）" if guessed else ""
+                fields["dispute_clause_location"] = {"value": f"第{no}条", "src": src + note}
+            return
 
 
 def _from_files(node: object, names: list[str]) -> bool:

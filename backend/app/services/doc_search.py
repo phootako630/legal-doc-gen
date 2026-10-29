@@ -73,9 +73,10 @@ CLAUSE_BODY_PATTERNS: dict[str, re.Pattern[str]] = {
     "breach": re.compile(
         r"逾期(?:付款|支付)[^。；\n]{0,30}?(?:利息|违约金|万分之|%)|滞纳金"
     ),
-    # 争议：向法院起诉 / 仲裁
+    # 争议：向法院起诉 / 仲裁；或主合同把争议解决交给战略 / 框架合同（#126：找到这句也算争议条款已找到）
     "dispute": re.compile(
         r"法院[^。；\n]{0,6}?(?:提起诉讼|起诉|诉讼)|仲裁委员会|提交[^。；\n]{0,10}?仲裁"
+        r"|争议[^。；;]{0,40}?按\s*[“\"「『]?\s*(?:战略|框架)(?:合同|协议)"
     ),
     # 质保期：质保金按日违约金的起算日 = 验收 + 质保期的次日（补充答复 Q6）
     "warranty": re.compile(
@@ -107,3 +108,26 @@ def locate_clause_bodies(pages: list[dict]) -> set[str]:
             if pattern.search(text):
                 found.add(clause)
     return found
+
+
+# 主合同只写「争议的解决……按战略合同内相关条款执行」，本身没有约定仲裁 / 法院（律师反馈：徐州苏宁；#126）
+STRATEGIC_REF_RE = re.compile(r"(?:战略|框架)(?:合同|协议|合作)")
+FORUM_RE = re.compile(r"仲裁|法院|诉讼|管辖")
+# 主合同里把争议解决交给战略合同的那句（常写在「合同的组成及解释」列表里，不在争议解决章节）
+# 文字版 PDF 长句会折行，中间允许换行
+STRATEGIC_DISPUTE_REF_RE = re.compile(r"争议[^。；;\x00]{0,40}?按\s*[“\"「『]?\s*(?:战略|框架)(?:合同|协议)")
+
+
+# 转引那一段本身（「按双方签订的《战略合作协议》约定执行」「按战略合同关于管辖的条款执行」）：
+# 里面提到的「管辖 / 仲裁」说的是战略合同的条款，不是主合同自己的约定（#133 评审）
+_STRATEGIC_REF_SPAN_RE = re.compile(
+    r"(?:按|依|依据|按照|适用)[^。；;]{0,20}?(?:战略|框架)(?:合同|协议|合作)[^。；;]{0,30}?(?:执行|办理|处理|约定|为准)"
+)
+
+
+def refers_to_strategic(text: str | None) -> bool:
+    """争议条款只是转引战略 / 框架合同，主合同自己没写仲裁机构或法院（转引段里的字眼不算）。"""
+    compact = re.sub(r"\s+", "", text or "")
+    if not STRATEGIC_REF_RE.search(compact):
+        return False
+    return not FORUM_RE.search(_STRATEGIC_REF_SPAN_RE.sub("", compact))

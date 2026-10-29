@@ -42,6 +42,7 @@ from app.services.extraction import (
     STRATEGIC_LABEL,
     apply_dual_contract_amounts,
     apply_rule_guards,
+    apply_strategic_dispute_ref,
     apply_strategic_guards,
     build_combined_text,
     enrich_provenance,
@@ -307,6 +308,8 @@ async def extract_node(state: GraphState) -> dict:
     mark_supplement_agreements(fields, state.get("files", []))
     # 一张审批表同时列买卖、安装两份合同：按本案合同取对应一栏的金额（律师新案例：徐州九里苏宁）
     apply_dual_contract_amounts(fields, state.get("files", []))
+    # 争议条款没抽到、主合同里写着「争议……按战略合同执行」：代码补上这句及条款位置（#126）
+    apply_strategic_dispute_ref(fields, state.get("files", []))
     # 律师规则把关：被告住址只用工商登记信息、AI 归纳的付款条款标待核实
     apply_rule_guards(fields)
     # 战略 / 框架合同只提供条款；主合同争议条款只转引战略合同时，留给按需读取去战略合同找
@@ -631,6 +634,8 @@ async def ocr_augment_node(state: GraphState) -> dict:
                 fields[key] = mark(node, filename)
         if strategic:
             _mark_strategic_dispute_location(fields, extracted, filename)
+        else:
+            apply_strategic_dispute_ref(fields, [f])  # 模型漏了「争议……按战略合同执行」时补上（#126）
         apply_rule_guards(fields)
         apply_strategic_guards(fields, files)
         missing = {c for c in missing if _is_missing(fields, _CLAUSE_INDICATOR[c])}
