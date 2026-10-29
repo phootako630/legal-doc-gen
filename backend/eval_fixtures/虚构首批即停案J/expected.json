@@ -1,0 +1,26 @@
+{
+  "title": "虚构首批即停案 J（扫描合同 10 页，付款写「合同金额的X%」、签章栏为表格，读完第一批 5 页就停）",
+  "decisions": {},
+  "fields": {
+    "plaintiff_name_final": {
+      "value": "日立电梯（中国）有限公司梧桐分公司",
+      "review": "待核实"
+    },
+    "defendant_name": {
+      "value": "南通虚构置业有限公司",
+      "review": "待核实"
+    },
+    "contract_type": "安装合同",
+    "contract_sign_date": "2024年7月3日",
+    "total_amount": 90000,
+    "paid_amount": 45000,
+    "unpaid_amount": 45000,
+    "acceptance_latest_date": "2024年12月18日",
+    "payable_ratio": "100%",
+    "interest_term": "违约金",
+    "warranty_period": {
+      "value": "24个月",
+      "match": "contains"
+    }
+  }
+}
