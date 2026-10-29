@@ -13,15 +13,15 @@ def _case(root, name, pages):
 def test_counts_current_candidate_and_fullwidth(tmp_path):
     c = scan_case(_case(tmp_path, "虚构梧桐案", [
         "3.1 甲方支付合同总价的30%。",  # 现行已认
-        "3.2 甲方支付合同价款的50%。",  # 现行认不出，候选能认
-        "3.3 验收后付至本合同总价款的95％。",  # 全角百分号
+        "3.2 甲方支付合同价款的50%。",  # #116 起现行也认（计价名词不限「合同总价」）
+        "3.3 验收后付至本合同总价款的95％。",  # 全角百分号，#116 起现行也认
         "逾期付款按合同价款的5%支付违约金。",  # 违约金，不算付款
         "逾期付款违约金按合同价款的5%计算。",  # 违约金写在比例前面，同样不算（#123 评审）
         "目录\n第一章 总则\n第二章 付款 支付合同价款的10%",  # 目录页不计
     ]))
-    assert (c.pages, c.toc_pages, c.current_hits, c.ratio_pages) == (6, 1, 1, 3)
+    assert (c.pages, c.toc_pages, c.current_hits, c.ratio_pages) == (6, 1, 3, 3)
     assert c.fullwidth_pages == 1
-    assert c.candidate_hits == 2  # 合同价款、本合同总价款（全角「％」现行也认不出）
+    assert c.candidate_hits == 0  # 候选写法已并入现行正则（#116），没有「现行认不出、候选能认」的页
     assert c.bases["合同价款"] == 1 and "合同价款" in c.bases
 
 

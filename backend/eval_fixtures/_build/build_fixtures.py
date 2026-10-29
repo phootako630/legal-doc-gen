@@ -364,8 +364,8 @@ def case_lump_sum_penalty() -> None:
 
 def case_unread_page() -> None:
     """扫描合同 10 页，条款与签章页在前 5 页、质保期只写在第 9 页附件里：按需 OCR 找齐条款就停，
-    第 9 页没读到，质保期缺失 → 错误归因「可能未读到」（#108）。付款写「合同总价的X%」：
-    按需 OCR 靠这种写法认出付款条款正文，写成「合同价款的X%」认不出、会一直读到最后一页。"""
+    第 9 页没读到，质保期缺失 → 错误归因「可能未读到」（#108）。付款写「合同总价的X%」
+    （「合同价款 / 合同金额」等写法自 #116 起同样认得，见虚构首批即停案J）。"""
     case = "虚构未读页案F"
     os.makedirs(os.path.join(ROOT, case, "materials"), exist_ok=True)
     _approval(case, "AH9000006常州虚构置业有限公司诉讼审批表.pdf", {
@@ -565,6 +565,60 @@ def case_strategic_not_uploaded() -> None:
         })
 
 
+def case_stop_after_first_batch() -> None:
+    """扫描合同 10 页，付款写「合同金额的X%」、签章栏是表格（「甲 方 | （盖章）」）：条款与签章页都在前 5 页，
+    按需 OCR 读完第一批 5 页就停（#116）。缓存只录了前 5 页：以后改动若让它多读，严格回放即缓存未命中、CI 失败。"""
+    case = "虚构首批即停案J"
+    os.makedirs(os.path.join(ROOT, case, "materials"), exist_ok=True)
+    _approval(case, "AH9000010南通虚构置业有限公司诉讼审批表.pdf", {
+        "serial": "SS2099-000110", "title": "AH9000010南通虚构置业有限公司虚构庭项目",
+        "contract_no": "AH9000010", "branch_path": "集团/营销网络/梧桐分公司",
+        "buyer": "南通虚构置业有限公司", "contact": "虚构癸", "contact_phone": "13800000010",
+        "buyer_address": "南通市崇川区虚构路10号", "site": "南通市崇川区虚构路10号虚构庭",
+        "contract_type": "安装合同", "amount_label": "安装", "sign_date": "2024-07-01", "qty": "2", "qty_actual": "2",
+        "total": "90,000.00", "paid": "45,000.00", "unpaid": "45,000.00",
+        "gov_accept": "2024-12-18", "last_pay_date": "2024-09-01", "reason": "电梯已验收，买方未付验收款。",
+    })
+    appendix = [f"附件{n}：施工组织说明（第{n}部分）\n本附件仅供施工参考，不构成付款条件。" for n in range(1, 6)]
+    _scanned_pdf(os.path.join(ROOT, case, "materials", "南通虚构庭项目电梯安装合同.pdf"), [
+        """电梯安装合同
+
+合同编号：AH9000010
+甲方：南通虚构置业有限公司
+乙方：日立电梯（中国）有限公司梧桐分公司""",
+        """第一条 工程概况
+工程地点：南通市崇川区虚构路10号。乙方负责安装电梯共2台。
+
+第二条 合同价款
+本合同安装总价为人民币90,000元（大写：玖万元整）。""",
+        """第三条 付款方式
+3.1 电梯进场后10日内，甲方支付合同金额的50%。
+3.2 电梯经政府验收合格后30日内，甲方支付至合同金额的100%。
+
+第四条 质量保修
+质保期：自电梯验收合格之日起24个月。""",
+        """第五条 违约责任
+甲方逾期付款的，每逾期一日按应付未付款的万分之五向乙方支付违约金。
+
+第六条 争议解决
+因本合同发生的争议，双方协商不成的，向工程所在地人民法院提起诉讼。""",
+        ("""第七条 其他
+本合同自双方盖章之日起生效，附件为本合同组成部分。""", [
+            ["甲 方", "（盖章）", "南通虚构置业有限公司"],
+            ["乙 方", "（盖章）", "日立电梯（中国）有限公司梧桐分公司"],
+            ["签订日期", "2024年7月3日", ""],
+        ]),
+        *appendix,
+    ])
+    for i, code in enumerate(["31103206202400000101", "31103206202400000102"], start=1):
+        _report(case, f"电梯监督检验报告{i}.pdf", {
+            "report_no": f"XG-DTJ-2024-90{i:02d}", "user": "南通虚构置业有限公司",
+            "installer": "日立电梯（中国）有限公司梧桐分公司", "device_code": code,
+            "inspect_date": "2024年12月11日", "approve_date": "2024年12月18日",
+            "site": "南通市崇川区虚构路10号虚构庭", "model": "HGP",
+        })
+
+
 if __name__ == "__main__":
     case_install_scanned()
     case_sales_arbitration()
@@ -574,4 +628,5 @@ if __name__ == "__main__":
     case_mixed_breach_clause()
     case_period_payment()
     case_strategic_not_uploaded()
+    case_stop_after_first_batch()
     print("已生成：", ", ".join(sorted(n for n in os.listdir(ROOT) if not n.startswith(("_", ".")) and os.path.isdir(os.path.join(ROOT, n)))))
