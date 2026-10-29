@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 BEIJING = timezone(timedelta(hours=8))
 _CHECK_INTERVAL_S = 3600
-# Key 检查是阻塞的 HTTP 请求：放专用线程，不占默认线程池（见 CLAUDE.md「Error Handling」）
+# Key 检查是阻塞的 HTTP 请求：放专用线程，不占默认线程池（见 CODING_STANDARDS.md「阻塞调用与线程池」）
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="daily-summary")
 
 

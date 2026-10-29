@@ -2,6 +2,13 @@
 
 改后端路由、前后端接口、登录 / 会话隔离或部署探活接口时读本文件。路由实现在 `backend/app/routers/`。
 
+## 登录与案件数据
+
+- 登录：账号由管理员在服务器上用 `scripts/manage_users.py` 创建（无注册入口），会话 Cookie 7 天免登录，律师可自行修改密码；部署时强制开启（`AUTH_ENABLED=1`），本地开发与单测默认关闭。
+- 案件状态（agent checkpoint、上传的扫描件）落盘到 `backend/data/`（SQLite + 文件），服务重启后仍可 resume；超过 `CASE_RETENTION_DAYS`（默认 7 天）自动清除（服务启动即清、之后每小时清，resume / 读取时也拒绝过期数据）。
+
+## 路由
+
 v2 以 agent 会话为中心。前端与后端通过"启动 + 恢复"两类接口交互；进展经 SSE/stream 推送。
 
 ```

@@ -659,7 +659,7 @@ async def ocr_augment_node(state: GraphState) -> dict:
 def _mark_ocr_budget_hit(fields: dict, missing: set[str], need_warranty: bool) -> None:
     """
     OCR 页数上限用完、目标条款仍缺失：出处写明原因（审核页可见，起诉状【待补充】后也带上），
-    不让律师误以为合同没有约定（#71；CLAUDE.md「成本超限 → 告知律师，不静默降级」）。
+    不让律师误以为合同没有约定（#71；CODING_STANDARDS.md「LLM、OCR 与解析出错」）。
     """
     keys = [_CLAUSE_INDICATOR[c] for c in missing]
     if need_warranty:

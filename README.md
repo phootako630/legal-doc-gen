@@ -237,7 +237,9 @@ sequenceDiagram
 
 ```
 legal-doc-gen/
-├── CLAUDE.md                        # Instructions for AI coding assistants (index; details in docs/agents/)
+├── AGENTS.md                        # Instructions for AI coding assistants (index; details in docs/agents/)
+├── CLAUDE.md                        # Imports AGENTS.md for Claude Code
+├── CODING_STANDARDS.md              # Coding standards (read before writing or reviewing code)
 ├── docs/agents/                     # Agent reference read on demand (lawyer rules, pipeline, API, eval…)
 ├── README.md / README.zh-CN.md      # This file (English / Chinese)
 ├── prompts/                         # LLM prompts and the complaint template
@@ -341,4 +343,4 @@ Unit tests check each rule in isolation. To see how the whole system does on rea
 
 ## Out of scope (future iterations)
 
-Permission levels (all accounts currently have the same rights; updating the plaintiff table separately needs the admin token), batch processing, vector search, full LangChain, etc. See [CLAUDE.md](./CLAUDE.md).
+Permission levels (all accounts currently have the same rights; updating the plaintiff table separately needs the admin token), batch processing, vector search, full LangChain, etc. See [AGENTS.md](./AGENTS.md).

@@ -7,7 +7,7 @@
 ```bash
 # 1. 启动后端
 cd backend
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 cp .env.example .env       # 填入 DEEPSEEK_API_KEY 和 DASHSCOPE_API_KEY
 uvicorn app.main:app --reload --port 8000
 

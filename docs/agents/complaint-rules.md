@@ -57,7 +57,7 @@
 4. **需要律师拍板的**：在 `agent/nodes.py` 加 interrupt 断点（参照 `qty_check_node` / `retention_node`）
 5. **前端**：`lib/field-map.ts`（中文名 + `reviewFieldKeys`）、`lib/types.ts`（`ExtractedFields`）
 6. **测试**：`backend/tests/test_derived_fields.py` 等
-7. **文档**：本文件「律师确认的填写规则」；[code-reference.md](code-reference.md)「核心类型定义」「字段名中英映射」
+7. **文档**：本文件「律师确认的填写规则」
 
 ## 原告信息表（全所共用底表，管理员维护）
 

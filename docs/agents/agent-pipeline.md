@@ -1,6 +1,6 @@
 # 材料、agent 编排与按需 OCR
 
-改上传解析、文件类型识别、agent 节点 / 图、按需 OCR 或抽取流程时读本文件。OCR 页数预算等护栏取值见 [code-reference.md](code-reference.md)「后端配置」；出错与成本超限的处理见 [CLAUDE.md](../../CLAUDE.md)「Error Handling」。
+改上传解析、文件类型识别、agent 节点 / 图、按需 OCR 或抽取流程时读本文件。节点写法、出错与成本超限的代码处理见 [CODING_STANDARDS.md](../../CODING_STANDARDS.md)。
 
 ## 真实材料形态与来源可靠性分级
 
@@ -55,15 +55,15 @@
 | `check_amounts(total, paid, unpaid)` | 总额 == 已付 + 未付；返回是否勾稽 | 确定性代码 |
 | `check_elevator_qty(by_approval, by_contract, by_acceptance)` | 签约/合同/验收三源台数比对 | 确定性代码 |
 | `validate_credit_code(code)` | 统一社会信用代码 18 位含校验位 | 确定性代码 |
-| `lookup_company(credit_code)` | 按信用代码补全法人全称 | 联网工具，替代 LLM 猜 |
+| `lookup_company(credit_code)` | 按信用代码补全法人全称 | 联网工具，替代 LLM 猜；预留：查询 API 暂未接入，恒返回 None，agent 暂停问律师 |
 | `render_complaint(fields)` | 结构化字段 → 起诉状（模板填槽） | 见 [complaint-rules.md](complaint-rules.md) |
 
 ### Agent 循环与 human-in-the-loop
 
 - agent 在抽取节点可多轮：抽取 → 自校验（值回原文命中？）→ 命中失败标待核实 → 缺关键字段则 `search_in_docs` / `ocr_page` 定向补齐。
-- 护栏：成本上限（全案 OCR 总页数 `AGENT_MAX_TOTAL_OCR_PAGES`，用完时在出处注明可能未读到）。
+- 护栏：OCR 页数预算（合同 / 验收报告 / 审批表 / 战略合同各有子上限，全案合计 `AGENT_MAX_TOTAL_OCR_PAGES`；取值与依据见 `backend/app/config.py`「Agent 按需 OCR 护栏」注释）。上传时认标题的首页、部分扫描 PDF 有文字层的页不计入。合同页数用完仍缺条款时，出处与起诉状【待补充】后注明「扫描识别页数已达上限，合同可能未读完」，不当作合同没约定，也不加断点：律师看提示自行查原件（#71）。
 - **材料清点**：按上传页律师确认的文件类型，由代码判定齐全与否（`services/materials.py`，与上传接口、前端 `lib/materials.ts` 同一口径），不调 LLM。缺材料不终止、不暂停：律师在上传页已看到缺什么，点了「材料不全，仍然分析」就照常继续，缺的字段留【待补充】，校验面板琥珀色提醒（`materials` 检查）。
-- **interrupt 断点**：字段冲突、需联网确认名称时，agent 通过 LangGraph `interrupt` 暂停，把决策抛到前端审核页；律师给出选择后 `resume` 继续。Step 3 审核页即此断点的 UI 呈现，支持多次往返。冲突断点附各字段的候选值与来源（`pending.field_options`，`services/conflict_options.py`）：金额勾稽给出三项现值及用另两项推出的值（有一项含「万 / 亿」等单位、不是纯数字写法时不推算），写进起诉状的台数给出各来源的台数及出处（各来源字段只给自身现值，不跨来源补），信用代码 / 日期给出现值与出处；律师点选或自填。断点节点内不放 OCR / LLM 等昂贵或有副作用的操作：resume 时 LangGraph 会从头重跑被打断的节点（`contract_scan` 与 `qty_check` 分开即为此）。
+- **interrupt 断点**：字段冲突、需联网确认名称时，agent 通过 LangGraph `interrupt` 暂停，把决策抛到前端审核页；律师给出选择后 `resume` 继续。Step 3 审核页即此断点的 UI 呈现，支持多次往返。冲突断点附各字段的候选值与来源（`pending.field_options`，`services/conflict_options.py`）：金额勾稽给出三项现值及用另两项推出的值（有一项含「万 / 亿」等单位、不是纯数字写法时不推算），写进起诉状的台数给出各来源的台数及出处（各来源字段只给自身现值，不跨来源补），信用代码 / 日期给出现值与出处；律师点选或自填。断点节点只放便宜、无副作用的代码（原因见 CODING_STANDARDS.md「agent 节点」）。
 
 ### 技术视角（数据流）
 
@@ -95,12 +95,6 @@ POST /api/generate → render_complaint（模板填槽）→ 起诉状全文
 ```
 
 ---
-
-## 关于 agent 框架的取舍（①）
-
-- **不引入 LangChain 本体**：抽象层深、prompt 不透明、版本易 breaking，对"可审计"要求高的法律场景是负担。结构化输出、重试等零件自行实现或用轻量库。
-- **采用 LangGraph 的图 + checkpoint + interrupt**：正好承载"抽取→发现冲突→定位重读→暂停问律师→恢复"的控制流。checkpoint 存 SQLite（`agent/checkpoint.py`）；未来接 PostgreSQL 时替换 saver 即可，零重构。
-- **工具层与校验层保持框架无关**：所有工具（解析、OCR、校验、查询、渲染）是纯 Python 函数/service，不依赖 LangGraph，便于单测与替换编排器。
 
 ## 为什么用 Python 后端
 
