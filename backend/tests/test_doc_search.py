@@ -77,6 +77,9 @@ def test_payment_pattern_recognises_other_price_nouns():
         "第一期：甲方在安装前 7 日向乙方支付需要安装楼号电梯总价的 50%的安装款。",
         "验收合格且提供发票后30个工作日内支付该批次安装合同价的50%。",
         "竣工结算完成后，支付至结算总价的97％。",
+        "甲方支付安装费的50%。",
+        "验收合格后支付至安装费用的95%。",
+        "合同签订后支付合同金额的30%，逾期支付的按日万分之五计违约金。",
         "动工款：合同签订后十日内支付。",
     ):
         assert "payment" in locate_clause_bodies(_pages(text)), text
@@ -89,6 +92,8 @@ def test_payment_pattern_still_excludes_non_payment_ratios():
         "乙方向甲方提交合同金额 10% 的履约保函。",
         "逾期付款的，按欠付款项的0.05%支付滞纳金。",
         "甲方逾期付款的，违约金按合同价款的5%计算。",
+        "甲方支付合同金额的10%，作为违约金。",  # 逗号后紧跟用途：同一句内照样排除（#136 评审）
+        "乙方应支付安装费的5%，作为管理费。",
     ):
         assert "payment" not in locate_clause_bodies(_pages(text)), text
 
@@ -98,10 +103,17 @@ def test_signature_page_recognised_in_ocr_tables():
     for text in (
         "| 甲 方 | （盖章） |\n| 乙 方 | （盖章） |",
         "| 买 方 (盖章) | 卖 方 (盖章) |",
-        "| 经办人 | | 签订日期 | 2099年6月19日 |",
         "甲方（盖章）：虚构置业有限公司",
     ):
         assert "signature" in locate_clause_bodies(_pages(text)), text
     # 正文里的「双方盖章后生效」「签字确认」不是签章页
     for text in ("本合同一式六份，自双方盖章后生效。", "经甲、乙双方签字确认后施工。"):
         assert "signature" not in locate_clause_bodies(_pages(text)), text
+
+
+def test_cover_date_table_alone_is_not_signature_page():
+    # 封面 / 基本信息表的「| 签订日期 |」不算签章页；首批若停在这里会漏掉末页签章（#136 评审，虚构）
+    cover = "| 合同编号 | AH9099999 |\n| 签订日期 | 2099年6月19日 |\n| 签订地点 | 虚构市 |"
+    assert "signature" not in locate_clause_bodies(_pages(cover))
+    last = "| 甲 方 | （盖章） | 虚构置业有限公司 |\n| 签订日期 | 2099年6月19日 |"
+    assert "signature" in locate_clause_bodies(_pages(cover, last))
