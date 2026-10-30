@@ -35,6 +35,7 @@ def table_rows(text: str) -> list[list[str]]:
 # 纯文字表格的列分隔：制表符，或两个及以上空白（型号里的单个空格不算分隔）
 _PLAIN_SPLIT_RE = re.compile(r"\t+|[ \u3000]{2,}")
 _TOTAL_ROW_RE = re.compile(r"合\s*计|总\s*计|小\s*计")
+_PROSE_RE = re.compile(r"[，。：；:;]")  # 正文句读；清单行里一般没有
 
 
 def _header_cols(cells: list[str]) -> tuple[int, int] | None:
@@ -65,6 +66,10 @@ def _count_plain_text(text: str) -> int | None:
         if cols is None:
             continue
         if len(cells) < 2:
+            # 切不出两列：是正文（带句读）就算表格结束；含 VGE、又不像正文的，是没对齐的清单行，
+            # 已数到的只是一部分，不能当完整结果（#137 评审）
+            if _VGE_RE.search(stripped) and not _PROSE_RE.search(stripped):
+                return None
             cols = None
             continue
         if _TOTAL_ROW_RE.search(stripped) or not _VGE_RE.search(stripped):

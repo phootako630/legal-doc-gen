@@ -63,6 +63,12 @@ def test_count_vge_plain_text_misaligned_row_not_guessed():
     assert count_vge_units(text) == (0, True)
 
 
+def test_count_vge_plain_text_partial_count_not_returned():
+    # 第一行对齐、第二行单空格切不出列：只数到一部分，不能当完整结果（#137 评审）
+    text = "序号  型号      层站      台数\n1    VGE-2     3/3/3     1\n2 VGE-320 3/3/3 1\n"
+    assert count_vge_units(text) == (0, True)
+
+
 def test_count_vge_plain_text_prose_after_table_ignored():
     # 表格之后的正文提到 VGE 不算一行清单
     text = _PLAIN_TABLE + "说明：VGE 型号为家用电梯，无需取得监督检验报告。\n"
