@@ -31,6 +31,13 @@ def test_unclear_company_keeps_original_name():
     assert "切不清" in node["src"] and "待核实" in node["src"]
 
 
+def test_company_word_inside_project_name_is_ambiguous():
+    # 项目名称里也有「公司」：分不清哪段是所属公司，不自动截取（#144 评审）
+    node = _defendant("虚构建设有限公司某某公司总部项目经理部")
+    assert node["value"] == "虚构建设有限公司某某公司总部项目经理部"
+    assert "切不清" in node["src"] and "待核实" in node["src"]
+
+
 def test_ordinary_company_unaffected():
     node = _defendant("虚构置业有限公司", approval="虚构置业有限公司")
     assert node["value"] == "虚构置业有限公司"
@@ -47,7 +54,11 @@ def test_approval_fallback_also_sues_owner():
     fields = {"defendant_name": {"value": "虚构路桥第三工程有限公司虚构港项目经理部", "src": "《虚构审批表》"}}
     node = apply_derived_fields(fields)["defendant_name"]
     assert node["value"] == "虚构路桥第三工程有限公司"
-    assert node["src"].startswith("《虚构审批表》") and "待核实" in node["src"]
+    assert node["src"] == (
+        "《虚构审批表》；审批表买方名称为「虚构路桥第三工程有限公司虚构港项目经理部」（项目部），"
+        "按律师规则起诉所属公司，请办案律师核实，待核实"
+    )
+    assert "合同甲方" not in node["src"]
     assert node["approval_value"] == "虚构路桥第三工程有限公司虚构港项目经理部"
 
 

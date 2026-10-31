@@ -311,16 +311,22 @@ _TRAILING_NOTE_RE = re.compile(r"[（(][^（）()]*[）)]$")
 # 「某某有限公司某某项目经理部」：公司名（最后一个「公司 / 集团」为止）+ 项目部分（确认单（六）第 3 题）
 _PROJECT_DEPT_RE = re.compile(r"项目(?:经理|管理|指挥)?部$")
 _PROJECT_OWNER_RE = re.compile(r"^(.+(?:公司|集团))((?:(?!公司|集团).)*项目(?:(?!公司|集团).)*)$")
+# 公司名里的企业边界：「集团有限公司」算一处，「分公司」随前面的公司，不另算
+_ENTITY_END_RE = re.compile(r"(?<!分)公司|集团(?!有限|股份|公司)")
 
 
-def _project_dept_owner(name: str) -> tuple[str | None, str]:
-    """甲方是项目部时返回 (所属公司, 出处说明)；切不清公司名时所属公司为 None；不是项目部返回 (name, "")。"""
+def _project_dept_owner(name: str, label: str = "合同甲方") -> tuple[str | None, str]:
+    """
+    名称是项目部时返回 (所属公司, 出处说明)；切不清公司名时所属公司为 None；不是项目部返回 (name, "")。
+    截出的公司名里有两处以上企业边界（如「某某有限公司某某公司总部项目部」，项目名称里也有「公司」）
+    时，分不清哪段是所属公司，也算切不清（#144 评审）。label 是名称来源（合同甲方 / 审批表买方名称）。
+    """
     if not _PROJECT_DEPT_RE.search(name):
         return name, ""
     m = _PROJECT_OWNER_RE.match(name)
-    if not m:
-        return None, f"；合同甲方「{name}」是项目部，所属公司名称切不清，照原名写，请办案律师核实，待核实"
-    return m.group(1), f"；合同甲方为「{name}」（项目部），按律师规则起诉所属公司，请办案律师核实，待核实"
+    if not m or len(_ENTITY_END_RE.findall(m.group(1))) != 1:
+        return None, f"；{label}「{name}」是项目部，所属公司名称切不清，照原名写，请办案律师核实，待核实"
+    return m.group(1), f"；{label}为「{name}」（项目部），按律师规则起诉所属公司，请办案律师核实，待核实"
 
 
 def defendant_name_field(fields: dict) -> dict | None:
@@ -336,7 +342,7 @@ def defendant_name_field(fields: dict) -> dict | None:
     if not party_a:
         if not approval:
             return None
-        owner, note = _project_dept_owner(_compact(str(approval)))
+        owner, note = _project_dept_owner(_compact(str(approval)), "审批表买方名称")
         if not note and not node.get("derived"):
             return None  # 保留抽取值
         return {"value": owner or approval, "src": (approval_src or "") + note, "approval_value": approval,
