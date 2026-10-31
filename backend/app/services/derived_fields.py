@@ -1487,7 +1487,11 @@ def contract_total_breakdown_field(fields: dict) -> dict:
     equip, install = parts
     return {
         "value": f"（设备款¥{_plain_number(equip)}元 + 安装款¥{_plain_number(install)}元）",
-        "src": "按律师规则：一体化合同括注设备款与安装款（确认单（六）第 6 题）",
+        "src": (
+            "按律师规则：一体化合同括注设备款与安装款（确认单（六）第 6 题）"
+            f"（依据：设备款：{_node(fields, 'contract_equipment_amount').get('src') or ''}；"
+            f"安装款：{_node(fields, 'contract_install_amount').get('src') or ''}），待核实"
+        ),
     }
 
 

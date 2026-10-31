@@ -50,9 +50,60 @@ def test_integrated_total_with_breakdown():
     assert "待核实" in f["contract_total_stated"]["src"] and "相差" not in f["contract_total_stated"]["src"]
     assert f["contract_total_breakdown"]["value"] == "（设备款¥200000元 + 安装款¥100000元）"
     text = render_complaint(fields)
-    assert "合同总价为¥⚠️ 待核实：300000元（设备款¥200000元 + 安装款¥100000元）。" in text
+    assert "合同总价为¥⚠️ 待核实：300000元⚠️ 待核实：（设备款¥200000元 + 安装款¥100000元）。" in text
     # 诉请仍只针对安装款
     assert "支付剩余合同款¥40000元" in text or "¥40000元" in text
+
+
+def test_breakdown_cites_amount_sources():
+    # 括注沿用两项金额的出处并标待核实（#145 评审）
+    fields = _fields()
+    apply_integrated_contract_amounts(fields, _files())
+    src = apply_derived_fields(fields)["contract_total_breakdown"]["src"]
+    assert "设备款：《虚构一体化合同.pdf》第1页" in src and "安装款：《虚构一体化合同.pdf》第2页" in src
+    assert src.endswith("待核实")
+
+
+def test_wan_yuan_table_converted():
+    # 价格表以「万元」为单位：换算成元（#145 评审）
+    pages = ("单位：万元\n设备总价\n小计 / / 17.699115 2.300885 20\n安装总价\n小计 / / 9.708738 0.291262 10\n总计 / / 27.407853 2.592147 30",)
+    fields = _fields()
+    apply_integrated_contract_amounts(fields, _files(pages=pages))
+    assert fields["contract_equipment_amount"]["value"] == 200000
+    assert fields["contract_install_amount"]["value"] == 100000
+    assert apply_derived_fields(fields)["contract_total_stated"]["value"] == "300000"
+
+
+def test_unknown_unit_left_for_lawyer():
+    pages = ("设备总价\n小计 / / 17.699115 2.300885 20\n安装总价\n小计 / / 9.708738 0.291262 10\n总计 / / 27.407853 2.592147 30",)
+    fields = _fields()
+    apply_integrated_contract_amounts(fields, _files(pages=pages))
+    assert fields["contract_equipment_amount"]["value"] is None
+    assert "单位" in fields["contract_equipment_amount"]["src"]
+    f = apply_derived_fields(fields)
+    assert f["contract_total_stated"]["value"] == "100,000.00" and "只写安装款" in f["contract_total_stated"]["src"]
+
+
+def test_missing_grand_total_not_used():
+    # 没读到「总计」：两项小计无法核对，不写全部总价（#145 评审）
+    pages = (_PAGE_EQUIP, _PAGE_INSTALL.split("\n")[0])
+    fields = _fields()
+    apply_integrated_contract_amounts(fields, _files(pages=pages))
+    assert fields["contract_equipment_amount"]["value"] is None
+    assert "未读到「总计」" in fields["contract_equipment_amount"]["src"]
+    assert "contract_install_amount" not in fields
+    assert apply_derived_fields(fields)["contract_total_breakdown"]["value"] == ""
+
+
+def test_integrated_marker_deep_in_approval_text():
+    # 审批表文件名不含「一体化」，合同类型栏在正文后面：仍识别为一体化，回退时说明原因（#145 评审）
+    files = [
+        {"filename": "虚构审批表.pdf", "identified_type": "审批表", "text": "说明" * 200 + "合同类型\n一体化安装"},
+        {"filename": "虚构合同.pdf", "identified_type": "合同", "text": "合同正文，没有价格表"},
+    ]
+    fields = _fields()
+    apply_integrated_contract_amounts(fields, files)
+    assert "未读到" in fields["contract_equipment_amount"]["src"]
 
 
 def test_install_differs_from_approval_notes_difference():

@@ -204,38 +204,54 @@ def _row_amount(lines: list[str], i: int, start: int) -> float | None:
     return max(nums) if nums else None
 
 
-def find_integrated_prices(f: dict) -> dict[str, tuple[float, int | None]]:
-    """合同价格表里的设备款小计、安装款小计与总计：{"设备" / "安装" / "总计": (金额, 页码)}。"""
+def _table_unit(lines: list[str], i: int) -> float | None:
+    """价格表金额单位：看表头这一行及上面 3 行，「万元」→ 10000，「元」→ 1，都没写 → None（单位不明）。"""
+    near = "".join(lines[max(i - 3, 0) : i + 1])
+    if "万元" in near:
+        return 10000
+    return 1 if "元" in near else None
+
+
+def find_integrated_prices(f: dict) -> dict[str, tuple[float | None, int | None]]:
+    """
+    合同价格表里的设备款小计、安装款小计与总计：{"设备" / "安装" / "总计": (金额（元）, 页码)}。
+    金额按表头单位换算成元（「万元」× 10000，#145 评审）；单位不明时金额为 None。
+    总计沿用最后一张表的单位，所在行自带「元 / 万元」时以该行为准。
+    """
     pages = f.get("pages") or [{"page": None, "text": f.get("text") or ""}]
-    found: dict[str, tuple[float, int | None]] = {}
-    kind = None
+    found: dict[str, tuple[float | None, int | None]] = {}
+    kind, unit = None, None
     for pg in pages:
         lines = (pg.get("text") or "").replace("|", " ").splitlines()
         for i, line in enumerate(lines):
             head = _PRICE_HEAD_RE.findall(line)
             if head:
-                kind = head[-1]
+                kind, unit = head[-1], _table_unit(lines, i)
                 continue
             m = _SUBTOTAL_RE.search(line)
             if m and kind and kind not in found:
                 amount = _row_amount(lines, i, m.end())
                 if amount:
-                    found[kind] = (amount, pg.get("page"))
+                    found[kind] = (amount * unit if unit else None, pg.get("page"))
                 continue
             m = _GRAND_TOTAL_RE.search(line)
             if m and "设备" in found and "安装" in found and "总计" not in found:
                 amount = _row_amount(lines, i, m.end())
+                row_unit = 10000 if "万元" in line else (1 if "元" in line else unit)
                 if amount:
-                    found["总计"] = (amount, pg.get("page"))
+                    found["总计"] = (amount * row_unit if row_unit else None, pg.get("page"))
     return found
 
 
-def _is_integrated(files: list[dict]) -> bool:
-    """审批表或合同的文件名 / 开头写着「一体化」。"""
+def _is_integrated(fields: dict, files: list[dict]) -> bool:
+    """一体化合同：审批表全文（合同类型栏常在后面）、合同文件名 / 开头或合同类型字段写着「一体化」。"""
+    if "一体化" in str((fields.get("contract_type") or {}).get("value") or ""):
+        return True
     return any(
-        f.get("identified_type") in ("审批表", "合同")
-        and "一体化" in f"{f.get('filename', '')}{(f.get('text') or '')[:200]}"
+        ("一体化" in f"{f.get('filename', '')}{f.get('text') or ''}" if f.get("identified_type") == "审批表"
+         else "一体化" in f"{f.get('filename', '')}{(f.get('text') or '')[:200]}")
         for f in files
+        if f.get("identified_type") in ("审批表", "合同")
     )
 
 
@@ -259,12 +275,18 @@ def apply_integrated_contract_amounts(fields: dict, files: list[dict]) -> None:
         ocr = "（OCR识别，请核实）" if f.get("is_scanned") else ""
         channel = {"channel": "ocr"} if ocr else {}
         (equip, ep), (install, ip) = found["设备"], found["安装"]
-        grand = found.get("总计")
-        if grand and abs(equip + install - grand[0]) > 0.01:
-            fields["contract_equipment_amount"] = {
-                "value": None,
-                "src": f"《{name}》价格表设备款小计 {equip:g} + 安装款小计 {install:g} 与总计 {grand[0]:g} 不符，请律师核实",
-            }
+        grand = found.get("总计", (None, None))[0]
+        # 不能把读到的两项小计直接写进起诉状的情形：单位不明、没有总计可核对、或对不上总计（#145 评审）
+        problem = None
+        if equip is None or install is None or ("总计" in found and grand is None):
+            problem = "价格表金额单位（元 / 万元）不明"
+        elif "总计" not in found:
+            problem = "价格表未读到「总计」，设备款与安装款无法核对"
+        elif abs(equip + install - grand) > 0.01:
+            problem = f"价格表设备款小计 {equip:g} + 安装款小计 {install:g} 与总计 {grand:g} 不符"
+        if problem:
+            fields["contract_equipment_amount"] = {"value": None, "src": f"《{name}》{problem}，请律师核实"}
+            fields.pop("contract_install_amount", None)
             return
         for key, amount, page, label in (
             ("contract_equipment_amount", equip, ep, "设备"),
@@ -276,7 +298,7 @@ def apply_integrated_contract_amounts(fields: dict, files: list[dict]) -> None:
                 **({"page": page} if page else {}),
             }
         return
-    if _is_integrated(files):
+    if _is_integrated(fields, files):
         fields["contract_equipment_amount"] = {
             "value": None, "src": "一体化合同，但合同价格表里的设备款 / 安装款小计未读到",
         }
