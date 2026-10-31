@@ -12,7 +12,10 @@ ORIGINAL = {"filename": "虚构战略合作合同.pdf", "identified_type": "战�
 SUPPLEMENT = {
     "filename": "虚构战略合作协议补充协议（七）.pdf", "identified_type": "战略合同", "text": "补充协议", "is_scanned": False,
 }
-MAIN = {"filename": "虚构买卖合同.pdf", "identified_type": "合同", "is_scanned": True, "file_id": "m"}
+MAIN = {
+    "filename": "虚构买卖合同.pdf", "identified_type": "合同", "is_scanned": True, "file_id": "m",
+    "pages": [{"page": 1, "text": "合同首页"}, {"page": 3, "text": "2、争议的解决按战略合同执行。"}],
+}
 
 
 def _dispute(filename, loc="第2条及战略合同第三条"):
@@ -37,7 +40,39 @@ def test_both_uploaded_clause_from_supplement_is_cleared_for_original():
     fields = _dispute(SUPPLEMENT["filename"])
     prefer_strategic_original(fields, [MAIN, ORIGINAL, SUPPLEMENT])
     assert fields["dispute_clause_text"]["value"] is None and fields["dispute_clause_text"]["strategic_ref"]
-    assert fields["dispute_clause_location"]["value"] == "第2条"  # 主合同的转引条款保留
+    # 主合同的转引条款保留，出处改到主合同转引句所在页（#146 评审）
+    assert fields["dispute_clause_location"] == {
+        "value": "第2条", "src": "《虚构买卖合同.pdf》第3页争议解决转引战略合同（OCR识别，请核实）"
+    }
+
+
+def test_main_ref_not_found_marked_for_review():
+    fields = _dispute(SUPPLEMENT["filename"])
+    main = {**MAIN, "pages": [{"page": 1, "text": "合同首页"}]}
+    prefer_strategic_original(fields, [main, ORIGINAL, SUPPLEMENT])
+    assert fields["dispute_clause_location"]["value"] == "第2条"
+    assert fields["dispute_clause_location"]["src"].endswith("待核实")
+
+
+def test_mixed_sources_location_from_supplement_cleared():
+    # 正文取自原文、位置取自补充协议：位置也要以原文为准（#146 评审）
+    fields = _dispute(ORIGINAL["filename"], loc="战略合同第三条")
+    fields["dispute_clause_location"]["src"] = f"《{SUPPLEMENT['filename']}》"
+    prefer_strategic_original(fields, [MAIN, ORIGINAL, SUPPLEMENT])
+    assert fields["dispute_clause_text"]["value"] == "提交虚构仲裁委员会仲裁"
+    assert fields["dispute_clause_location"]["value"] is None
+
+
+def test_arbitration_institution_from_supplement_cleared():
+    # 仲裁机构同样取自补充协议时一并清空，从原文刷新（#146 评审）
+    fields = _dispute(SUPPLEMENT["filename"])
+    fields["arbitration_institution"] = {"value": "虚构仲裁委员会", "src": f"《{SUPPLEMENT['filename']}》"}
+    prefer_strategic_original(fields, [MAIN, ORIGINAL, SUPPLEMENT])
+    assert fields["arbitration_institution"]["value"] is None
+    kept = _dispute(ORIGINAL["filename"])
+    kept["arbitration_institution"] = {"value": "虚构仲裁委员会", "src": f"《{ORIGINAL['filename']}》"}
+    prefer_strategic_original(kept, [MAIN, ORIGINAL, SUPPLEMENT])
+    assert kept["arbitration_institution"]["value"] == "虚构仲裁委员会"
 
 
 def test_both_uploaded_clause_from_original_kept():
