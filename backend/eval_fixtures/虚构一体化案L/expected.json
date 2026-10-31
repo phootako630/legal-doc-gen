@@ -1,0 +1,20 @@
+{
+  "title": "虚构一体化案 L（一体化合同只诉安装款：设备款 200000 + 安装款 100000 → 合同总价写 300000 并括注，#140）",
+  "fields": {
+    "plaintiff_name_final": "日立电梯（中国）有限公司梧桐分公司",
+    "defendant_name": "徐州虚构置业有限公司",
+    "contract_sign_date": "2024年3月8日",
+    "total_amount": 100000,
+    "paid_amount": 60000,
+    "unpaid_amount": 40000,
+    "claim_amount": 40000,
+    "contract_equipment_amount": {"value": 200000, "source": "一体化合同"},
+    "contract_install_amount": {"value": 100000, "source": "一体化合同"},
+    "contract_total_stated": {"value": 300000, "review": "待核实"},
+    "contract_total_breakdown": "（设备款¥200000元 + 安装款¥100000元）",
+    "elevator_qty": 2,
+    "acceptance_latest_date": "2024年9月20日",
+    "interest_term": "逾期付款利息",
+    "court_district": "徐州市鼓楼区"
+  }
+}

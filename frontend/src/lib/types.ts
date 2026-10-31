@@ -131,6 +131,9 @@ export interface ExtractedFields {
   supplement_agreement?: FieldValue; // 上传材料中的补充协议文件名
   supplement_sentence?: FieldValue; // 派生：「后双方签订补充协议，确认合同总价变更为…」
   contract_total_in_contract?: FieldValue; // 合同正文约定的原合同总价
+  contract_equipment_amount?: FieldValue; // 一体化合同价格表的设备款小计（#140）
+  contract_install_amount?: FieldValue; // 一体化合同价格表的安装款小计（#140）
+  contract_total_breakdown?: FieldValue; // 派生：「（设备款¥…元 + 安装款¥…元）」括注
   contract_total_stated?: FieldValue; // 派生：起诉状「合同总价为¥…元」（有补充协议时为原价）
   delivery_place?: FieldValue; // 买卖合同交货地点
   install_address?: FieldValue; // 验收报告安装地点（推断管辖用）

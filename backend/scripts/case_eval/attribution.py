@@ -42,7 +42,7 @@ RULE_DERIVED = frozenset({
     "penalty_daily_text", "penalty_start_date", "penalty_until_date", "penalty_amount", "debt_term",
     "warranty_expiry_sentence", "supplement_sentence", "paid_note", "unpaid_note", "document_kind",
     "court_district", "jurisdiction_text", "addressee", "payable_ratio", "payment_cite_location",
-    "payment_cite_text", "payable_amount",
+    "payment_cite_text", "payable_amount", "contract_total_breakdown",
 })
 
 _SRC_FILE_RE = re.compile(r"《([^》]+)》")

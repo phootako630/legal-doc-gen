@@ -41,6 +41,7 @@ from app.services.extraction import (
     STRATEGIC_CLAUSE_KEYS,
     STRATEGIC_LABEL,
     apply_dual_contract_amounts,
+    apply_integrated_contract_amounts,
     apply_rule_guards,
     apply_strategic_dispute_ref,
     apply_strategic_guards,
@@ -333,6 +334,8 @@ def _all_checks(state: GraphState, fields: dict) -> list[ValidationCheck]:
 async def validate_node(state: GraphState) -> dict:
     """确定性校验：有冲突则 interrupt 问律师，resume 后应用决定并复核。"""
     fields = copy.deepcopy(state["extracted_fields"])
+    # 一体化合同的设备款 / 安装款：等按需 OCR 补读完合同各页再从价格表读（#140）
+    apply_integrated_contract_amounts(fields, state.get("files", []))
     # 派生字段（逾期利息标准、管辖法院辖区）进审核页，律师可见可改
     apply_derived_fields(fields)
     checks = _all_checks(state, fields)
