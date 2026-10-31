@@ -18,3 +18,21 @@ export function totalSizeError(files: File[]): string | null {
     '请删除不需要的文件，或把过大的扫描件压缩后再上传。'
   );
 }
+
+/** 同一份文件的标识：文件名 + 大小 + 修改时间。只比名字和大小会把另一份同名同大小的材料当重复（#149 评审） */
+function fileKey(f: File): string {
+  return `${f.name}|${f.size}|${f.lastModified}`;
+}
+
+/** 合并新选的文件：重复选中同一份文件只留一份；同名但不是同一份的材料照样加入，上传后由后端自动编号（#121） */
+export function mergeSelectedFiles(prev: File[], incoming: File[]): File[] {
+  const seen = new Set(prev.map(fileKey));
+  const added: File[] = [];
+  for (const f of incoming) {
+    const key = fileKey(f);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    added.push(f);
+  }
+  return [...prev, ...added];
+}

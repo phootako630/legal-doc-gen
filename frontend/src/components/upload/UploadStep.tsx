@@ -12,7 +12,7 @@ import { BranchTableNotice } from '@/components/branches/BranchTableNotice';
 import { uploadFiles, fetchUploadProgress } from '@/lib/api';
 import { newRequestKey } from '@/lib/request-key';
 import { materialStatus, withDetectedTypes } from '@/lib/materials';
-import { formatMB, totalSizeError } from '@/lib/upload-limits';
+import { formatMB, mergeSelectedFiles, totalSizeError } from '@/lib/upload-limits';
 import type { DocType, UploadResponse, UploadProgress } from '@/lib/types';
 import { Loader2, TriangleAlert, ArrowRight } from 'lucide-react';
 
@@ -52,11 +52,7 @@ export function UploadStep({ onDone, onOpenBranches }: UploadStepProps) {
   }, [loading]);
 
   const handleNewFiles = useCallback((incoming: File[]) => {
-    setFiles((prev) => {
-      const existing = new Set(prev.map((f) => `${f.name}|${f.size}`));
-      const deduped = incoming.filter((f) => !existing.has(`${f.name}|${f.size}`));
-      return [...prev, ...deduped];
-    });
+    setFiles((prev) => mergeSelectedFiles(prev, incoming));
     setError(null);
     setUploadResult(null);
   }, []);
