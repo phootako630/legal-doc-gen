@@ -62,6 +62,8 @@ export interface FieldValue {
   anchor?: string | null; // 原文命中片段（反幻觉比对 / 高亮）
   channel?: SourceChannel; // 命中所在文件的来源通道
   confidence?: number; // 0–100 软置信度，仅供 UI 排序/默认展开
+  source_file?: string | null; // 锚定命中的实际文件（未命中为 null；#60，规则据此判断来源）
+  verified?: boolean; // 值是否在原文命中
 }
 
 /** 抽取结果 JSON */

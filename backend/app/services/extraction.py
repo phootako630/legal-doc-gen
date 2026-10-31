@@ -550,6 +550,28 @@ def _from_files(node: object, names: list[str]) -> bool:
     return any(name and name in src for name in names)
 
 
+# 规则按结构化出处判断来源的字段（#60 试点，逐步扩大）；其余字段仍从 src 文字里找文件名
+STRUCTURED_SOURCE_KEYS = frozenset({"contract_sign_date"})
+
+
+def field_source_file(node: object) -> str | None:
+    """
+    字段实际出自哪份文件（#60）：锚定过的用锚定结果 `source_file`（原文没找到为 None，不从模型写的
+    src 猜）；旧会话、或刚抽出还没锚定的字段没有这个键，退回从 src 里取文件名。
+    """
+    if not isinstance(node, dict):
+        return None
+    if "source_file" in node:
+        return node["source_file"]
+    return _src_filename(str(node.get("src") or ""))
+
+
+def _from_strategic(key: str, node: object, names: list[str]) -> bool:
+    if key in STRUCTURED_SOURCE_KEYS:
+        return field_source_file(node) in names
+    return _from_files(node, names)
+
+
 def apply_strategic_guards(fields: dict, files: list[dict]) -> None:
     """
     战略 / 框架合同的把关（确定性代码）：
@@ -562,7 +584,7 @@ def apply_strategic_guards(fields: dict, files: list[dict]) -> None:
     if not names:
         return
     for key, node in list(fields.items()):
-        if key not in STRATEGIC_CLAUSE_KEYS and _from_files(node, names):
+        if key not in STRATEGIC_CLAUSE_KEYS and _from_strategic(key, node, names):
             fields[key] = {"value": None, "src": "按律师规则：战略 / 框架合同不是本案合同，此项不取自战略合同"}
     text = fields.get("dispute_clause_text")
     loc = fields.get("dispute_clause_location")
@@ -727,6 +749,7 @@ def enrich_provenance(data: Any, files: list[dict], key: str | None = None) -> N
       channel —— 命中所在文件的来源通道（扫描件 ocr / 文本 text）
       confidence —— 由确定性软信号加权得出的 0-100 分（仅供 UI 排序/默认展开）
       src     —— 改为实际命中的文件（模型没写文件名时补上）；原文找不到时追加「原文未找到，待核实」
+      source_file / verified —— 实际命中的文件名（未命中为 None）与是否命中，供规则直接读取（#60）
 
     值保守保留（不因未命中而硬删，避免误删有效值），但未命中一定标「待核实」：
     审核页与起诉状据此提醒律师，不会把模型编造的值当作「正常」写进文书。
@@ -748,6 +771,12 @@ def enrich_provenance(data: Any, files: list[dict], key: str | None = None) -> N
             )
             if has_value and key not in _NOT_ANCHORED_KEYS:
                 data["src"] = _with_verified_source(str(data.get("src") or ""), prov)
+                # 结构化出处（#60）：规则读这两项，不解析 src 文字；src 仍是给律师看的说明
+                data["source_file"] = prov.filename
+                data["verified"] = prov.filename is not None
+            else:
+                data.pop("source_file", None)
+                data.pop("verified", None)
             return
         for k, v in data.items():
             enrich_provenance(v, files, k)

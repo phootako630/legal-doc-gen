@@ -46,6 +46,7 @@ from app.services.extraction import (
     apply_rule_guards,
     apply_strategic_dispute_ref,
     apply_strategic_guards,
+    field_source_file,
     is_strategic_supplement,
     mark_strategic_supplement,
     prefer_strategic_original,
@@ -466,13 +467,19 @@ async def _ocr_batch(pdf: bytes, page_nums: list[int]) -> list[dict]:
     return pages
 
 
-def _needs_signature_page(fields: dict) -> bool:
-    """签约日期还是审批表的（或缺失）、合同乙方还没读到 → 需要读到合同签章页。"""
+def _needs_signature_page(fields: dict, files: list[dict]) -> bool:
+    """
+    签约日期还是审批表的（或缺失）、合同乙方还没读到 → 需要读到合同签章页。
+    签约日期出自哪份文件按结构化出处判断（#60）：锚定命中的文件类型是审批表；
+    文件不在材料里（旧数据、刚抽出还没锚定）时才看 src 文字。
+    """
     sign = fields.get("contract_sign_date")
+    if not isinstance(sign, dict) or _is_missing(fields, "contract_sign_date"):
+        return True
+    types = {f.get("filename"): f.get("identified_type") for f in files}
+    source = field_source_file(sign)
     sign_from_approval = (
-        not isinstance(sign, dict)
-        or _is_missing(fields, "contract_sign_date")
-        or "审批表" in str(sign.get("src") or "")
+        types[source] == "审批表" if source in types else "审批表" in str(sign.get("src") or "")
     )
     return sign_from_approval or _is_missing(fields, "contract_party_b")
 
@@ -571,7 +578,7 @@ async def ocr_augment_node(state: GraphState) -> dict:
     """
     fields = state.get("extracted_fields", {})
     missing = {c for c, key in _CLAUSE_INDICATOR.items() if _is_missing(fields, key)}
-    need_signature = _needs_signature_page(fields)
+    need_signature = _needs_signature_page(fields, state.get("files", []))
     # 欠款是质保金、违约金可能按日计时，起算日要用质保期推算：质保期还没读到也要 OCR 找
     need_warranty = needs_warranty_period(fields)
     if not missing and not need_signature and not need_warranty:
@@ -653,7 +660,7 @@ async def ocr_augment_node(state: GraphState) -> dict:
         apply_rule_guards(fields)
         apply_strategic_guards(fields, files)
         missing = {c for c in missing if _is_missing(fields, _CLAUSE_INDICATOR[c])}
-        need_signature = need_signature and _needs_signature_page(fields)
+        need_signature = need_signature and _needs_signature_page(fields, files)
         need_warranty = needs_warranty_period(fields)
 
     if did_ocr:
