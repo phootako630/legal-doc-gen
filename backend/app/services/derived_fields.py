@@ -308,23 +308,44 @@ def plaintiff_name_field(fields: dict) -> dict | None:
 
 # 括号里的备注（审批表「合同买方名称」有时写成「XX公司（某某项目）」）
 _TRAILING_NOTE_RE = re.compile(r"[（(][^（）()]*[）)]$")
+# 「某某有限公司某某项目经理部」：公司名（最后一个「公司 / 集团」为止）+ 项目部分（确认单（六）第 3 题）
+_PROJECT_DEPT_RE = re.compile(r"项目(?:经理|管理|指挥)?部$")
+_PROJECT_OWNER_RE = re.compile(r"^(.+(?:公司|集团))((?:(?!公司|集团).)*项目(?:(?!公司|集团).)*)$")
+# 公司名里的企业边界：「集团有限公司」算一处，「分公司」随前面的公司，不另算
+_ENTITY_END_RE = re.compile(r"(?<!分)公司|集团(?!有限|股份|公司)")
+
+
+def _project_dept_owner(name: str, label: str = "合同甲方") -> tuple[str | None, str]:
+    """
+    名称是项目部时返回 (所属公司, 出处说明)；切不清公司名时所属公司为 None；不是项目部返回 (name, "")。
+    截出的公司名里有两处以上企业边界（如「某某有限公司某某公司总部项目部」，项目名称里也有「公司」）
+    时，分不清哪段是所属公司，也算切不清（#144 评审）。label 是名称来源（合同甲方 / 审批表买方名称）。
+    """
+    if not _PROJECT_DEPT_RE.search(name):
+        return name, ""
+    m = _PROJECT_OWNER_RE.match(name)
+    if not m or len(_ENTITY_END_RE.findall(m.group(1))) != 1:
+        return None, f"；{label}「{name}」是项目部，所属公司名称切不清，照原名写，请办案律师核实，待核实"
+    return m.group(1), f"；{label}为「{name}」（项目部），按律师规则起诉所属公司，请办案律师核实，待核实"
 
 
 def defendant_name_field(fields: dict) -> dict | None:
     """
     被告名称：以合同盖章页甲方 / 买方 / 需方 / 发包方为准（律师反馈：审批表「合同买方名称」
-    有时多写了括号备注）。合同甲方读不到时沿用抽取到的审批表名称。
+    有时多写了括号备注）。合同甲方读不到时沿用抽取到的审批表名称。甲方是「某某公司某某项目经理部 /
+    项目部」时起诉所属公司，标待核实（确认单（六）第 3 题，#139）；`contract_party_a` 原文不改。
     """
     node = _node(fields, "defendant_name")
     approval = node.get("approval_value") if node.get("derived") else node.get("value")
     approval_src = node.get("approval_src") if node.get("derived") else node.get("src")
     party_a = _compact(_str_value(fields, "contract_party_a"))
     if not party_a:
-        if not node.get("derived"):
-            return None  # 保留抽取值
         if not approval:
             return None
-        return {"value": approval, "src": approval_src or "", "approval_value": approval,
+        owner, note = _project_dept_owner(_compact(str(approval)), "审批表买方名称")
+        if not note and not node.get("derived"):
+            return None  # 保留抽取值
+        return {"value": owner or approval, "src": (approval_src or "") + note, "approval_value": approval,
                 "approval_src": approval_src}
     src = "按律师规则：以合同盖章页甲方 / 买方名称为准"
     approval_c = _compact(str(approval)) if approval else None
@@ -334,9 +355,10 @@ def defendant_name_field(fields: dict) -> dict | None:
             src += f"（审批表写作「{approval_c}」，括号内为备注）"
         else:
             src += f"；与审批表「{approval_c}」不一致，待核实"
+    owner, note = _project_dept_owner(party_a)
     return _with_cite({
-        "value": party_a,
-        "src": src + _source_risk_note(fields, "contract_party_a", "合同甲方"),
+        "value": owner or party_a,
+        "src": src + note + _source_risk_note(fields, "contract_party_a", "合同甲方"),
         "channel": "text",
         "approval_value": approval,
         "approval_src": approval_src,
