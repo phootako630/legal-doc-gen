@@ -27,6 +27,8 @@ export interface UploadResponse {
   can_proceed: boolean;
   missing_materials: string[];
   warnings: string[];
+  /** 同名材料自动编号的说明（#121），旧后端不返回 */
+  renamed?: string[];
 }
 
 /** GET /api/analyze/progress 的响应：三步 LLM 处理的实时阶段（前端轮询用） */

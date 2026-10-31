@@ -157,6 +157,21 @@ export function UploadStep({ onDone, onOpenBranches }: UploadStepProps) {
           </Alert>
         )}
 
+        {/* 同名材料自动编号（#121）：出处和查看原件按新名称区分 */}
+        {uploadResult && (uploadResult.renamed?.length ?? 0) > 0 && (
+          <Alert className="border-amber-300 bg-amber-50 text-amber-900">
+            <TriangleAlert className="h-4 w-4 text-amber-600" />
+            <AlertDescription>
+              <span className="font-semibold">有同名材料，已自动编号区分：</span>
+              <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                {uploadResult.renamed?.map((w, i) => (
+                  <li key={i}>{w}</li>
+                ))}
+              </ul>
+            </AlertDescription>
+          </Alert>
+        )}
+
         {/* 提交 */}
         <div className="flex items-center justify-between border-t border-border pt-4">
           <p className="text-xs text-muted-foreground">
