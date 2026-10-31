@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from app.services.anchoring import AnchorQuality, anchor_value
 from app.services.confidence import SourceChannel
@@ -33,6 +33,9 @@ class Provenance:
     channel: SourceChannel = "text"  # 来源通道：命中于扫描件→ocr，否则 text
     anchor_quality: AnchorQuality = "none"
     matched_text: str | None = None  # 命中片段（用于前端高亮/反幻觉比对）
+    # 与最佳命中同等质量命中的全部文件（#150 评审）：不止一份时，选哪份是按模型写的 src 打破平局，
+    # 不是原文核实出的来源
+    candidates: tuple[str, ...] = ()
 
 
 def _src_filename(src: str | None) -> str | None:
@@ -127,4 +130,6 @@ def resolve_provenance(
         return 1 if is_preferred or (preferred is None and single_file) else 0
 
     # max 遇到并列取第一个：同等条件下仍按文件顺序、页码升序
-    return max(hits, key=lambda h: (h[0], h[1], on_cited(h[1], h[2])))[2]
+    best = max(hits, key=lambda h: (h[0], h[1], on_cited(h[1], h[2])))
+    tied = tuple(dict.fromkeys(h[2].filename for h in hits if h[0] == best[0] and h[2].filename))
+    return replace(best[2], candidates=tied)
