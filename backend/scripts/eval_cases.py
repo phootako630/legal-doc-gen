@@ -22,6 +22,7 @@ expected.json：
     {
       "title": "安装案 2（AH2009976 安装）",
       "decisions": {"payable_ratio": "100%"},          断点时代替律师作答：{字段: 取值}
+      "as_of": "2025-03-01",                            选填：当作生成日（质保期是否届满、违约金暂计日按这天算）
       "fields": {
         "total_amount": 1488996,                         数字 → 按金额比（到分）
         "contract_sign_date": "2020年7月30日",           完整日期 → 按日期比

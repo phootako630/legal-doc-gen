@@ -619,6 +619,61 @@ def case_stop_after_first_batch() -> None:
         })
 
 
+def case_retention_not_due() -> None:
+    """质保金未到期（#138）：审批表已付 + 未付 = 总价，未付含 5% 质保金；as_of 时质保期未满 →
+    按 95% 节点（第二期）匹配，诉请金额只诉到期部分 = 未付 − 质保金，审批表未付款照旧。"""
+    case = "虚构安装案K"
+    os.makedirs(os.path.join(ROOT, case, "materials"), exist_ok=True)
+    _approval(case, "AH9000011徐州虚构置业有限公司诉讼审批表.pdf", {
+        "serial": "SS2099-000111", "title": "AH9000011徐州虚构置业有限公司虚构湾项目",
+        "contract_no": "AH9000011", "branch_path": "集团/营销网络/梧桐分公司",
+        "buyer": "徐州虚构置业有限公司", "contact": "虚构庚", "contact_phone": "13800000011",
+        "buyer_address": "徐州市鼓楼区虚构路11号", "site": "徐州市鼓楼区虚构路11号虚构湾",
+        "contract_type": "安装合同", "amount_label": "安装", "sign_date": "2024-03-06", "qty": "2", "qty_actual": "2",
+        "total": "200,000.00", "paid": "80,000.00", "unpaid": "120,000.00", "retention": "10,000.00元",
+        "gov_accept": "2024-09-20", "last_pay_date": "2024-04-01", "reason": "电梯已验收并移交，买方未支付验收款。",
+    })
+    _text_pdf(os.path.join(ROOT, case, "materials", "徐州虚构湾项目电梯安装合同.pdf"), [
+        """电梯安装合同
+
+合同编号：AH9000011
+甲方：徐州虚构置业有限公司
+乙方：日立电梯（中国）有限公司梧桐分公司
+
+第一条 工程概况
+工程地点：徐州市鼓楼区虚构路11号虚构湾。乙方负责安装客梯2台。
+
+第二条 合同价款
+本合同安装总价为人民币200,000元（大写：贰拾万元整）。
+
+第三条 工期
+乙方在电梯到场后60日内完成安装。
+
+第四条 付款条件
+4.1 甲方须采用电汇方式向乙方付款。
+4.2 甲方在安装前7日向乙方支付合同总价的40%作为动工款。
+4.3 电梯经技术监督部门验收合格后15日内，甲方支付至合同总价的95%。
+4.4 余款5%为质保金，质保期（自验收合格之日起24个月）满后30日内无息付清。""",
+        """第五条 违约责任
+甲方逾期付款的，应向乙方支付逾期付款利息。
+
+第六条 争议解决
+因本合同发生的争议，双方协商不成的，向工程所在地人民法院提起诉讼。
+
+（以下无正文）
+甲方（盖章）：徐州虚构置业有限公司
+乙方（盖章）：日立电梯（中国）有限公司梧桐分公司
+签订日期：2024年3月8日""",
+    ])
+    for i, code in enumerate(["31103203202400000111", "31103203202400000112"], start=1):
+        _report(case, f"电梯监督检验报告{i}.pdf", {
+            "report_no": f"XG-DTJ-2024-91{i:02d}", "user": "徐州虚构置业有限公司",
+            "installer": "日立电梯（中国）有限公司梧桐分公司", "device_code": code,
+            "inspect_date": "2024年9月13日", "approve_date": "2024年9月20日",
+            "site": "徐州市鼓楼区虚构路11号虚构湾", "model": "HGP",
+        })
+
+
 if __name__ == "__main__":
     case_install_scanned()
     case_sales_arbitration()
@@ -629,4 +684,5 @@ if __name__ == "__main__":
     case_period_payment()
     case_strategic_not_uploaded()
     case_stop_after_first_batch()
+    case_retention_not_due()
     print("已生成：", ", ".join(sorted(n for n in os.listdir(ROOT) if not n.startswith(("_", ".")) and os.path.isdir(os.path.join(ROOT, n)))))

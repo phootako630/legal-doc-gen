@@ -19,7 +19,7 @@
 事实和理由：
 {{contract_sign_date}}，原、被告双方签订了《{{contract_title}}》（合同编号：{{contract_no}}），约定原告负责{{contract_action}}{{elevator_qty_contract}}台电梯，合同总价为¥{{contract_total_stated}}元。{{supplement_sentence}}双方对{{price_term}}、付款方式、违约责任等条款进行了约定。
 上述合同签订后，原告积极履行合同项下的义务。依据合同{{payment_cite_location}}约定，{{payment_cite_text}}。
-案涉合同项下{{elevator_qty}}台电梯均于{{acceptance_latest_date}}前验收合格。案涉电梯{{handover_text}}{{warranty_expiry_sentence}}，被告应按合同约定支付至{{payable_ratio}}合同款¥{{payable_amount}}元，但被告仅支付了¥{{paid_amount}}元{{paid_note}}，尚欠剩余合同款¥{{claim_amount}}元{{unpaid_note}}未付，经原告多次催付未果。
+案涉合同项下{{elevator_qty}}台电梯均于{{acceptance_latest_date}}前验收合格。案涉电梯{{handover_text}}{{warranty_expiry_sentence}}，被告应按合同约定支付至{{payable_ratio}}合同款¥{{payable_amount}}元，但被告仅支付了¥{{paid_amount}}元{{paid_note}}，尚欠{{debt_term}}¥{{claim_amount}}元{{unpaid_note}}未付，经原告多次催付未果。
 {{breach_clause_sentence}}被告逾期支付合同款已构成违约，被告应向原告支付{{interest_term}}（以¥{{claim_amount}}元为基数，自起诉之日起，按照{{interest_rate_basis}}计至实际付清之日止{{penalty_cap}}）。
 依据案涉合同{{dispute_clause_location}}约定，{{dispute_clause_text}}。{{jurisdiction_text}}
 原告认为，上述合同均系原、被告双方真实意思表示，合同有效成立并已实际履行，被告违约依法应承担相应的违约责任。为维护自身合法权益，原告特将此案诉至贵院，祈判如所请。

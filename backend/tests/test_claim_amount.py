@@ -43,11 +43,47 @@ def test_complaint_claims_and_interest_base_use_claim(monkeypatch):
     assert "100000" not in text  # 审批表未付款（含未到期质保金）不写进起诉状
 
 
-def test_warranty_already_expired_flags_ratio_for_review(monkeypatch):
+def test_warranty_already_expired_claims_approval_unpaid(monkeypatch):
+    # 质保期已届满：质保金已到期，即使律师选了支付至 95% 也按审批表未付款全额（#143 评审）
     monkeypatch.setattr(derived_fields, "_today", lambda: date(2102, 1, 1))
     claim = apply_derived_fields(_case())["claim_amount"]
-    assert claim["value"] == "50000"
-    assert "已于 2101年1月10日届满" in claim["src"] and "核对支付至比例" in claim["src"]
+    assert claim["value"] == "100000"
+    assert "已于 2101年1月10日 届满" in claim["src"] and "全额" in claim["src"]
+    assert "《虚构验收报告》" in claim["src"]
+
+
+def test_computed_claim_cites_input_sources(monkeypatch):
+    # 算出的诉请金额带上参与计算各字段的出处，律师能追到材料（#143 评审）
+    monkeypatch.setattr(derived_fields, "_today", lambda: date(2099, 6, 1))
+    src = apply_derived_fields(_case())["claim_amount"]["src"]
+    for cited in ("合同总价：《虚构审批表》", "未付款：《虚构审批表》未付款金额", "最晚验收合格日：《虚构验收报告》",
+                  "质保期：《虚构合同》"):
+        assert cited in src
+
+
+def test_no_due_amount_left_for_lawyer(monkeypatch):
+    # 未付款全部是未到期质保金：本次没有到期欠款，不自动写正额诉请，交律师确认（#143 评审）
+    monkeypatch.setattr(derived_fields, "_today", lambda: date(2099, 6, 1))
+    fields = _case(unpaid="50,000.00", paid_amount={"value": "950,000.00", "src": "《虚构审批表》"})
+    claim = apply_derived_fields(fields)["claim_amount"]
+    assert claim["value"] is None
+    assert "本次没有到期欠款" in claim["src"] and "请律师确认" in claim["src"]
+    assert "【待补充】" in render_complaint(fields)
+
+
+def test_no_due_amount_without_ratio(monkeypatch):
+    monkeypatch.setattr(derived_fields, "_today", lambda: date(2099, 6, 1))
+    fields = _case(ratio=None, unpaid="50,000.00", paid_amount={"value": "950,000.00", "src": "《虚构审批表》"})
+    claim = apply_derived_fields(fields)["claim_amount"]
+    assert claim["value"] is None and "本次没有到期欠款" in claim["src"]
+
+
+def test_fact_sentence_uses_debt_term(monkeypatch):
+    # 事实段与诉请第 1 项同一措辞：只诉到期部分时写「尚欠到期合同款」，不写「剩余合同款」（#143 评审）
+    monkeypatch.setattr(derived_fields, "_today", lambda: date(2099, 6, 1))
+    text = render_complaint(_case())
+    assert "尚欠到期合同款¥⚠️ 待核实：50000元" in text
+    assert "剩余合同款" not in text
 
 
 def test_full_payment_ratio_keeps_approval_unpaid():
@@ -81,7 +117,6 @@ def test_penalty_on_unpaid_uses_claim(monkeypatch):
     assert f["penalty_amount"]["value"] == 2500
 
 
-
 _STAGES = "3.1 电梯验收合格后30日内，甲方支付至合同总价的95%。3.2 余款5%为质保金，质保期满后无息返还。"
 
 
@@ -100,7 +135,8 @@ def test_stage_match_full_once_warranty_expired(monkeypatch):
     fields = _case(ratio=None, payment_clause_text={"value": _STAGES, "src": "《虚构合同》第三条"})
     f = apply_derived_fields(fields)
     assert f["payable_ratio"]["value"] == "100%"
-    assert f["claim_amount"]["value"] == "100,000.00"
+    assert f["claim_amount"]["value"] == "100000"
+    assert "届满" in f["claim_amount"]["src"]
 
 
 def test_unknown_warranty_keeps_approval_unpaid(monkeypatch):
@@ -110,7 +146,18 @@ def test_unknown_warranty_keeps_approval_unpaid(monkeypatch):
     fields["warranty_period"] = {"value": None, "src": "未识别"}
     f = apply_derived_fields(fields)
     assert f["payable_ratio"]["value"] == "100%"
-    assert f["claim_amount"]["value"] == "100,000.00"
+    claim = f["claim_amount"]
+    assert claim["value"] == "100000"
+    # 金额照旧，出处说明为什么没扣质保金（#143 评审）
+    assert "推不出质保期是否届满" in claim["src"] and "待核实" in claim["src"]
+
+
+def test_non_acceptance_start_explains_reason(monkeypatch):
+    monkeypatch.setattr(derived_fields, "_today", lambda: date(2099, 6, 1))
+    fields = _case(warranty_period={"value": "24个月", "src": "《虚构合同》质保期自交付使用之日起"})
+    claim = apply_derived_fields(fields)["claim_amount"]
+    assert claim["value"] == "100000"
+    assert "质保期不是自验收合格之日起算" in claim["src"]
 
 
 def test_no_stages_deducts_undue_retention(monkeypatch):
@@ -118,4 +165,4 @@ def test_no_stages_deducts_undue_retention(monkeypatch):
     monkeypatch.setattr(derived_fields, "_today", lambda: date(2099, 6, 1))
     claim = apply_derived_fields(_case(ratio=None))["claim_amount"]
     assert claim["value"] == "50000"
-    assert "未付质保金 50000" in claim["src"] and "2101年1月10日才届满" in claim["src"]
+    assert "未付质保金 50000" in claim["src"] and "质保期至 2101年1月10日 才届满" in claim["src"]

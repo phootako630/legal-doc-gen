@@ -6,12 +6,16 @@ import io
 import json
 import os
 import time
+from contextlib import nullcontext
+from datetime import date
 from typing import Any
+from unittest import mock
 
 from starlette.datastructures import UploadFile
 
 from app.agent.graph import get_graph
 from app.agent.runner import run_analyze, run_resume
+from app.services import derived_fields
 from app.services.complaint_renderer import render_complaint
 from app.services.file_parser import parse_file
 from scripts.case_eval.cache import ReplayCache, patched
@@ -74,6 +78,16 @@ def _conflict_keys(validations: list[dict[str, Any]]) -> set[str]:
     return keys
 
 
+def _as_of(expected: dict[str, Any]):
+    """expected.json 的 as_of（「2025-03-01」）：按这一天当作生成日（质保期是否届满、暂计日等），
+    让真实案卷按律师起诉当时判分、虚构案卷不随日子过去而变；没写就是今天。"""
+    raw = expected.get("as_of")
+    if not raw:
+        return nullcontext()
+    day = date.fromisoformat(raw)
+    return mock.patch.object(derived_fields, "_today", lambda: day)
+
+
 async def run_case(case_dir: str, mode: str = "replay", strict: bool = False) -> dict[str, Any]:
     """跑一个案件，返回结果（含逐字段结论、断点、调用统计、生成的起诉状）。出错不抛，记在 error。"""
     name = os.path.basename(os.path.normpath(case_dir))
@@ -84,7 +98,7 @@ async def run_case(case_dir: str, mode: str = "replay", strict: bool = False) ->
         expected = load_expected(case_dir)
         result["title"] = expected.get("title") or name
         decisions: dict[str, Any] = expected.get("decisions") or {}
-        with patched(cache):
+        with patched(cache), _as_of(expected):
             files = [await _parse(p) for p in list_materials(case_dir)]
             result["materials"] = [
                 {"filename": f["filename"], "type": f["identified_type"], "scanned": f["is_scanned"]}
@@ -104,7 +118,8 @@ async def run_case(case_dir: str, mode: str = "replay", strict: bool = False) ->
         fields = case.extracted_fields
         result["readiness"] = case.readiness
         result["fields"] = fields
-        result["complaint"] = render_complaint(fields)
+        with _as_of(expected):
+            result["complaint"] = render_complaint(fields)
         scored = score_case(
             expected["fields"], fields, await _final_files(case.run_id), _conflict_keys(case.validations)
         )

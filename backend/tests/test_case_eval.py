@@ -214,3 +214,17 @@ def test_run_case_reports_missing_expected(tmp_path):
     (case / "materials").mkdir(parents=True)
     result = asyncio.run(run_case(str(case)))
     assert result["error"] and "expected.json" in result["error"]
+
+
+def test_as_of_pins_generation_date():
+    # expected.json 的 as_of：按律师起诉当时判分（质保期是否届满等），不随运行日期变化（#138）
+    from datetime import date
+
+    from app.services import derived_fields
+    from scripts.case_eval.runner import _as_of
+
+    with _as_of({"as_of": "2025-03-01"}):
+        assert derived_fields._today() == date(2025, 3, 1)
+    assert derived_fields._today() != date(2025, 3, 1)
+    with _as_of({}):
+        assert derived_fields._today() != date(2025, 3, 1)
