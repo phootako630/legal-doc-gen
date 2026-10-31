@@ -52,12 +52,35 @@ def test_unanchored_value_kept_for_review_not_judged_by_model_src():
     assert "⚠️ 待核实：2020年5月5日" in render_complaint({"contract_sign_date": node})
 
 
-def test_legacy_node_without_structured_source_falls_back_to_src():
-    # 升级前的会话：字段里没有 source_file，退回从 src 取文件名
-    assert field_source_file({"value": "x", "src": "《虚构战略合作协议.pdf》"}) == "虚构战略合作协议.pdf"
-    fields = {"contract_sign_date": {"value": "2019年1月1日", "src": "《虚构战略合作协议.pdf》签订页"}}
+def test_unanchored_new_extraction_not_cleared_before_anchoring():
+    # 按 extract 节点的真实顺序：锚定前先把关一次，再锚定、再把关（#150 评审）。日期实际在主合同，
+    # 模型却把出处写成战略合作协议：锚定前不能先清空，锚定后按实际来源保留
+    fields = {"contract_sign_date": {"value": "2024年3月8日", "src": "《虚构战略合作协议.pdf》签订页"}}
     apply_strategic_guards(fields, FILES)
-    assert fields["contract_sign_date"]["value"] is None
+    assert fields["contract_sign_date"]["value"] == "2024年3月8日"
+    enrich_provenance(fields, FILES)
+    apply_strategic_guards(fields, FILES)
+    node = fields["contract_sign_date"]
+    assert node["value"] == "2024年3月8日" and node["source_file"] == "虚构安装合同.pdf"
+
+
+def test_same_date_in_main_and_strategic_is_ambiguous_not_cleared():
+    # 同一日期同等质量地命中主合同和战略合同：模型写哪份就选哪份只是打破平局，不算核实出的来源（#150 评审）
+    both = dict(STRATEGIC, text="签订日期：2024年3月8日", pages=[{"page": 1, "text": "签订日期：2024年3月8日"}])
+    files = [APPROVAL, MAIN, both]
+    fields = {"contract_sign_date": {"value": "2024年3月8日", "src": "《虚构战略合作协议.pdf》"}}
+    enrich_provenance(fields, files)
+    apply_strategic_guards(fields, files)
+    node = fields["contract_sign_date"]
+    assert node["value"] == "2024年3月8日"
+    assert node["source_file"] is None and node["verified"] is True
+    assert set(node["source_candidates"]) == {"虚构安装合同.pdf", "虚构战略合作协议.pdf"}
+    assert field_source_file(node) is None
+
+
+def test_legacy_node_without_structured_source_reads_src():
+    # 升级前的会话：字段里没有 source_file，读取来源时退回从 src 取文件名
+    assert field_source_file({"value": "x", "src": "《虚构战略合作协议.pdf》"}) == "虚构战略合作协议.pdf"
 
 
 def test_signature_page_needed_by_structured_source():
@@ -70,3 +93,7 @@ def test_signature_page_needed_by_structured_source():
     # 旧数据：没有 source_file 时看 src 文字
     legacy = {"contract_sign_date": {"value": "2024年3月6日", "src": "审批表签约时间"}} | party_b
     assert _needs_signature_page(legacy, FILES)
+    # 锚定过但原文没命中：即便模型写「合同签订页」，也继续找签章页（#150 评审）
+    unanchored = _run("2020年5月5日", "合同签订页") | party_b
+    assert unanchored["contract_sign_date"]["source_file"] is None
+    assert _needs_signature_page(unanchored, FILES)

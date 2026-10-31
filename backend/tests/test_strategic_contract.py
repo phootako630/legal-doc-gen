@@ -42,6 +42,10 @@ def test_guard_clears_case_fields_taken_from_strategic_contract():
     }
     apply_strategic_guards(fields, _FILES)
     assert fields["contract_party_a"]["value"] is None
+    # 签约日期按锚定结果把关（#60）：还没锚定时不按模型写的 src 清空，锚定后再判断
+    assert fields["contract_sign_date"]["value"] == "2020年1月1日"
+    fields["contract_sign_date"]["source_file"] = "集团战略合同.pdf"
+    apply_strategic_guards(fields, _FILES)
     assert fields["contract_sign_date"]["value"] is None
     assert fields["contract_title"]["value"] == "某项目电梯买卖合同"
     # 争议条款可以取自战略合同，但位置要写明是战略合同的条款

@@ -556,8 +556,8 @@ STRUCTURED_SOURCE_KEYS = frozenset({"contract_sign_date"})
 
 def field_source_file(node: object) -> str | None:
     """
-    字段实际出自哪份文件（#60）：锚定过的用锚定结果 `source_file`（原文没找到为 None，不从模型写的
-    src 猜）；旧会话、或刚抽出还没锚定的字段没有这个键，退回从 src 里取文件名。
+    字段实际出自哪份文件（#60）：锚定过的用锚定结果 `source_file`（原文没找到、或同时命中几份文件说不清
+    时为 None，不从模型写的 src 猜）；旧会话、或刚抽出还没锚定的字段没有这个键，退回从 src 里取文件名。
     """
     if not isinstance(node, dict):
         return None
@@ -568,7 +568,9 @@ def field_source_file(node: object) -> str | None:
 
 def _from_strategic(key: str, node: object, names: list[str]) -> bool:
     if key in STRUCTURED_SOURCE_KEYS:
-        return field_source_file(node) in names
+        # 只认锚定结果：还没锚定（刚抽出，extract 节点在锚定前也会把关一次）时不按模型写的 src 清空，
+        # 等锚定后的那次把关再判断（#150 评审）；命中说不清是哪份文件时也不清空
+        return isinstance(node, dict) and "source_file" in node and node["source_file"] in names
     return _from_files(node, names)
 
 
@@ -771,12 +773,15 @@ def enrich_provenance(data: Any, files: list[dict], key: str | None = None) -> N
             )
             if has_value and key not in _NOT_ANCHORED_KEYS:
                 data["src"] = _with_verified_source(str(data.get("src") or ""), prov)
-                # 结构化出处（#60）：规则读这两项，不解析 src 文字；src 仍是给律师看的说明
-                data["source_file"] = prov.filename
+                # 结构化出处（#60）：规则读这几项，不解析 src 文字；src 仍是给律师看的说明。
+                # 同一个值同等质量地命中几份文件时，来源说不清（选哪份只是按模型的 src 打破平局），
+                # source_file 记为 None，命中的文件都列在 source_candidates（#150 评审）
+                data["source_candidates"] = list(prov.candidates)
+                data["source_file"] = prov.filename if len(prov.candidates) <= 1 else None
                 data["verified"] = prov.filename is not None
             else:
-                data.pop("source_file", None)
-                data.pop("verified", None)
+                for k in ("source_file", "source_candidates", "verified"):
+                    data.pop(k, None)
             return
         for k, v in data.items():
             enrich_provenance(v, files, k)

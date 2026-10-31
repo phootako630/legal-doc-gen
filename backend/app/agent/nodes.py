@@ -46,7 +46,6 @@ from app.services.extraction import (
     apply_rule_guards,
     apply_strategic_dispute_ref,
     apply_strategic_guards,
-    field_source_file,
     is_strategic_supplement,
     mark_strategic_supplement,
     prefer_strategic_original,
@@ -476,11 +475,14 @@ def _needs_signature_page(fields: dict, files: list[dict]) -> bool:
     sign = fields.get("contract_sign_date")
     if not isinstance(sign, dict) or _is_missing(fields, "contract_sign_date"):
         return True
-    types = {f.get("filename"): f.get("identified_type") for f in files}
-    source = field_source_file(sign)
-    sign_from_approval = (
-        types[source] == "审批表" if source in types else "审批表" in str(sign.get("src") or "")
-    )
+    if "source_file" in sign:
+        # 锚定过：原文没命中（候选为空）→ 继续找签章页；命中的文件都是审批表 → 也要找（#150 评审）
+        types = {f.get("filename"): f.get("identified_type") for f in files}
+        candidates = sign.get("source_candidates") or ([sign["source_file"]] if sign["source_file"] else [])
+        sign_from_approval = not candidates or all(types.get(c) == "审批表" for c in candidates)
+    else:
+        # 旧数据 / 刚抽出还没锚定：看 src 文字
+        sign_from_approval = "审批表" in str(sign.get("src") or "")
     return sign_from_approval or _is_missing(fields, "contract_party_b")
 
 

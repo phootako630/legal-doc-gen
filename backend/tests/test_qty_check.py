@@ -75,6 +75,9 @@ def test_count_vge_plain_text_prose_after_table_ignored():
     assert count_vge_units(text) == (1, True)
 
 
+_SIGNED_PAGE = "甲方（盖章）\n乙方（盖章）：某电梯公司\n签订日期：2024年2月26日"
+
+
 def _run(monkeypatch, extracted, files, ocr=None):
     monkeypatch.setattr(
         nodes_mod,
@@ -147,8 +150,9 @@ def test_mismatch_ocrs_rest_of_scanned_contract(monkeypatch):
             "is_scanned": True,
             "file_id": fid,
             "page_count": 3,
-            "text": "",
-            "pages": [],
+            # 第 1 页（盖章页）已识别：签约日期能在原文锚定，不再触发签章页 OCR（#150）
+            "text": _SIGNED_PAGE,
+            "pages": [{"page": 1, "text": _SIGNED_PAGE}],
         }
     ]
 
@@ -158,7 +162,7 @@ def test_mismatch_ocrs_rest_of_scanned_contract(monkeypatch):
     ocr = AsyncMock(side_effect=fake_ocr)
     state = _run(monkeypatch, _qty(15, 14), files, ocr=ocr)
     assert state.pending is None
-    assert ocr.await_count == 3
+    assert ocr.await_count == 2  # 补读第 2、3 页
     assert state.extracted_fields["elevator_qty_vge"]["value"] == 1
 
 
@@ -173,8 +177,8 @@ def test_resume_does_not_repeat_ocr(monkeypatch):
             "is_scanned": True,
             "file_id": fid,
             "page_count": 3,
-            "text": "",
-            "pages": [],
+            "text": _SIGNED_PAGE,
+            "pages": [{"page": 1, "text": _SIGNED_PAGE}],
         }
     ]
     ocr = AsyncMock(return_value="正文，无设备清单")
