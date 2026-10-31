@@ -1,0 +1,26 @@
+{
+  "title": "虚构安装案 K（质保金未到期：审批表未付 120000 含质保金 10000，质保期未满 → 按 95% 节点只诉到期的 110000，#138）",
+  "as_of": "2025-06-01",
+  "decisions": {
+    "payable_ratio": "95%"
+  },
+  "fields": {
+    "plaintiff_name_final": "日立电梯（中国）有限公司梧桐分公司",
+    "defendant_name": "徐州虚构置业有限公司",
+    "contract_sign_date": "2024年3月8日",
+    "total_amount": 200000,
+    "paid_amount": 80000,
+    "unpaid_amount": 120000,
+    "retention_unpaid_amount": 10000,
+    "claim_amount": {"value": 110000, "review": "待核实"},
+    "payable_ratio": "95%",
+    "payable_amount": 190000,
+    "debt_term": "到期合同款",
+    "elevator_qty": 2,
+    "acceptance_latest_date": "2024年9月20日",
+    "warranty_period": {"value": "24个月", "match": "contains"},
+    "payment_cite_location": {"value": "4.3", "match": "contains"},
+    "interest_term": "逾期付款利息",
+    "court_district": "徐州市鼓楼区"
+  }
+}

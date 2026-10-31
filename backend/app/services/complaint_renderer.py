@@ -111,7 +111,7 @@ def amount_to_chinese_rmb(amount: object) -> str | None:
 
 
 # ── 单字段基础显示串（未贴状态标注前）───────────────────────────────────────
-_AMOUNT_KEYS = {"total_amount", "paid_amount", "unpaid_amount"}
+_AMOUNT_KEYS = {"total_amount", "paid_amount", "unpaid_amount", "claim_amount"}
 # 违约金金额自带「¥…元」：待核实标注放在整个金额前（「⚠️ 待核实：¥5000元」）
 _YUAN_KEYS = {"penalty_amount"}
 _DATE_KEYS = {
@@ -306,7 +306,7 @@ _PLACEHOLDER_RE = re.compile(r"\{\{(\w+)\}\}")
 # 按利率持续计付的写法；违约金为固定金额 / 一次性比例时整段换成违约金金额「¥X元」
 # （律师确认单（四）第 1 题）。须在换仲裁措辞之前替换（仲裁会改掉「自起诉之日起」）
 _PERIODIC_CALC = (
-    "（以¥{{unpaid_amount}}元为基数，自起诉之日起，按照{{interest_rate_basis}}"
+    "（以¥{{claim_amount}}元为基数，自起诉之日起，按照{{interest_rate_basis}}"
     "计至实际付清之日止{{penalty_cap}}）"
 )
 _LUMP_SUM_CALC = "{{penalty_amount}}"
