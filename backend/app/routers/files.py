@@ -6,6 +6,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
 from app.services import upload_progress
+from app.services.file_names import renamed_notes, unique_filenames
 from app.services.file_parser import DocType, parse_file
 from app.services.materials import material_status
 
@@ -36,6 +37,8 @@ class UploadResponse(BaseModel):
     can_proceed: bool
     missing_materials: list[str]
     warnings: list[str]
+    # 同名材料自动编号的说明（#121）；旧客户端忽略
+    renamed: list[str] = []
 
 
 class UploadProgress(BaseModel):
@@ -74,6 +77,11 @@ async def upload(
                 logger.warning("第 %d 份文件解析失败：%s", idx, type(e).__name__)
                 warnings.append(f"{upload_file.filename}：解析失败 — {e}")
 
+    # 同名材料自动编号：出处、查看原件按文件名认文件，一次会话内须唯一（#121）
+    names, renamed = unique_filenames([f.filename for f in parsed])
+    for f, name in zip(parsed, names):
+        f.filename = name
+
     # 缺哪些材料、能否直接开始分析（与前端 lib/materials.ts、agent 清点节点同一口径）
     status = material_status(f.identified_type for f in parsed)
 
@@ -82,6 +90,7 @@ async def upload(
         can_proceed=status.can_proceed,
         missing_materials=status.missing,
         warnings=warnings,
+        renamed=renamed_notes(renamed),
     )
 
 

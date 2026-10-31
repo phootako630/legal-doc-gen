@@ -48,6 +48,7 @@ GET /api/case/{run_id}       # 取回会话当前状态（刷新页面后「继�
 #   按账号隔离：会话记下发起分析的登录账号（run_meta.owner），case / resume / analyze/result / feedback / generate
 #   的改动统计只认本人，别人的会话一律按不存在（404）处理；未开启登录不限制，升级前的旧会话（无 owner）不限制
 POST /api/case/{run_id}/page  { file, page, field }  # 审核页「原件第 N 页」：扫描件该页 PNG（#111）；文件名放请求体不放 URL（nginx / uvicorn 访问日志记请求行）；同上按账号隔离、过期 404，文件只在本会话材料里按名找（file_id 不经客户端），同名材料有多份时 404 不显示，文字版材料 404 并提示打开原文件；禁止缓存；渲染走专用线程（`services/page_image.py`）；运行日志 `source_page_view` 只记字段 key / 页码 / 结果，不记文件名
+#   同名材料（#121）：上传接口给第 2 份起的同名文件加序号「安装合同(2).pdf」，响应 `renamed` 列出说明、上传页琥珀色提示；分析接口对直接调用的旧客户端 / eval 兜底同样编号（`services/file_names.py`）。会话内文件名因此唯一，出处、查看原件、来源锚定和 eval 来源核对都按新名称；升级前的会话若仍有同名材料，查看原件照旧 404「有多份同名材料」
 GET /api/analyze/result?key=<请求编号>  # 处理页刷新后接回同一次分析：还在跑就等它跑完，已跑完直接返回；失败 / 重启 / 过期 404
 GET /healthz、GET /readyz（不在 /api 下，nginx 不转发）  # 存活（docker 健康检查）/ 就绪（checkpoint 库读写、磁盘余量 `READY_MIN_FREE_MB`、Key 已配置；deploy.sh 用，不就绪回滚）
 POST /api/client-error            # 前端上报未捕获异常 / 接口 5xx（#76）：只收错误类型、步骤、接口名、状态码、run_id（extra=forbid，不收消息原文），记运行日志 client_error，同一账号 / IP 每分钟 `CLIENT_ERROR_RATE_PER_MIN` 条；只在生产构建上报（`lib/error-report.ts`）

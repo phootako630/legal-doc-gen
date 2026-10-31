@@ -16,6 +16,7 @@ from langgraph.types import Command
 from app.agent import checkpoint
 from app.agent.graph import get_graph
 from app.agent.state import CaseState, PendingDecision
+from app.services.file_names import unique_filenames
 from app.services import file_store, llm_progress, run_log
 
 
@@ -181,6 +182,9 @@ async def _run_analyze(
     run_id = uuid.uuid4().hex
     config = _config(run_id)
     run_log.set_run_id(run_id)
+    # 上传接口已给同名材料编号；直接调用分析接口的旧客户端、eval 也在这里兜底（#121）
+    names, _ = unique_filenames([f.get("filename", "") for f in files])
+    files = [{**f, "filename": name} for f, name in zip(files, names)]
     run_log.log_event(
         "run_start",
         files=len(files),

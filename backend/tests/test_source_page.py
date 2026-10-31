@@ -39,7 +39,8 @@ def _start_case(monkeypatch, owner: str | None = "lawyer01", duplicate: bool = F
         "page_count": 2,
     }
     # 同名的第二份扫描件（另一份合同起了同样的名字）
-    extra = [scan | {"file_id": file_store.put(_pdf(2))}] if duplicate else []
+    # 第二份 3 页：请求第 3 页能分出看的是哪一份
+    extra = [scan | {"page_count": 3, "file_id": file_store.put(_pdf(3))}] if duplicate else []
     files = [
         {"filename": _TEXT, "identified_type": "审批表", "text": "虚构审批表", "file_id": None},
         # 「未知」类型的扫描件：agent 不会对它按需 OCR，测试不发外部请求
@@ -128,8 +129,19 @@ def test_log_records_field_and_page_but_not_filename(monkeypatch, tmp_path):
     assert "虚构梧桐" not in raw
 
 
-def test_same_name_scans_are_ambiguous(monkeypatch):
-    # 两份同名扫描件：分不清字段出自哪一份，不显示，免得核对错原件（#118 评审）
+def test_same_name_scans_numbered_and_viewable(monkeypatch):
+    # 两份同名扫描件：第二份自动改称「…(2).pdf」，按新名称看到的是第二份（#121）
+    run_id = _start_case(monkeypatch, duplicate=True)
+    client = _client(monkeypatch, "lawyer01")
+    second = "虚构梧桐项目安装合同(2).pdf"
+    assert _get(client, run_id, file=second, page=3).status_code == 200
+    assert _get(client, run_id, page=3).status_code == 404  # 第一份只有 2 页
+    assert _get(client, run_id, page=1).status_code == 200
+
+
+def test_legacy_same_name_session_still_ambiguous(monkeypatch):
+    # 升级前的会话里两份材料仍同名：分不清字段出自哪一份，照旧不显示（#118 评审、#121）
+    monkeypatch.setattr(runner, "unique_filenames", lambda names: (names, []))
     run_id = _start_case(monkeypatch, duplicate=True)
     res = _get(_client(monkeypatch, "lawyer01"), run_id)
     assert res.status_code == 404

@@ -12,7 +12,7 @@ import { BranchTableNotice } from '@/components/branches/BranchTableNotice';
 import { uploadFiles, fetchUploadProgress } from '@/lib/api';
 import { newRequestKey } from '@/lib/request-key';
 import { materialStatus, withDetectedTypes } from '@/lib/materials';
-import { formatMB, totalSizeError } from '@/lib/upload-limits';
+import { formatMB, mergeSelectedFiles, totalSizeError } from '@/lib/upload-limits';
 import type { DocType, UploadResponse, UploadProgress } from '@/lib/types';
 import { Loader2, TriangleAlert, ArrowRight } from 'lucide-react';
 
@@ -52,11 +52,7 @@ export function UploadStep({ onDone, onOpenBranches }: UploadStepProps) {
   }, [loading]);
 
   const handleNewFiles = useCallback((incoming: File[]) => {
-    setFiles((prev) => {
-      const existing = new Set(prev.map((f) => `${f.name}|${f.size}`));
-      const deduped = incoming.filter((f) => !existing.has(`${f.name}|${f.size}`));
-      return [...prev, ...deduped];
-    });
+    setFiles((prev) => mergeSelectedFiles(prev, incoming));
     setError(null);
     setUploadResult(null);
   }, []);
@@ -150,6 +146,21 @@ export function UploadStep({ onDone, onOpenBranches }: UploadStepProps) {
               <span className="font-semibold">以下文件处理失败，内容可能没有读到：</span>
               <ul className="mt-1 list-disc space-y-0.5 pl-5">
                 {uploadResult.warnings.map((w, i) => (
+                  <li key={i}>{w}</li>
+                ))}
+              </ul>
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {/* 同名材料自动编号（#121）：出处和查看原件按新名称区分 */}
+        {uploadResult && (uploadResult.renamed?.length ?? 0) > 0 && (
+          <Alert className="border-amber-300 bg-amber-50 text-amber-900">
+            <TriangleAlert className="h-4 w-4 text-amber-600" />
+            <AlertDescription>
+              <span className="font-semibold">有同名材料，已自动编号区分：</span>
+              <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                {uploadResult.renamed?.map((w, i) => (
                   <li key={i}>{w}</li>
                 ))}
               </ul>
