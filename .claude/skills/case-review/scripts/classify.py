@@ -3,7 +3,9 @@
 # 结果只是建议，逐条由人确认或改判（SKILL.md 第 7 步）。
 #
 # 用法：python3 -I classify.py <律师诉状.txt> <系统 complaint.txt> <材料文本目录> <输出.md> [--fake 回答.json]
-#   材料文本目录：inspect.py 输出的 out/text（扫描件没有文本层的，可把 OCR 文本另存为 .txt 放进来）
+#   材料文本目录：inspect.py 输出的 out/text。律师诉状本身、以及文件名含「起诉状 / 仲裁申请书 / 诉状」的文书
+#   不算材料（#151 评审）。扫描件的 OCR 文本另存为「<原文件名去扩展名>.ocr.txt」放进来；目录旁有
+#   inspect.py 的 summary.md 时，会检查扫描件是否都补了 OCR，没补的在结果里提示、「材料外事实」降为「无法判断」。
 #   --fake：不调用模型，按文件里的回答输出（测试用）；不加则调用 DeepSeek（DEEPSEEK_API_KEY），会产生费用，
 #   调用前先征得用户同意。只调用国内模型服务。
 import importlib.util
@@ -15,6 +17,9 @@ from pathlib import Path
 
 CATEGORIES = ("抽取错误", "写法不同", "材料外事实", "无法判断")
 EVIDENCE_MISSING = "依据未找到，需人工判断"
+_NOT_EVIDENCE_RE = re.compile(r"起诉状|仲裁申请书|诉状")
+_SUMMARY_FILE_RE = re.compile(r"^## \d+\. (.+)$")
+_WS_RE = re.compile(r"\s+")
 _SNIPPET_LINES = 8  # 每处差异附给模型的材料片段行数
 _NOISE_RE = re.compile(r"[\s|*#>，,。；;：:（）()「」“”\"'、]")
 
@@ -62,8 +67,36 @@ def diffs(lawyer_text: str, system_text: str) -> list[dict]:
     return out
 
 
-def load_materials(folder: Path) -> dict[str, str]:
-    return {p.name: p.read_text(encoding="utf-8", errors="replace") for p in sorted(folder.glob("*.txt"))}
+def load_materials(folder: Path, lawyer: Path | None = None) -> dict[str, str]:
+    """材料文本；律师诉状和其他律师文书不是证据，排除在外（否则律师稿独有的事实也能「在材料里找到」）。"""
+    skip = lawyer.resolve() if lawyer else None
+    return {
+        p.name: p.read_text(encoding="utf-8", errors="replace")
+        for p in sorted(folder.glob("*.txt"))
+        if p.resolve() != skip and not _NOT_EVIDENCE_RE.search(p.name)
+    }
+
+
+def unread_scans(folder: Path) -> list[str]:
+    """
+    inspect.py 的 summary.md（材料目录的上一级）里标为扫描件 / 部分扫描、却还没有 OCR 文本的材料：
+    全扫描件要有 <名>.txt 或 <名>.ocr.txt，部分扫描要有 <名>.ocr.txt（文本层缺了扫描页）。
+    """
+    summary = folder.parent / "summary.md"
+    if not summary.exists():
+        return []
+    missing, name = [], None
+    for line in summary.read_text(encoding="utf-8", errors="replace").splitlines():
+        m = _SUMMARY_FILE_RE.match(line)
+        if m:
+            name = m.group(1)
+            continue
+        if name and line.startswith("- PDF") and ("扫描件" in line or "部分扫描" in line):
+            stem = Path(name).stem
+            ocr = (folder / f"{stem}.ocr.txt").exists()
+            if not (ocr or ("部分扫描" not in line and (folder / f"{stem}.txt").exists())):
+                missing.append(name)
+    return missing
 
 
 def _bigrams(text: str) -> set[str]:
@@ -111,13 +144,16 @@ def ask_llm(prompt: str) -> dict:
 
 
 def check_evidence(item: dict, materials: dict[str, str]) -> dict:
-    """依据片段回材料原文核对（去空白和标点后包含即可）；找不到就不信这条依据。"""
+    """
+    依据片段回材料原文核对：只忽略空白和换行，标点、文字须与原文连续一致（#151 评审：改过标点的片段
+    不算照抄）；找不到就不信这条依据。
+    """
     item = dict(item)
     if item.get("category") not in CATEGORIES:
         item["category"] = "无法判断"
-    ev = _compact(item.get("evidence") or "")
+    ev = _WS_RE.sub("", item.get("evidence") or "")
     if item["category"] in ("抽取错误", "写法不同"):
-        found = [name for name, text in materials.items() if ev and len(ev) >= 4 and ev in _compact(text)]
+        found = [name for name, text in materials.items() if ev and len(ev) >= 4 and ev in _WS_RE.sub("", text)]
         item["evidence_ok"] = bool(found)
         if found:
             item["file"] = found[0]
@@ -126,7 +162,7 @@ def check_evidence(item: dict, materials: dict[str, str]) -> dict:
     return item
 
 
-def render(rows: list[dict], items: dict[int, dict]) -> str:
+def render(rows: list[dict], items: dict[int, dict], unread: list[str] | None = None) -> str:
     out = ["# 诉状差异 LLM 初分（仅供参考，请逐条确认或改判）", "",
            "| # | 类型 | 律师稿 | 系统稿 | LLM 初分 | 理由 | 依据 | 人工结论 |",
            "|---|---|---|---|---|---|---|---|"]
@@ -144,6 +180,12 @@ def render(rows: list[dict], items: dict[int, dict]) -> str:
         out.append("| " + " | ".join(c.replace("|", "｜").replace("\n", " ") for c in cells) + " |")
     summary = "，".join(f"{k} {v} 处" for k, v in counts.items())
     out[2:2] = [f"共 {len(rows)} 处差异：{summary}。LLM 分类只是建议，以人工结论为准。", ""]
+    if unread:
+        out[2:2] = [
+            f"> ⚠️ 材料不全：以下扫描件还没有 OCR 文本，其中的事实模型看不到，「材料外事实」一律降为「无法判断」，"
+            f"请人工核对原件：{'、'.join(unread)}",
+            "",
+        ]
     return "\n".join(out)
 
 
@@ -155,13 +197,20 @@ def main(argv: list[str]) -> None:
     lawyer, system, folder, output = (Path(p) for p in args[:4])
     rows = diffs(lawyer.read_text(encoding="utf-8-sig", errors="replace"),
                  system.read_text(encoding="utf-8", errors="replace"))
-    materials = load_materials(folder)
+    materials = load_materials(folder, lawyer)
+    unread = unread_scans(folder)
     if fake:
         answer = json.loads(Path(fake).read_text(encoding="utf-8"))
     else:
         answer = ask_llm(PROMPT.format(blocks="\n\n".join(_block(d, materials) for d in rows))) if rows else {}
     items = {int(it.get("n", 0)): check_evidence(it, materials) for it in answer.get("items") or []}
-    output.write_text(render(rows, items), encoding="utf-8")
+    if unread:
+        # 扫描件没读到文本时，「材料里找不到」不等于材料外事实
+        for it in items.values():
+            if it["category"] == "材料外事实":
+                it["category"] = "无法判断"
+                it["reason"] = f"{it.get('reason') or ''}（有扫描件未补 OCR，材料可能不全）"
+    output.write_text(render(rows, items, unread), encoding="utf-8")
     print(output)
 
 
