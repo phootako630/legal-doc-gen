@@ -17,7 +17,7 @@
 3、判令被告承担本案全部的诉讼费用。
 
 事实和理由：
-{{contract_sign_date}}，原、被告双方签订了《{{contract_title}}》（合同编号：{{contract_no}}），约定原告负责{{contract_action}}{{elevator_qty_contract}}台电梯，合同总价为¥{{contract_total_stated}}元。{{supplement_sentence}}双方对{{price_term}}、付款方式、违约责任等条款进行了约定。
+{{contract_sign_date}}，原、被告双方签订了《{{contract_title}}》（合同编号：{{contract_no}}），约定原告负责{{contract_action}}{{elevator_qty_contract}}台电梯，合同总价为¥{{contract_total_stated}}元{{contract_total_breakdown}}。{{supplement_sentence}}双方对{{price_term}}、付款方式、违约责任等条款进行了约定。
 上述合同签订后，原告积极履行合同项下的义务。依据合同{{payment_cite_location}}约定，{{payment_cite_text}}。
 案涉合同项下{{elevator_qty}}台电梯均于{{acceptance_latest_date}}前验收合格。案涉电梯{{handover_text}}{{warranty_expiry_sentence}}，被告应按合同约定支付至{{payable_ratio}}合同款¥{{payable_amount}}元，但被告仅支付了¥{{paid_amount}}元{{paid_note}}，尚欠{{debt_term}}¥{{claim_amount}}元{{unpaid_note}}未付，经原告多次催付未果。
 {{breach_clause_sentence}}被告逾期支付合同款已构成违约，被告应向原告支付{{interest_term}}（以¥{{claim_amount}}元为基数，自起诉之日起，按照{{interest_rate_basis}}计至实际付清之日止{{penalty_cap}}）。

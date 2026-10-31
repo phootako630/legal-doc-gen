@@ -1452,6 +1452,45 @@ def warranty_expiry_field(fields: dict) -> dict:
 _ACCEPTANCE_START_RE = re.compile(r"验收|合格证|检验合格")
 
 
+def _integrated_parts(fields: dict) -> tuple[float, float] | None:
+    equip = parse_amount(_node(fields, "contract_equipment_amount").get("value"))
+    install = parse_amount(_node(fields, "contract_install_amount").get("value"))
+    return (equip, install) if equip and install else None
+
+
+def _integrated_total(fields: dict) -> dict | None:
+    """
+    一体化合同只诉安装款：合同总价写设备款 + 安装款（确认单（六）第 6 题，#140），标待核实；
+    安装款与审批表合同总额不一致时出处写明差额。读不到设备款时返回 None。
+    """
+    parts = _integrated_parts(fields)
+    if not parts:
+        return None
+    equip, install = parts
+    total = round(equip + install, 2)
+    src = (
+        f"按律师规则：一体化合同写全部总价 = 设备款 {_plain_number(equip)} + 安装款 {_plain_number(install)}"
+        f"（依据：设备款：{_node(fields, 'contract_equipment_amount').get('src') or ''}；"
+        f"安装款：{_node(fields, 'contract_install_amount').get('src') or ''}）"
+    )
+    approval = parse_amount(_node(fields, "total_amount").get("value"))
+    if approval is not None and abs(approval - install) > 0.01:
+        src += f"；审批表合同总额 {_plain_number(approval)} 与合同安装款相差 {_plain_number(round(approval - install, 2))}"
+    return {"value": _plain_number(total), "src": src + "，待核实"}
+
+
+def contract_total_breakdown_field(fields: dict) -> dict:
+    """「合同总价为¥X元」后的括注「（设备款¥A元 + 安装款¥B元）」：只有一体化合同读到两项金额时才写（#140）。"""
+    parts = _integrated_parts(fields)
+    if not parts or _str_value(fields, "supplement_agreement"):
+        return {"value": "", "src": "不是一体化合同（或设备款未读到），不写括注"}
+    equip, install = parts
+    return {
+        "value": f"（设备款¥{_plain_number(equip)}元 + 安装款¥{_plain_number(install)}元）",
+        "src": "按律师规则：一体化合同括注设备款与安装款（确认单（六）第 6 题）",
+    }
+
+
 def contract_total_stated_field(fields: dict) -> dict | None:
     """
     「合同总价为¥X元」：一般就是审批表合同总额；有补充协议时写合同正文的原价
@@ -1459,9 +1498,17 @@ def contract_total_stated_field(fields: dict) -> dict | None:
     """
     total = _node(fields, "total_amount")
     if not _str_value(fields, "supplement_agreement"):
+        integrated = _integrated_total(fields)
+        if integrated:
+            return integrated
         if total.get("value") in (None, ""):
             return None
-        return {k: v for k, v in total.items() if k != "derived"}
+        node = {k: v for k, v in total.items() if k != "derived"}
+        missing = _node(fields, "contract_equipment_amount")
+        if "contract_equipment_amount" in fields and missing.get("value") in (None, ""):
+            # 一体化合同却读不到设备款：退回只写安装款，说明原因（#140）
+            node["src"] = f"{node.get('src') or ''}；{missing.get('src') or '一体化合同设备款未读到'}，只写安装款，请律师核实，待核实"
+        return node
     original = _node(fields, "contract_total_in_contract")
     if parse_amount(original.get("value")) is None:
         return {"value": None, "src": "有补充协议：合同正文的原合同总价未识别，请律师填写"}
@@ -2007,6 +2054,7 @@ _DERIVERS: list[tuple[str, Callable[[dict], dict | None], bool]] = [
     ("debt_term", debt_term_field, True),
     ("warranty_expiry_sentence", warranty_expiry_field, True),
     ("contract_total_stated", contract_total_stated_field, True),
+    ("contract_total_breakdown", contract_total_breakdown_field, True),
     ("supplement_sentence", supplement_sentence_field, True),
     ("paid_note", paid_note_field, True),
     ("unpaid_note", unpaid_note_field, True),

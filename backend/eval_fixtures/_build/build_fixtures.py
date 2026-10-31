@@ -674,6 +674,65 @@ def case_retention_not_due() -> None:
         })
 
 
+def case_integrated_contract() -> None:
+    """一体化合同只诉安装款（#140）：价格表设备款小计 + 安装款小计 = 总计 → 合同总价写全部总价并括注，
+    审批表只列安装合同总额。"""
+    case = "虚构一体化案L"
+    os.makedirs(os.path.join(ROOT, case, "materials"), exist_ok=True)
+    _approval(case, "AH9000012徐州虚构置业有限公司诉讼审批表（一体化安装）.pdf", {
+        "serial": "SS2099-000112", "title": "AH9000012徐州虚构置业有限公司虚构岭项目",
+        "contract_no": "AH9000012", "branch_path": "集团/营销网络/梧桐分公司",
+        "buyer": "徐州虚构置业有限公司", "contact": "虚构壬", "contact_phone": "13800000012",
+        "buyer_address": "徐州市鼓楼区虚构路12号", "site": "徐州市鼓楼区虚构路12号虚构岭",
+        "contract_type": "安装合同", "amount_label": "安装", "sign_date": "2024-03-06", "qty": "2", "qty_actual": "2",
+        "total": "100,000.00", "paid": "60,000.00", "unpaid": "40,000.00",
+        "gov_accept": "2024-09-20", "last_pay_date": "2024-04-01", "reason": "电梯已验收并移交，买方未支付安装尾款。",
+    })
+    _text_pdf(os.path.join(ROOT, case, "materials", "徐州虚构岭项目电梯一体化合同.pdf"), [
+        """电梯设备供货及安装一体化合同
+
+合同编号：AH9000012
+甲方：徐州虚构置业有限公司
+乙方：日立电梯（中国）有限公司梧桐分公司
+
+第一条 合同价款
+（一）设备价格
+序号  物资名称  数量  设备含税单价(元)  设备不含税总价(元)  设备税额(元)  设备总价(元)
+1  客梯  2  100000  176991.15  23008.85  200000
+小计  /  /  176991.15  23008.85  200000
+（二）安装价格
+序号  物资名称  数量  安装含税单价(元)  安装不含税总价(元)  安装税额(元)  安装总价(元)
+1  客梯  2  50000  97087.38  2912.62  100000
+小计  /  /  97087.38  2912.62  100000
+总计  /  /  274078.53  25921.47  300000
+总计金额：大写人民币叁拾万元（小写：￥300000.00元）
+
+第二条 工程概况
+工程地点：徐州市鼓楼区虚构路12号虚构岭。乙方负责供货并安装客梯2台。""",
+        """第三条 付款方式
+3.1 设备款由甲方按供货进度支付。
+3.2 安装款：甲方在安装前支付安装总价的60%；电梯经技术监督部门验收合格后30日内付清全部安装款。
+
+第四条 违约责任
+甲方逾期付款的，应向乙方支付逾期付款利息。
+
+第五条 争议解决
+因本合同发生的争议，双方协商不成的，向工程所在地人民法院提起诉讼。
+
+（以下无正文）
+甲方（盖章）：徐州虚构置业有限公司
+乙方（盖章）：日立电梯（中国）有限公司梧桐分公司
+签订日期：2024年3月8日""",
+    ])
+    for i, code in enumerate(["31103203202400000121", "31103203202400000122"], start=1):
+        _report(case, f"电梯监督检验报告{i}.pdf", {
+            "report_no": f"XG-DTJ-2024-92{i:02d}", "user": "徐州虚构置业有限公司",
+            "installer": "日立电梯（中国）有限公司梧桐分公司", "device_code": code,
+            "inspect_date": "2024年9月13日", "approve_date": "2024年9月20日",
+            "site": "徐州市鼓楼区虚构路12号虚构岭", "model": "HGP",
+        })
+
+
 if __name__ == "__main__":
     case_install_scanned()
     case_sales_arbitration()
@@ -685,4 +744,5 @@ if __name__ == "__main__":
     case_strategic_not_uploaded()
     case_stop_after_first_batch()
     case_retention_not_due()
+    case_integrated_contract()
     print("已生成：", ", ".join(sorted(n for n in os.listdir(ROOT) if not n.startswith(("_", ".")) and os.path.isdir(os.path.join(ROOT, n)))))

@@ -50,6 +50,7 @@ REVIEW_FIELD_KEYS = (
     "contract_no", "contract_title", "document_kind", "contract_type", "contract_party_b",
     "contract_party_a", "contract_sign_date", "elevator_qty_contract", "elevator_qty",
     "elevator_qty_vge", "total_amount", "supplement_agreement", "contract_total_in_contract",
+    "contract_equipment_amount", "contract_install_amount",
     "contract_total_stated", "supplement_sentence", "paid_amount", "unpaid_amount", "claim_amount", "paid_note",
     "unpaid_note", "debt_term", "payable_amount", "acceptance_latest_date", "retention_ratio",
     "retention_clause_text", "retention_unpaid_amount", "payable_ratio", "handover_text",

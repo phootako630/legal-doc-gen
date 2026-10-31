@@ -222,6 +222,7 @@ _OPTIONAL_KEYS = {
     "penalty_cap",
     "warranty_expiry_sentence",  # 欠款含质保金且质保期已届满时才写（确认单（五）第 7 题）
     "supplement_sentence",  # 有补充协议时才写（确认单（五）第 8 题）
+    "contract_total_breakdown",  # 一体化合同括注设备款 + 安装款（确认单（六）第 6 题）
 }
 
 # 约定仲裁时整篇改为仲裁申请书（律师补充确认单第 6 题）。只替换模板的固定文字，不动填入的值；

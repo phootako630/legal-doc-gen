@@ -177,6 +177,111 @@ def apply_dual_contract_amounts(fields: dict, files: list[dict]) -> None:
     }
 
 
+# 一体化合同的价格表（确认单（六）第 6 题，#140）：表头「设备…总价 / 安装…总价」之后的第一行「小计」
+_PRICE_HEAD_RE = re.compile(r"(设备|安装)[^|\n]{0,4}总价")
+_SUBTOTAL_RE = re.compile(r"小\s*计")
+_GRAND_TOTAL_RE = re.compile(r"总\s*计|合\s*计")
+_ROW_BREAK_RE = re.compile(r"序\s*号|小\s*计|总\s*计|合\s*计")
+_ROW_NUM_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+INTEGRATED_KEYS = ("contract_equipment_amount", "contract_install_amount")
+
+
+def _row_amount(lines: list[str], i: int, start: int) -> float | None:
+    """
+    「小计 / 总计」一行的含税总价：取行内能由另两个数相加得到的数（含税总价 = 不含税 + 税额），
+    没有这样的数取最大的。表格识别成每格一行时往下最多读 8 行，遇到下一行表头 / 小计为止。
+    """
+    nums = [parse_amount(n) for n in _ROW_NUM_RE.findall(lines[i][start:])]
+    if len(nums) < 2:  # 一行里不够：每格一行
+        for line in lines[i + 1 : i + 9]:
+            if _ROW_BREAK_RE.search(line) or _PRICE_HEAD_RE.search(line):
+                break
+            nums += [parse_amount(n) for n in _ROW_NUM_RE.findall(line)]
+    nums = [n for n in nums if n]
+    for x in nums:
+        if any(abs(a + b - x) <= 0.01 for j, a in enumerate(nums) for b in nums[j + 1 :] if a != x and b != x):
+            return x
+    return max(nums) if nums else None
+
+
+def find_integrated_prices(f: dict) -> dict[str, tuple[float, int | None]]:
+    """合同价格表里的设备款小计、安装款小计与总计：{"设备" / "安装" / "总计": (金额, 页码)}。"""
+    pages = f.get("pages") or [{"page": None, "text": f.get("text") or ""}]
+    found: dict[str, tuple[float, int | None]] = {}
+    kind = None
+    for pg in pages:
+        lines = (pg.get("text") or "").replace("|", " ").splitlines()
+        for i, line in enumerate(lines):
+            head = _PRICE_HEAD_RE.findall(line)
+            if head:
+                kind = head[-1]
+                continue
+            m = _SUBTOTAL_RE.search(line)
+            if m and kind and kind not in found:
+                amount = _row_amount(lines, i, m.end())
+                if amount:
+                    found[kind] = (amount, pg.get("page"))
+                continue
+            m = _GRAND_TOTAL_RE.search(line)
+            if m and "设备" in found and "安装" in found and "总计" not in found:
+                amount = _row_amount(lines, i, m.end())
+                if amount:
+                    found["总计"] = (amount, pg.get("page"))
+    return found
+
+
+def _is_integrated(files: list[dict]) -> bool:
+    """审批表或合同的文件名 / 开头写着「一体化」。"""
+    return any(
+        f.get("identified_type") in ("审批表", "合同")
+        and "一体化" in f"{f.get('filename', '')}{(f.get('text') or '')[:200]}"
+        for f in files
+    )
+
+
+def apply_integrated_contract_amounts(fields: dict, files: list[dict]) -> None:
+    """
+    一体化合同（设备与安装签在同一份合同里）只诉安装款时，起诉状合同总价写全部总价并括注
+    「设备款 + 安装款」（确认单（六）第 6 题，#140）：由代码从合同价格表读设备款、安装款小计，
+    并核对两者之和等于表中总计。读到即记 contract_equipment_amount / contract_install_amount；
+    是一体化合同却读不全或对不上时记下原因（设备款 value 为空），由派生字段退回只写安装款。
+    律师改过的不动。
+    """
+    if any(str((fields.get(k) or {}).get("src") or "").startswith("律师") for k in INTEGRATED_KEYS):
+        return
+    for f in files:
+        if f.get("identified_type") != "合同":
+            continue
+        found = find_integrated_prices(f)
+        if "设备" not in found or "安装" not in found:
+            continue
+        name = f.get("filename", "合同")
+        ocr = "（OCR识别，请核实）" if f.get("is_scanned") else ""
+        channel = {"channel": "ocr"} if ocr else {}
+        (equip, ep), (install, ip) = found["设备"], found["安装"]
+        grand = found.get("总计")
+        if grand and abs(equip + install - grand[0]) > 0.01:
+            fields["contract_equipment_amount"] = {
+                "value": None,
+                "src": f"《{name}》价格表设备款小计 {equip:g} + 安装款小计 {install:g} 与总计 {grand[0]:g} 不符，请律师核实",
+            }
+            return
+        for key, amount, page, label in (
+            ("contract_equipment_amount", equip, ep, "设备"),
+            ("contract_install_amount", install, ip, "安装"),
+        ):
+            where = f"第{page}页" if page else ""
+            fields[key] = {
+                "value": amount, "src": f"《{name}》{where}价格表{label}总价「小计」{ocr}", **channel,
+                **({"page": page} if page else {}),
+            }
+        return
+    if _is_integrated(files):
+        fields["contract_equipment_amount"] = {
+            "value": None, "src": "一体化合同，但合同价格表里的设备款 / 安装款小计未读到",
+        }
+
+
 def apply_acceptance_count(fields: dict, files: list[dict]) -> None:
     """用代码计数覆盖 LLM 给的验收口径台数；数不出来则保留 LLM 的值。"""
     counted = count_acceptance_units(files)
