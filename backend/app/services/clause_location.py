@@ -3,7 +3,7 @@
 #   - 细化到子项：条款原文在页里前面紧跟子项编号（「12.1 所有因本合同……」），而位置只写到条（「第十二条」
 #     或「第12条」），且编号对得上（十二 ↔ 12）→「第12.1条」；
 #   - 中文数字条号：合同自己用阿拉伯数字编子项（行首「6.1」）或正文写「第6条」时，「第六条」→「第6条」。
-# 编号对不上、找不到原文时不改；原值留在出处里。律师改过的不动。
+# 只认条款原文出处那份文件（与那一页）；编号对不上、原文找不到或命中不止一处时不改；原值留在出处里。律师改过的不动。
 from __future__ import annotations
 
 import re
@@ -17,42 +17,61 @@ CLAUSE_PAIRS = (
 )
 _ARTICLE_RE = re.compile(r"^第\s*([一二三四五六七八九十两\d]{1,4})\s*条$")
 _SRC_FILE_RE = re.compile(r"《([^》]+)》")
+_SRC_PAGE_RE = re.compile(r"》第(\d+)页")
 _NOISE_RE = re.compile(r"[\s|*#>]|<[^>]+>")
-_PROBE_LEN = 12  # 用条款原文开头这么多个字回页里定位
+_PROBE_LEN = 30  # 用条款原文开头这么多个字回页里定位（不足则用全文），须唯一命中
+_SUB_AT_LINE_START_RE = re.compile(r"(\d{1,2}[.．]\d{1,2})[、.．:：]?$")
 
 
 def _compact(text: str) -> str:
     return _NOISE_RE.sub("", text or "")
 
 
-def _candidate_files(files: list[dict], src: str) -> list[dict]:
+def _source_pages(files: list[dict], src: str) -> list[dict] | None:
+    """
+    条款原文出处指向的那份文件（出处写了页码时只取那一页）；《文件名》对不上任何上传文件时返回 None，
+    不拿别的合同当依据（#147 评审）。
+    """
     m = _SRC_FILE_RE.search(src)
-    named = [f for f in files if m and f.get("filename") == m.group(1)]
-    return named or [f for f in files if f.get("identified_type") in ("合同", "战略合同")]
+    f = next((f for f in files if m and f.get("filename") == m.group(1)), None)
+    if f is None:
+        return None
+    pages = f.get("pages") or [{"page": None, "text": f.get("text") or ""}]
+    page = _SRC_PAGE_RE.search(src)
+    if page:
+        pages = [p for p in pages if p.get("page") == int(page.group(1))] or pages
+    return pages
 
 
-def _sub_number_before(files: list[dict], clause: str) -> str | None:
-    """条款原文在页里前面紧跟的子项编号（「12.1」）；找不到返回 None。"""
+def _sub_number_before(pages: list[dict], clause: str) -> str | None:
+    """
+    条款原文在页里前面紧跟、且位于行首的子项编号（「12.1」）。原文开头须在这些页里只命中一处，
+    否则（如 12.1、12.2 开头相同）不判断，返回 None（#147 评审）。
+    """
     probe = _compact(clause)[:_PROBE_LEN]
     if len(probe) < 6:
         return None
-    for f in files:
-        for pg in f.get("pages") or [{"text": f.get("text") or ""}]:
-            page = _compact(pg.get("text") or "")
-            at = page.find(probe)
-            if at < 0:
-                continue
-            m = re.search(r"(\d{1,2}[.．]\d{1,2})[、.．:：]?$", page[max(at - 10, 0) : at])
-            if m:
-                return m.group(1).replace("．", ".")
-    return None
+    hits: list[str | None] = []
+    for pg in pages:
+        lines = [_compact(line) for line in (pg.get("text") or "").splitlines()]
+        flat, starts = "", set()
+        for line in lines:
+            starts.add(len(flat))
+            flat += line
+        at = flat.find(probe)
+        while at >= 0:
+            m = _SUB_AT_LINE_START_RE.search(flat[max(at - 10, 0) : at])
+            begin = at - len(m.group(0)) if m else -1
+            hits.append(m.group(1).replace("．", ".") if m and begin in starts else None)
+            at = flat.find(probe, at + 1)
+    return hits[0] if len(hits) == 1 else None
 
 
-def _uses_arabic(files: list[dict], n: int) -> bool:
-    """合同自己用阿拉伯数字写这一条：行首有「n.1」这样的子项，或正文写着「第n条」。"""
+def _uses_arabic(pages: list[dict], n: int) -> bool:
+    """同一份合同自己用阿拉伯数字写这一条：行首有「n.1」这样的子项，或正文写着「第n条」。"""
     sub = re.compile(rf"(?m)^\s*(?:\|\s*)?{n}[.．]\d")
     art = re.compile(rf"第\s*{n}\s*条")
-    return any(sub.search(f.get("text") or "") or art.search(f.get("text") or "") for f in files)
+    return any(sub.search(p.get("text") or "") or art.search(p.get("text") or "") for p in pages)
 
 
 def refine_clause_locations(fields: dict, files: list[dict]) -> None:
@@ -68,11 +87,15 @@ def refine_clause_locations(fields: dict, files: list[dict]) -> None:
         n = _cn_int(m.group(1)) if m else None
         if not n:
             continue
-        candidates = _candidate_files(files, str(text.get("src") or ""))
-        sub = _sub_number_before(candidates, str(text["value"]))
+        src = str(text.get("src") or "")
+        pages = _source_pages(files, src)
+        if pages is None:
+            continue  # 出处对不上上传文件：不确定，不改
+        sub = _sub_number_before(pages, str(text["value"]))
+        whole = _source_pages(files, re.sub(r"》第\d+页", "》", src)) or pages
         if sub and int(sub.split(".")[0]) == n:
             value, why = f"第{sub}条", f"{label}原文前的子项编号为「{sub}」"
-        elif not m.group(1).isdigit() and _uses_arabic(candidates, n):
+        elif not m.group(1).isdigit() and _uses_arabic(whole, n):
             value, why = f"第{n}条", "合同用阿拉伯数字编条款"
         else:
             continue
