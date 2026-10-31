@@ -307,6 +307,22 @@ def check_strategic_dispute(dispute: object, strategic_ref: bool) -> ValidationC
     )
 
 
+def check_strategic_original(from_supplement: bool) -> ValidationCheck:
+    """争议条款取自战略合作协议的补充协议（#141）：琥珀色提醒上传战略合作合同原文，不算冲突。"""
+    key = "strategic_original"
+    related = ["dispute_clause_location", "dispute_clause_text"]
+    if not from_supplement:
+        return ValidationCheck(key, True, "争议条款未取自战略合作协议的补充协议。", related, applicable=False)
+    return ValidationCheck(
+        key,
+        True,
+        "争议条款取自战略合作协议的补充协议：律师要求引用战略合作合同原文条款，请上传原文；"
+        "补充协议只是到期后对条款的再确认，原文条款号可能不同。",
+        related,
+        needs_review=True,
+    )
+
+
 def check_materials(missing: list[str], note: str) -> ValidationCheck:
     """材料是否齐全（缺什么由 services/materials.py 按文件类型判定）：缺了只提醒，不算冲突。"""
     key = "materials"
@@ -347,6 +363,11 @@ def run_all_checks(fields: dict) -> list[ValidationCheck]:
         check_strategic_dispute(
             _field_value(fields, "dispute_clause_text"),
             bool((fields.get("dispute_clause_text") or {}).get("strategic_ref"))
+            if isinstance(fields.get("dispute_clause_text"), dict)
+            else False,
+        ),
+        check_strategic_original(
+            bool((fields.get("dispute_clause_text") or {}).get("strategic_supplement"))
             if isinstance(fields.get("dispute_clause_text"), dict)
             else False,
         ),

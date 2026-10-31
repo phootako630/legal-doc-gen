@@ -405,6 +405,74 @@ STRATEGIC_CLAUSE_KEYS = frozenset({
     "retention_clause_text",
 })
 STRATEGIC_LABEL = "战略合同"
+# 战略合作合同的补充协议只是到期后对条款的再确认，引用以原文条款为准（确认单（六）第 5 题，#141）
+_STRATEGIC_SUPPLEMENT_RE = re.compile(r"补充协议|补充合同")
+STRATEGIC_ORIGINAL_NOTE = "律师要求引用战略合作合同原文条款，请上传原文"
+
+
+def is_strategic_supplement(f: dict) -> bool:
+    """战略类材料里的补充协议：文件名或开头标题写着「补充协议 / 补充合同」。"""
+    return f.get("identified_type") == "战略合同" and bool(
+        _STRATEGIC_SUPPLEMENT_RE.search(f"{f.get('filename', '')}{(f.get('text') or '')[:100]}")
+    )
+
+
+def _strategic_names(files: list[dict], supplement: bool) -> list[str]:
+    return [
+        f.get("filename", "") for f in files
+        if f.get("identified_type") == "战略合同" and is_strategic_supplement(f) == supplement
+    ]
+
+
+def _main_ref_src(files: list[dict]) -> str:
+    """主合同里「争议……按战略合同执行」转引句所在页的出处；找不到时标待核实（#146 评审）。"""
+    for f in files:
+        if f.get("identified_type") != "合同":
+            continue
+        for pg in f.get("pages") or [{"page": None, "text": f.get("text") or ""}]:
+            if STRATEGIC_DISPUTE_REF_RE.search(_TAG_RE.sub("", pg.get("text") or "")):
+                where = f"第{pg['page']}页" if pg.get("page") else ""
+                ocr = "（OCR识别，请核实）" if f.get("is_scanned") else ""
+                return f"《{f.get('filename', '合同')}》{where}争议解决转引战略合同{ocr}"
+    return "主合同争议解决转引战略合同的条款，未在主合同原文定位到转引句，待核实"
+
+
+def prefer_strategic_original(fields: dict, files: list[dict]) -> None:
+    """
+    初次抽取后：争议条款的内容、位置或仲裁机构取自战略合作协议的补充协议、而原文也上传了时，
+    把取自补充协议的各项分别清空，交给按需读取先读原文（按需读取原文在前，原文没有争议条款时才轮到
+    补充协议）。位置里主合同的转引条款号保留，出处改到主合同转引句所在页（#146 评审）。
+    """
+    supplements, originals = _strategic_names(files, True), _strategic_names(files, False)
+    if not (supplements and originals):
+        return
+    note = "取自战略合作协议的补充协议，原文也已上传，以原文条款为准（确认单（六）第 5 题），待从原文读取"
+    if _from_files(fields.get("dispute_clause_text"), supplements):
+        fields["dispute_clause_text"] = {"value": None, "src": f"争议条款{note}", "strategic_ref": True}
+    if _from_files(fields.get("arbitration_institution"), supplements):
+        fields["arbitration_institution"] = {"value": None, "src": f"仲裁机构{note}"}
+    loc = fields.get("dispute_clause_location")
+    if _from_files(loc, supplements):
+        main = str(loc.get("value") or "").split(f"及{STRATEGIC_LABEL}")[0]
+        fields["dispute_clause_location"] = (
+            {"value": main, "src": _main_ref_src(files)}
+            if main and not main.startswith(STRATEGIC_LABEL)
+            else {"value": None, "src": f"争议条款位置{note}"}
+        )
+
+
+def mark_strategic_supplement(fields: dict, files: list[dict]) -> None:
+    """争议条款最终取自补充协议（原文没上传或原文里没读到）：照用，出处提醒上传原文并标待核实。"""
+    supplements = _strategic_names(files, True)
+    text = fields.get("dispute_clause_text")
+    keys = ("dispute_clause_text", "dispute_clause_location")
+    if not (supplements and isinstance(text, dict) and any(_from_files(fields.get(k), supplements) for k in keys)):
+        return
+    text["strategic_supplement"] = True
+    for key in ("dispute_clause_text", "dispute_clause_location"):
+        node = fields.get(key)
+        if isinstance(node, dict) and node.get("value") and STRATEGIC_ORIGINAL_NOTE not in str(node.get("src") or ""):
+            node["src"] = f"{node.get('src') or ''}；条款取自战略合作协议的补充协议，{STRATEGIC_ORIGINAL_NOTE}，待核实"
 
 
 # 从主合同原文补抽转引句用（#126）：OCR 输出常是 HTML，列表编号丢在 <li> 里

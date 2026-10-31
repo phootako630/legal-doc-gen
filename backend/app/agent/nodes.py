@@ -45,6 +45,9 @@ from app.services.extraction import (
     apply_rule_guards,
     apply_strategic_dispute_ref,
     apply_strategic_guards,
+    is_strategic_supplement,
+    mark_strategic_supplement,
+    prefer_strategic_original,
     build_combined_text,
     enrich_provenance,
     format_checks_for_llm,
@@ -319,6 +322,8 @@ async def extract_node(state: GraphState) -> dict:
     enrich_provenance(fields, state.get("files", []))
     # 锚定可能把出处改成实际命中的战略合同：按实际来源再把关一次（#56 评审）
     apply_strategic_guards(fields, state.get("files", []))
+    # 争议条款取自战略合作协议的补充协议、原文也上传了：清空，按需读取先读原文（#141）
+    prefer_strategic_original(fields, state.get("files", []))
     return {"extracted_fields": fields}
 
 
@@ -336,6 +341,8 @@ async def validate_node(state: GraphState) -> dict:
     fields = copy.deepcopy(state["extracted_fields"])
     # 一体化合同的设备款 / 安装款：等按需 OCR 补读完合同各页再从价格表读（#140）
     apply_integrated_contract_amounts(fields, state.get("files", []))
+    # 争议条款最终取自战略合作协议的补充协议：提醒上传原文（#141）
+    mark_strategic_supplement(fields, state.get("files", []))
     # 派生字段（逾期利息标准、管辖法院辖区）进审核页，律师可见可改
     apply_derived_fields(fields)
     checks = _all_checks(state, fields)
@@ -379,7 +386,8 @@ def _clause_ocr_targets(files: list[dict]) -> list[dict]:
         if f.get("identified_type") == "战略合同"
         and ((f.get("is_scanned") and f.get("file_id")) or (not f.get("is_scanned") and f.get("text")))
     ]
-    return [f for f in scanned if f.get("identified_type") == "合同"] + strategic
+    # 战略合作合同原文排在其补充协议前：引用以原文条款为准（#141）
+    return [f for f in scanned if f.get("identified_type") == "合同"] + sorted(strategic, key=is_strategic_supplement)
 
 
 def _is_missing(fields: dict, key: str) -> bool:
