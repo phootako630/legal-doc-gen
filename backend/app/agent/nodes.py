@@ -34,6 +34,7 @@ from app.services.complaint_renderer import fill_status
 from app.services.conflict_options import conflict_options
 from app.services.doc_search import locate_clause_bodies
 from app.services.equipment_list import count_vge_units
+from app.services.clause_location import refine_clause_locations
 from app.services.extraction import (
     apply_acceptance_count,
     apply_acceptance_date,
@@ -339,6 +340,8 @@ def _all_checks(state: GraphState, fields: dict) -> list[ValidationCheck]:
 async def validate_node(state: GraphState) -> dict:
     """确定性校验：有冲突则 interrupt 问律师，resume 后应用决定并复核。"""
     fields = copy.deepcopy(state["extracted_fields"])
+    # 条款号写法兜底：「第十二条」→ 原文前子项「第12.1条」、合同用阿拉伯数字时「第六条」→「第6条」（#142）
+    refine_clause_locations(fields, state.get("files", []))
     # 一体化合同的设备款 / 安装款：等按需 OCR 补读完合同各页再从价格表读（#140）
     apply_integrated_contract_amounts(fields, state.get("files", []))
     # 争议条款最终取自战略合作协议的补充协议：提醒上传原文（#141）
