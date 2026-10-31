@@ -85,6 +85,7 @@ export interface ExtractedFields {
   total_amount: FieldValue;
   paid_amount: FieldValue;
   unpaid_amount: FieldValue;
+  claim_amount?: FieldValue; // 派生：诉请金额（质保金未到期时只诉已到期部分，#138）
   amount_currency: FieldValue;
   acceptance_latest_date: FieldValue;
   payment_clause_location: FieldValue;

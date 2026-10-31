@@ -819,7 +819,10 @@ def _penalty_from_ratio(fields: dict, text: str) -> tuple[float, str] | None:
         return None
     base_word, pct = m.group(1), float(m.group(2))
     base_key = _ratio_base_key(base_word)
-    base = parse_amount(_node(fields, base_key).get("value"))
+    # 「欠款的X%」按本次诉请的欠款算（质保金未到期时只含已到期部分，#138）
+    base = claim_amount_value(fields)[0] if base_key == "unpaid_amount" else parse_amount(
+        _node(fields, base_key).get("value")
+    )
     if base is None:
         return None
     label = "未付金额" if base_key == "unpaid_amount" else "合同总价"
@@ -1209,6 +1212,55 @@ def _amount_parts(fields: dict) -> tuple[float | None, float | None, float | Non
     )
 
 
+def claim_amount_value(fields: dict) -> tuple[float | None, str | None]:
+    """
+    诉请金额（确认单（六）第 1 题选 A）：质保期未届满时只诉已到期部分 = 合同总价 × 支付至比例 − 已付。
+    支付至比例低于 100%（付款节点或律师在质保金断点选定）、且算出的到期部分少于审批表「未付款金额」时
+    采用到期部分，返回 (金额, 说明)；否则就是审批表未付款，说明为 None。律师改过诉请金额时以律师为准。
+    """
+    node = fields.get("claim_amount")
+    if _lawyer_edited(node):
+        return parse_amount(node.get("value")), None
+    total, paid, unpaid = _amount_parts(fields)
+    if unpaid is None:
+        return None, None
+    ratio = parse_percent(_str_value(fields, "payable_ratio"))
+    expiry = _warranty_expiry_date(fields)
+    if total and paid is not None and ratio is not None and ratio < 100:
+        due = round(total * ratio / 100 - paid, 2)
+        if 0 < due < unpaid - 0.01:
+            note = (
+                f"按律师规则：质保期未届满只诉已到期部分，合同总价 × {ratio:g}% − 已付 = {_plain_number(due)}；"
+                f"审批表未付款 {_plain_number(unpaid)}，其中 {_plain_number(unpaid - due)} 未到期不诉"
+            )
+            if expiry and expiry <= _today():
+                note += f"；按推算质保期已于 {expiry.year}年{expiry.month}月{expiry.day}日届满，请核对支付至比例"
+            return due, note + "，待核实"
+    if ratio is not None and ratio >= 100 and _lawyer_edited(fields.get("payable_ratio")):
+        return unpaid, None  # 律师选定支付至 100%：全额诉请，不再扣质保金
+    undue = undue_retention(fields)
+    if undue:
+        # 支付至比例没对上节点（或还没定）时，直接扣掉未到期的质保金
+        due = round(unpaid - undue, 2)
+        return due, (
+            f"按律师规则：质保期未届满只诉已到期部分，审批表未付款 {_plain_number(unpaid)} − 未付质保金 "
+            f"{_plain_number(undue)}（质保期至 {expiry.year}年{expiry.month}月{expiry.day}日才届满）"
+            f" = {_plain_number(due)}，待核实"
+        )
+    return unpaid, None
+
+
+def claim_amount_field(fields: dict) -> dict | None:
+    """诉请第 1 项、利息基数与「尚欠…¥X元」写的金额（#138）：默认就是审批表未付款。"""
+    amount, note = claim_amount_value(fields)
+    if amount is None:
+        return None
+    if note is None:
+        node = _node(fields, "unpaid_amount")
+        return {k: v for k, v in node.items() if k != "derived"}
+    return {"value": _plain_number(amount), "src": note}
+
+
 def _plain_number(num: float) -> str:
     """金额 / 比例的数字写法：到分，去掉多余尾零（256266.80 → 256266.8）。"""
     return f"{num:.2f}".rstrip("0").rstrip(".")
@@ -1219,7 +1271,8 @@ def _ratio_mode(fields: dict) -> bool | None:
     第三轮确认单第 6 题：已付 + 欠款 = 合同总价 → 写「占合同款的 X%」（True）；
     不等（如尚有未到期的质保金）→ 写算式「（到期金额-已付）」（False）。已付或欠款缺失 → None。
     """
-    total, paid, unpaid = _amount_parts(fields)
+    total, paid, _ = _amount_parts(fields)
+    unpaid = claim_amount_value(fields)[0]
     if paid is None or unpaid is None:
         return None
     return total is not None and total > 0 and abs(total - paid - unpaid) <= 0.01
@@ -1234,7 +1287,8 @@ def paid_note_field(fields: dict) -> dict:
 def unpaid_note_field(fields: dict) -> dict:
     """「尚欠…¥Y元」后的括注：已付 + 欠款 ≠ 总价时写算式「（到期金额-已付）」，否则不写比例。"""
     mode = _ratio_mode(fields)
-    total, paid, unpaid = _amount_parts(fields)
+    total, paid, _ = _amount_parts(fields)
+    unpaid = claim_amount_value(fields)[0]
     if mode is None or paid is None or unpaid is None:
         return {"value": "", "src": "已付或欠款金额缺失，不写比例 / 算式"}
     if mode and total:
@@ -1249,9 +1303,10 @@ def unpaid_note_field(fields: dict) -> dict:
 def payable_amount_field(fields: dict) -> dict | None:
     """
     「被告应按合同约定支付至100%合同款¥X元」的金额（确认单（五）第 5 题）：
-    X = 已付 + 欠款（本次起诉已到期的合同款）。支付至 100% 时应等于合同总价，不等标待核实。
+    X = 已付 + 欠款（本次起诉已到期的合同款；欠款按诉请金额，#138）。支付至 100% 时应等于合同总价，不等标待核实。
     """
-    total, paid, unpaid = _amount_parts(fields)
+    total, paid, _ = _amount_parts(fields)
+    unpaid = claim_amount_value(fields)[0]
     if paid is None or unpaid is None:
         return None
     due = paid + unpaid
@@ -1267,8 +1322,10 @@ def debt_term_field(fields: dict) -> dict:
     诉请第 1 项「判令被告向原告支付___¥X元」（确认单（五）第 9 题）：
     已付 + 欠款 = 合同总价 →「剩余合同款」；否则「到期合同款」。
     已付 + 欠款大于合同总价（可能调过价 / 结算价不同）或金额缺失时，标待核实交律师判断。
+    欠款按诉请金额（质保金未到期只诉到期部分时为「到期合同款」，#138）。
     """
-    total, paid, unpaid = _amount_parts(fields)
+    total, paid, _ = _amount_parts(fields)
+    unpaid = claim_amount_value(fields)[0]
     if total is None or paid is None or unpaid is None:
         return {"value": "剩余合同款", "src": "合同总价、已付或欠款金额缺失，按「剩余合同款」写，待核实"}
     diff = paid + unpaid - total
@@ -1286,6 +1343,19 @@ def _retention_in_debt(fields: dict) -> bool:
     """审批表「未付款项构成」里质保金大于 0：本次欠款含质保金。"""
     amount = parse_amount(_str_value(fields, "retention_unpaid_amount"))
     return amount is not None and amount > 0.005
+
+
+def _warranty_expiry_date(fields: dict) -> date | None:
+    """最晚验收合格日 + 质保期（只认自验收起算的质保期）；推不出返回 None。"""
+    accepted = parse_date(_str_value(fields, "acceptance_latest_date"))
+    m = _PERIOD_TEXT_RE.search(_str_value(fields, "warranty_period") or "")
+    n = _cn_int(m.group(1)) if m else None
+    if not accepted or not n:
+        return None
+    start = str(_node(fields, "warranty_period").get("src") or "") + (_str_value(fields, "warranty_period") or "")
+    if _NON_ACCEPTANCE_START_RE.search(start) and not _ACCEPTANCE_START_RE.search(start):
+        return None
+    return _add_months(date(*accepted), n * 12 if m.group(2) == "年" else n)
 
 
 def warranty_expiry_field(fields: dict) -> dict:
@@ -1682,7 +1752,22 @@ def _payment_progress(fields: dict) -> tuple[list[PaymentStage], float, float] |
     stages = parse_payment_stages(_str_value(fields, "payment_clause_text"))
     if not stages or not total or paid is None or unpaid is None:
         return None
-    return stages, paid / total * 100, (paid + unpaid) / total * 100
+    # 未到期的质保金不算本次到期的欠款（确认单（六）第 1 题，#138）：按到期部分匹配付款节点
+    due = paid + unpaid - (undue_retention(fields) or 0)
+    return stages, paid / total * 100, due / total * 100
+
+
+def undue_retention(fields: dict) -> float | None:
+    """
+    审批表未付款里还没到期的质保金（#138）：未付质保金大于 0，且最晚验收合格日 + 质保期晚于今天时
+    返回质保金额；质保期推不出、已届满或数额不合理时返回 None（照旧，由质保金断点问律师）。
+    """
+    retention = parse_amount(_str_value(fields, "retention_unpaid_amount"))
+    unpaid = parse_amount(_node(fields, "unpaid_amount").get("value"))
+    if not retention or retention <= 0.005 or unpaid is None or retention >= unpaid - 0.005:
+        return None
+    expiry = _warranty_expiry_date(fields)
+    return retention if expiry and expiry > _today() else None
 
 
 def _stage_label(fields: dict, no: str) -> str:
@@ -1853,6 +1938,9 @@ _DERIVERS: list[tuple[str, Callable[[dict], dict | None], bool]] = [
     ("elevator_qty_contract", elevator_qty_contract_field, True),
     ("elevator_qty", elevator_qty_field, True),
     ("handover_text", handover_text_field, False),
+    # 诉请金额依赖支付至比例；违约金、措辞、算式、应付金额又依赖诉请金额（#138）
+    ("payable_ratio", payable_ratio_field, False),
+    ("claim_amount", claim_amount_field, True),
     ("interest_term", interest_term_field, True),
     ("breach_clause_sentence", breach_clause_sentence_field, False),
     ("interest_rate_basis", interest_basis_field, False),
@@ -1871,7 +1959,6 @@ _DERIVERS: list[tuple[str, Callable[[dict], dict | None], bool]] = [
     ("court_district", court_district_field, False),
     ("jurisdiction_text", jurisdiction_text_field, False),
     ("addressee", addressee_field, False),
-    ("payable_ratio", payable_ratio_field, False),
     ("payment_cite_location", payment_cite_location_field, True),
     ("payment_cite_text", payment_cite_text_field, True),
     # 依赖 payable_ratio（核对 总价 × 比例 是否等于 已付 + 欠款），放在它后面

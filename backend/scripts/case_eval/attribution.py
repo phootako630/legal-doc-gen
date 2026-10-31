@@ -29,6 +29,7 @@ CAUSES = (EXTRACT, OTHER_PAGE, OCR_SUSPECT, UNREAD, NOT_OCR, RULE)
 # 照抄材料原文：OCR 认错照样可能，照常归因
 LITERAL_DERIVED = frozenset({
     "plaintiff_name_final", "defendant_name", "elevator_qty_contract", "contract_total_stated",
+    "claim_amount",  # 通常照抄审批表未付款；质保金未到期时为计算值（#138）
 })
 # 取自《原告信息表》（不是案件材料，原文里找不到）：错了是信息表或匹配的问题，不是 OCR
 BRANCH_TABLE_DERIVED = frozenset({
