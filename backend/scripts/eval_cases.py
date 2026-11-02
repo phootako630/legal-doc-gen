@@ -32,6 +32,9 @@ expected.json：
         "interest_term": {"pending": "确认单（五）第 11 题"},  待律师确认：列出但不计分
         "contract_sign_date": {"value": "2020年7月30日", "source": "安装合同"},  选填 source：预期来源文件名（或其中一段）
         "payment_clause_location": {"value": "第5条", "review": "待核实"}  选填 review：审核页应标待核实
+        "jurisdiction_text": {"value": "…", "match": "judge", "criteria": "…"}
+                                                         交给 LLM 裁判（#90）：只用于规则拼接的句子，criteria 选填，
+                                                         默认标准见 case_eval/judge_rubrics.py；证据原文类字段不许用
       }
     }
 

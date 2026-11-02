@@ -20,8 +20,12 @@ from typing import Any
 from app.services.provenance import resolve_provenance
 from app.services.validators import parse_amount, parse_date
 from scripts.case_eval.attribution import attribute
+from scripts.case_eval.judge_rubrics import VERBATIM_FIELDS, judge_criteria
 
-MATCHES = ("text", "contains", "amount", "date", "absent")
+# judge：交给 LLM 裁判判断是否一致（#90），只用于规则拼接的句子，见 judge_rubrics.py
+MATCHES = ("text", "contains", "amount", "date", "absent", "judge")
+# 裁判接入前（#90 第 2 步）judge 字段只列出、不计分
+JUDGE_NOT_WIRED = "交给 LLM 裁判，裁判接入前暂不计分"
 
 # 结论
 CORRECT = "正确"
@@ -117,9 +121,11 @@ def _blank(raw: Any) -> bool:
     return isinstance(raw, str) and (not raw.strip() or _TO_FILL in raw)
 
 
-def parse_spec(spec: Any) -> dict[str, Any]:
-    """把 expected.json 的一项展开成 {value, match, note, pending, source, review}；
-    简写按值的类型推断比对方式。source / review 选填，不填时只比值（旧 expected.json 照常可用）。"""
+def parse_spec(spec: Any, key: str | None = None) -> dict[str, Any]:
+    """把 expected.json 的一项展开成 {value, match, note, pending, source, review, criteria, warning}；
+    简写按值的类型推断比对方式。source / review 选填，不填时只比值（旧 expected.json 照常可用）。
+    match 为 judge 时带上判断标准（criteria 或字段默认标准）；证据原文类字段不许交给裁判，
+    退回逐字比对（text）并在 warning 里说明（#90）。"""
     if not isinstance(spec, dict):
         spec = {"value": spec}
     spec = dict(spec)
@@ -129,7 +135,7 @@ def parse_spec(spec: Any) -> dict[str, Any]:
     review = spec.get("review")
     if review is not None and review not in REVIEWS:
         raise ValueError(f"review 只能写：{'/'.join(REVIEWS)}")
-    extra = {"source": source, "review": review}
+    extra = {"source": source, "review": review, "criteria": None, "warning": ""}
     if "pending" in spec:
         return {"value": spec.get("value"), "match": "text", "note": str(spec["pending"]),
                 "pending": True, **extra}
@@ -146,6 +152,12 @@ def parse_spec(spec: Any) -> dict[str, Any]:
             match = "text"
     if match not in MATCHES:
         raise ValueError(f"未知比对方式：{match}（可选 {'/'.join(MATCHES)}）")
+    if match == "judge":
+        if key in VERBATIM_FIELDS:
+            match = "text"
+            extra["warning"] = f"{key} 是证据原文类字段，必须逐字一致，不交给裁判，已按逐字比对"
+        else:
+            extra["criteria"] = judge_criteria(key or "", spec.get("criteria"))
     return {"value": value, "match": match, "note": str(spec.get("note") or ""), "pending": False,
             **extra}
 
@@ -215,12 +227,16 @@ def score_field(
 ) -> FieldResult:
     """比对单个字段。node 为系统的 FieldValue（dict）或缺失；files 为分析结束时的材料
     （含 OCR 补读的文字），填了 source 时用来回原文核对来源。"""
-    parsed = parse_spec(spec)
+    parsed = parse_spec(spec, key)
     actual, src = _actual(key, node)
     expected, match, note = parsed["value"], parsed["match"], parsed["note"]
+    if parsed["warning"]:
+        note = f"{note}；{parsed['warning']}" if note else parsed["warning"]
 
     if parsed["pending"]:
         verdict = PENDING
+    elif match == "judge":
+        verdict, note = PENDING, f"{note}；{JUDGE_NOT_WIRED}" if note else JUDGE_NOT_WIRED
     elif match == "absent":
         verdict = CORRECT if _blank(actual) else WRONG
     elif _blank(actual):
@@ -228,7 +244,7 @@ def score_field(
     else:
         verdict = CORRECT if _equal(match, expected, actual) else WRONG
     result = FieldResult(key, verdict, expected, actual, match, src, note)
-    if parsed["pending"]:
+    if parsed["pending"] or match == "judge":
         return result  # 待定字段只列出，来源与复核状态也不计
     result.shown = shown_status(key, node, conflict_keys)
 

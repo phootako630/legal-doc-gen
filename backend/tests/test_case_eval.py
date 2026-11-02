@@ -228,3 +228,34 @@ def test_as_of_pins_generation_date():
     assert derived_fields._today() != date(2025, 3, 1)
     with _as_of({}):
         assert derived_fields._today() != date(2025, 3, 1)
+
+
+def test_judge_spec_uses_default_or_custom_criteria():
+    # 规则拼接的句子可交给裁判（#90）：默认标准见 judge_rubrics.py，expected.json 可覆盖
+    from scripts.case_eval.judge_rubrics import JUDGE_CRITERIA
+
+    parsed = parse_spec({"value": "故原告向某市人民法院提起诉讼。", "match": "judge"}, "jurisdiction_text")
+    assert parsed["match"] == "judge" and parsed["criteria"] == JUDGE_CRITERIA["jurisdiction_text"]
+    custom = parse_spec({"value": "x", "match": "judge", "criteria": "法院相同即可"}, "jurisdiction_text")
+    assert custom["criteria"] == "法院相同即可"
+
+
+def test_judge_needs_criteria_for_fields_without_default():
+    with pytest.raises(ValueError, match="criteria"):
+        parse_spec({"value": "x", "match": "judge"}, "paid_note")
+    assert parse_spec({"value": "x", "match": "judge", "criteria": "算式相同"}, "paid_note")["match"] == "judge"
+
+
+def test_verbatim_field_never_judged():
+    # 证据原文类字段配成 judge：退回逐字比对并警告，不交给裁判（CLAUDE.md「证据原文保留」）
+    parsed = parse_spec({"value": "虚构置业有限公司", "match": "judge"}, "defendant_name")
+    assert parsed["match"] == "text" and "逐字" in parsed["warning"]
+    wrong = score_field("defendant_name", {"value": "虚构置业有限公司", "match": "judge"},
+                        {"value": "虚构置业公司", "src": "《合同》"})
+    assert wrong.verdict == WRONG and "逐字" in wrong.note
+
+
+def test_judge_field_listed_not_scored_until_wired():
+    r = score_field("handover_text", {"value": "已全部移交物业", "match": "judge"},
+                    {"value": "已移交给物业", "src": "按律师规则"})
+    assert r.verdict == PENDING and r.match == "judge" and "裁判" in r.note
