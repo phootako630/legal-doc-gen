@@ -159,6 +159,13 @@ def render_markdown(meta: dict[str, Any], cases: list[dict[str, Any]], changes: 
               f"系统值 {_cell(r['actual'])}）" for c, r in wrong] or ["无。"]
     lines.append("")
 
+    # expected.json 的配置警告（如不该交给 LLM 裁判的字段配成 judge）：不论结论如何都列出，免得被忽略
+    warns = [(c, r) for c in cases for r in c.get("results") or [] if r.get("warning")]
+    if warns:
+        lines += ["## 配置警告", ""]
+        lines += [f"- {c.get('title') or c['case']}：`{r['key']}`：{r['warning']}" for c, r in warns]
+        lines.append("")
+
     lines.append(f"## 与上次运行对比{f'（{prev_run}）' if prev_run else ''}")
     lines.append("")
     if not prev_run:

@@ -4,8 +4,9 @@
 # 逐字比对就判错，只能人工翻报告。裁判只回答「这两句话在法律意义上是不是一回事」。
 #
 # 边界（比裁判本身更重要）：
-#   - 只用于规则拼接的句子（JUDGE_CRITERIA 里的字段）。主体名称、合同编号、金额、日期、条款原文等
-#     证据原文类字段（VERBATIM_FIELDS）必须逐字一致，配成 judge 也不用裁判，退回逐字比对并警告。
+#   - 只用于规则拼接的句子：白名单就是 JUDGE_CRITERIA 里的字段（#152 评审：用白名单而不是黑名单，
+#     漏列的字段默认不能交给裁判）。其余字段——主体名称、编号、金额、比例、台数、日期、电话、条款原文等——
+#     必须严格比对，配成 judge 也不用裁判，退回逐字比对并在报告里警告。
 #   - 标准写清「什么算实质差异」：数字、日期、条款号、主体、法院 / 仲裁机构不同都算不一致；
 #     措辞、句式、标点、系统的「⚠️ 待核实」等标注不算。
 #   - 裁判结论单独列出，校准前不计入准确率（第 3、4 步）。
@@ -14,7 +15,8 @@ from __future__ import annotations
 # 对所有字段都适用的判断原则（第 2 步写进裁判的提示词）
 JUDGE_PRINCIPLES = (
     "你是电梯合同纠纷起诉状的核对员，判断「系统句」与「律师句」在法律意义上是否一致。",
-    "数字、金额、比例、日期、条款号、当事人、法院或仲裁机构名称，只要有一处不同就是不一致。",
+    "字段标准要求比较的内容里，数字、金额、比例、日期、条款号、当事人、法院或仲裁机构名称，只要有一处不同就是不一致；"
+    "字段标准明确说不参与比较的部分（如未欠款的付款节点）不算。",
     "措辞、句式、语序、标点、全半角不同，不算不一致；系统句里的「⚠️ 待核实」「【…待核实】」等提示语忽略。",
     "一方有、另一方没有的实质内容（如律师写了管辖依据、系统没写），算不一致。",
     "信息不足以判断时，回答「无法判断」，不要猜。",
@@ -31,8 +33,8 @@ JUDGE_CRITERIA: dict[str, str] = {
         "比例、基数、上限相同。节选范围可以不同，但不能缺少计算方式或比例。"
     ),
     "payment_cite_text": (
-        "引用的是欠款对应的同一个付款节点：付款比例、期限、前置条件（验收、移交、结算等）相同。"
-        "可以多引或少引不欠款的节点，但欠款节点的条件不能缺。"
+        "引用的是欠款对应的同一个付款节点：该节点的付款比例、期限、前置条件（验收、移交、结算等）必须相同、不能缺。"
+        "一方额外引用了不欠款的节点时，那些节点的数字不参与比较。"
     ),
     "handover_text": "电梯是否已全部移交、移交给谁（物业 / 被告 / 甲方）相同。",
     "interest_rate_basis": (
@@ -43,27 +45,14 @@ JUDGE_CRITERIA: dict[str, str] = {
     "supplement_sentence": "都写了签订补充协议，变更后的合同总价相同。",
 }
 
-# 证据原文类字段：主体、编号、金额、日期、条款原文与位置、地址（CLAUDE.md「证据原文保留」），只能逐字比对
-VERBATIM_FIELDS = frozenset({
-    "plaintiff_name_final", "plaintiff_credit_code", "plaintiff_person_in_charge", "plaintiff_address",
-    "defendant_name", "defendant_credit_code", "defendant_legal_rep", "defendant_address",
-    "contract_no", "contract_title", "contract_party_a", "contract_party_b", "contract_sign_date",
-    "total_amount", "paid_amount", "unpaid_amount", "claim_amount", "payable_amount",
-    "retention_unpaid_amount", "contract_total_stated", "contract_total_in_contract",
-    "contract_equipment_amount", "contract_install_amount", "penalty_amount",
-    "acceptance_latest_date", "penalty_start_date", "penalty_until_date",
-    "payment_clause_text", "breach_clause_text", "dispute_clause_text", "retention_clause_text",
-    "handover_clause_text", "payment_clause_location", "breach_interest_clause_location",
-    "dispute_clause_location", "payment_cite_location", "warranty_period",
-    "project_site", "delivery_place", "install_address", "contract_sign_place",
-    "arbitration_institution", "court_district", "addressee",
-})
+
+def judge_allowed(key: str | None) -> bool:
+    """白名单：只有规则拼接的句子（JUDGE_CRITERIA 里的字段）能交给裁判。"""
+    return key in JUDGE_CRITERIA
 
 
 def judge_criteria(key: str, override: str | None = None) -> str:
-    """字段的判断标准：expected.json 写了 criteria 用它，否则用默认标准；没有标准的字段不能交给裁判。"""
+    """白名单字段的判断标准：expected.json 写了 criteria 用它，否则用默认标准。"""
     if override and override.strip():
         return override.strip()
-    if key in JUDGE_CRITERIA:
-        return JUDGE_CRITERIA[key]
-    raise ValueError(f"{key} 没有默认的判断标准：配成 judge 时请在 expected.json 写 criteria")
+    return JUDGE_CRITERIA[key]

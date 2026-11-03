@@ -34,7 +34,7 @@ expected.json：
         "payment_clause_location": {"value": "第5条", "review": "待核实"}  选填 review：审核页应标待核实
         "jurisdiction_text": {"value": "…", "match": "judge", "criteria": "…"}
                                                          交给 LLM 裁判（#90）：只用于规则拼接的句子，criteria 选填，
-                                                         默认标准见 case_eval/judge_rubrics.py；证据原文类字段不许用
+                                                         只有 case_eval/judge_rubrics.py 白名单里的字段可用，其余退回逐字比对并警告
       }
     }
 
