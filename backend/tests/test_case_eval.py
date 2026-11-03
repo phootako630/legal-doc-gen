@@ -228,3 +228,55 @@ def test_as_of_pins_generation_date():
     assert derived_fields._today() != date(2025, 3, 1)
     with _as_of({}):
         assert derived_fields._today() != date(2025, 3, 1)
+
+
+def test_judge_spec_uses_default_or_custom_criteria():
+    # 规则拼接的句子可交给裁判（#90）：默认标准见 judge_rubrics.py，expected.json 可覆盖
+    from scripts.case_eval.judge_rubrics import JUDGE_CRITERIA
+
+    parsed = parse_spec({"value": "故原告向某市人民法院提起诉讼。", "match": "judge"}, "jurisdiction_text")
+    assert parsed["match"] == "judge" and parsed["criteria"] == JUDGE_CRITERIA["jurisdiction_text"]
+    custom = parse_spec({"value": "x", "match": "judge", "criteria": "法院相同即可"}, "jurisdiction_text")
+    assert custom["criteria"] == "法院相同即可"
+
+
+def test_only_allowlisted_rule_sentences_can_be_judged():
+    # 白名单（#152 评审）：电话、联系人、台数、比例、规则拼的算式等不在白名单的字段，写了 criteria 也不交给裁判
+    for key in ("plaintiff_phone", "contacts", "elevator_qty", "retention_ratio", "payable_ratio", "paid_note"):
+        parsed = parse_spec({"value": "x", "match": "judge", "criteria": "大致相同即可"}, key)
+        assert parsed["match"] == "text" and parsed["criteria"] is None and "严格比对" in parsed["warning"]
+
+
+def test_verbatim_field_never_judged():
+    # 证据原文类字段配成 judge：退回逐字比对并警告，不交给裁判（CLAUDE.md「证据原文保留」）
+    parsed = parse_spec({"value": "虚构置业有限公司", "match": "judge"}, "defendant_name")
+    assert parsed["match"] == "text" and "逐字" in parsed["warning"]
+    wrong = score_field("defendant_name", {"value": "虚构置业有限公司", "match": "judge"},
+                        {"value": "虚构置业公司", "src": "《合同》"})
+    assert wrong.verdict == WRONG and "逐字" in wrong.warning
+
+
+def test_misconfigured_judge_warning_shown_in_report(tmp_path):
+    # 退回逐字比对后结论是「正确」也要在报告里看到警告（#152 评审）
+    r = score_field("plaintiff_phone", {"value": "0755-1234", "match": "judge"}, {"value": "0755-1234", "src": "x"})
+    assert r.verdict == CORRECT
+    case = {"case": "虚构案", "title": "虚构案", "results": [r.as_dict()], "summary": {}, "quality": {},
+            "stats": {}, "pauses": []}
+    meta = {"run": "20260101-000000", "mode": "replay", "llm_model": "m", "ocr_model": "o"}
+    path = write_report(str(tmp_path), meta, [case], None)
+    body = open(path, encoding="utf-8").read()
+    assert "## 配置警告" in body and "plaintiff_phone" in body and "严格比对" in body
+
+
+def test_payment_rubric_consistent_with_principles():
+    # 付款节点标准与通用原则不冲突：非欠款节点的数字不参与比较（#152 评审）
+    from scripts.case_eval.judge_rubrics import JUDGE_CRITERIA, JUDGE_PRINCIPLES
+
+    assert "不参与比较" in JUDGE_CRITERIA["payment_cite_text"]
+    assert any("不参与比较" in p for p in JUDGE_PRINCIPLES)
+
+
+def test_judge_field_listed_not_scored_until_wired():
+    r = score_field("handover_text", {"value": "已全部移交物业", "match": "judge"},
+                    {"value": "已移交给物业", "src": "按律师规则"})
+    assert r.verdict == PENDING and r.match == "judge" and "裁判" in r.note
