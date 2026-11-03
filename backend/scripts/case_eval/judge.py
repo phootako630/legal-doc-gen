@@ -82,7 +82,7 @@ def precheck(expected: Any, actual: Any) -> tuple[str, str] | None:
     return None
 
 
-async def call_judge(messages: list[dict]) -> Any:
+async def call_judge(messages: list[dict], model: str = JUDGE_MODEL) -> Any:
     """真实调用裁判模型（DashScope 兼容接口，JSON 输出，温度 0）。"""
     from openai import AsyncOpenAI
 
@@ -92,7 +92,7 @@ async def call_judge(messages: list[dict]) -> Any:
     client = AsyncOpenAI(api_key=key, base_url=config.LLM_FALLBACK_BASE_URL,
                          timeout=config.LLM_TIMEOUT, max_retries=1)
     resp = await client.chat.completions.create(
-        model=JUDGE_MODEL,
+        model=model,
         messages=messages,
         response_format={"type": "json_object"},
         temperature=0,
@@ -101,23 +101,27 @@ async def call_judge(messages: list[dict]) -> Any:
     return resp.choices[0].message.content or ""
 
 
-async def judge_results(results: list[Any], ask: Ask) -> None:
+async def judge_one(criteria: str, expected: Any, actual: Any, ask: Ask,
+                    model: str = JUDGE_MODEL) -> tuple[str, str, str]:
+    """裁判一对句子 → (结论, 理由, 判定方)。代码能判的不问模型；出错、缓存未命中记「未裁判」。"""
+    pre = precheck(expected, actual)
+    if pre:
+        return pre[0], pre[1], BY_CODE
+    try:
+        raw = await ask(build_messages(criteria, expected, actual))
+    except CacheMiss:
+        return NOT_JUDGED, "裁判缓存未命中（严格回放不调用外部服务）", ""
+    except Exception as exc:  # noqa: BLE001 — 裁判出错只影响这一对
+        return NOT_JUDGED, f"裁判调用失败：{type(exc).__name__}: {exc}"[:200], ""
+    verdict, reason = parse_verdict(raw)
+    return verdict, reason, model
+
+
+async def judge_results(results: list[Any], ask: Ask, model: str = JUDGE_MODEL) -> None:
     """给 match == judge 的字段填上裁判结论（judge_verdict / judge_reason / judge_by），就地修改。"""
     for r in results:
         if r.match != "judge" or r.judge_verdict:
             continue
-        pre = precheck(r.expected, r.actual)
-        if pre:
-            r.judge_verdict, r.judge_reason = pre
-            r.judge_by = BY_CODE
-            continue
-        try:
-            raw = await ask(build_messages(r.criteria, r.expected, r.actual))
-        except CacheMiss:
-            r.judge_verdict, r.judge_reason = NOT_JUDGED, "裁判缓存未命中（严格回放不调用外部服务）"
-            continue
-        except Exception as exc:  # noqa: BLE001 — 裁判出错只影响这个字段
-            r.judge_verdict, r.judge_reason = NOT_JUDGED, f"裁判调用失败：{type(exc).__name__}: {exc}"[:200]
-            continue
-        r.judge_verdict, r.judge_reason = parse_verdict(raw)
-        r.judge_by = JUDGE_MODEL
+        r.judge_verdict, r.judge_reason, r.judge_by = await judge_one(
+            r.criteria, r.expected, r.actual, ask, model
+        )
