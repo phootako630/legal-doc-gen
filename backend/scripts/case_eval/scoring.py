@@ -24,8 +24,8 @@ from scripts.case_eval.judge_rubrics import judge_allowed, judge_criteria
 
 # judge：交给 LLM 裁判判断是否一致（#90），只用于规则拼接的句子，见 judge_rubrics.py
 MATCHES = ("text", "contains", "amount", "date", "absent", "judge")
-# 裁判接入前（#90 第 2 步）judge 字段只列出、不计分
-JUDGE_NOT_WIRED = "交给 LLM 裁判，裁判接入前暂不计分"
+# judge 字段的裁判结论（judge.py）单独列出，校准前（#90 第 3 步）不计分
+JUDGE_UNCALIBRATED = "交给 LLM 裁判，校准前不计分"
 
 # 结论
 CORRECT = "正确"
@@ -87,6 +87,10 @@ class FieldResult:
     silent: bool = False
     cause: str | None = None  # 错误 / 缺失字段的归因（#108，见 attribution.py）
     warning: str = ""  # expected.json 的配置警告（如不该交给裁判的字段配成 judge），报告单列
+    criteria: str = ""  # judge 字段的判断标准
+    judge_verdict: str = ""  # 裁判结论：一致 / 不一致 / 无法判断 / 未裁判（judge.py）
+    judge_reason: str = ""
+    judge_by: str = ""  # 「代码」或裁判模型名
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -104,6 +108,10 @@ class FieldResult:
             "silent": self.silent,
             "cause": self.cause,
             "warning": self.warning,
+            "criteria": self.criteria,
+            "judge_verdict": self.judge_verdict,
+            "judge_reason": self.judge_reason,
+            "judge_by": self.judge_by,
         }
 
 
@@ -236,14 +244,15 @@ def score_field(
     if parsed["pending"]:
         verdict = PENDING
     elif match == "judge":
-        verdict, note = PENDING, f"{note}；{JUDGE_NOT_WIRED}" if note else JUDGE_NOT_WIRED
+        verdict, note = PENDING, f"{note}；{JUDGE_UNCALIBRATED}" if note else JUDGE_UNCALIBRATED
     elif match == "absent":
         verdict = CORRECT if _blank(actual) else WRONG
     elif _blank(actual):
         verdict = MISSING
     else:
         verdict = CORRECT if _equal(match, expected, actual) else WRONG
-    result = FieldResult(key, verdict, expected, actual, match, src, note, warning=parsed["warning"])
+    result = FieldResult(key, verdict, expected, actual, match, src, note, warning=parsed["warning"],
+                         criteria=parsed["criteria"] or "")
     if parsed["pending"] or match == "judge":
         return result  # 待定字段只列出，来源与复核状态也不计
     result.shown = shown_status(key, node, conflict_keys)

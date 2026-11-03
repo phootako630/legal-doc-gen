@@ -19,6 +19,7 @@ from app.services import derived_fields
 from app.services.complaint_renderer import render_complaint
 from app.services.file_parser import parse_file
 from scripts.case_eval.cache import ReplayCache, patched
+from scripts.case_eval.judge import JUDGE_MODEL, call_judge, judge_results
 from scripts.case_eval.scoring import score_case, summarize, summarize_causes, summarize_quality
 
 MATERIAL_EXTS = (".pdf", ".docx", ".doc")
@@ -123,6 +124,8 @@ async def run_case(case_dir: str, mode: str = "replay", strict: bool = False) ->
         scored = score_case(
             expected["fields"], fields, await _final_files(case.run_id), _conflict_keys(case.validations)
         )
+        # 规则拼接的句子交给 LLM 裁判（#90）：结论单独列出，不改变上面的打分
+        await judge_results(scored, cache.wrap_judge(call_judge, JUDGE_MODEL))
         result["results"] = [r.as_dict() for r in scored]
         result["summary"] = summarize(scored)
         result["quality"] = summarize_quality(scored)

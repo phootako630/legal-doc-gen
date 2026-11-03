@@ -3,6 +3,7 @@
 # 拦截两处（都是 agent 实际调用外部服务的唯一入口；另把只供展示的校验说明生成换成空实现）：
 #   - app.agent.nodes.chat：DeepSeek 调用，键 = 模型 + 消息 + json_mode；
 #   - app.services.ocr_engine._ocr_image_b64：单页 OCR，键 = OCR 模型 + 页面图片。
+# 另外 eval 自己的 LLM 裁判（judge.py，#90）也经这里录制 / 回放（wrap_judge），键 = 裁判模型 + 消息。
 # 页面图片由 PyMuPDF 确定性渲染，同一份 PDF 同一页每次哈希相同。
 # 缓存里是真实案卷的识别结果，只放在服务器的案卷目录下，不进仓库。
 from __future__ import annotations
@@ -34,6 +35,8 @@ class CacheStats:
     ocr_hits: int = 0
     ocr_calls: int = 0
     llm_fallback: int = 0  # DeepSeek 不可用、由备用模型回答的次数（这些结果不录进缓存）
+    judge_hits: int = 0  # LLM 裁判（#90）
+    judge_calls: int = 0
     misses: list[str] = field(default_factory=list)  # 严格回放时未命中的请求类型
 
     def as_dict(self) -> dict[str, Any]:
@@ -43,6 +46,8 @@ class CacheStats:
             "ocr_hits": self.ocr_hits,
             "ocr_calls": self.ocr_calls,
             "llm_fallback": self.llm_fallback,
+            "judge_hits": self.judge_hits,
+            "judge_calls": self.judge_calls,
             "misses": list(self.misses),
         }
 
@@ -54,6 +59,10 @@ def _digest(obj: Any) -> str:
 
 def llm_key(messages: list[dict], json_mode: bool) -> str:
     return _digest({"model": config.DEEPSEEK_MODEL, "messages": messages, "json": json_mode})
+
+
+def judge_key(model: str, messages: list[dict]) -> str:
+    return _digest({"model": model, "messages": messages})
 
 
 def ocr_key(img_b64: str) -> str:
@@ -144,6 +153,25 @@ class ReplayCache:
             return text
 
         return ocr
+
+    def wrap_judge(self, real: Callable[[list[dict]], Any], model: str) -> Callable[[list[dict]], Any]:
+        """LLM 裁判的录制 / 回放；严格回放未命中抛 CacheMiss（judge.py 记为「未裁判」，不让案件出错）。"""
+
+        async def judge(messages: list[dict]) -> Any:
+            path = self._path("judge", judge_key(model, messages), "json")
+            cached = self._read(path)
+            if cached is not None:
+                self.stats.judge_hits += 1
+                return json.loads(cached)["result"]
+            if self.mode == "replay":
+                self._miss("裁判")
+            result = await real(messages)
+            self.stats.judge_calls += 1
+            if result:
+                self._write(path, json.dumps({"result": result}, ensure_ascii=False))
+            return result
+
+        return judge
 
 
 async def _skip_validate_prose(fields: dict, checks: list) -> tuple[str, str]:
