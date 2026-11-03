@@ -102,6 +102,7 @@ def render_markdown(meta: dict[str, Any], cases: list[dict[str, Any]], changes: 
     lines.append(
         f"模式：{meta['mode']}{'（严格回放）' if meta.get('strict') else ''} · "
         f"LLM：{meta['llm_model']} · OCR：{meta['ocr_model']}"
+        + (f" · 裁判：{meta['judge_model']}" if meta.get("judge_model") else "")
     )
     fallback = sum((c.get("stats") or {}).get("llm_fallback", 0) for c in cases)
     if fallback:
@@ -166,6 +167,8 @@ def render_markdown(meta: dict[str, Any], cases: list[dict[str, Any]], changes: 
         lines += [f"- {c.get('title') or c['case']}：`{r['key']}`：{r['warning']}" for c, r in warns]
         lines.append("")
 
+    lines += _judge_section(meta, cases)
+
     lines.append(f"## 与上次运行对比{f'（{prev_run}）' if prev_run else ''}")
     lines.append("")
     if not prev_run:
@@ -209,11 +212,48 @@ def render_markdown(meta: dict[str, Any], cases: list[dict[str, Any]], changes: 
             ]
         else:
             lines.append("计分字段全部正确。")
-        pend = [r for r in c.get("results") or [] if r["verdict"] == PENDING]
+        pend = [r for r in c.get("results") or [] if r["verdict"] == PENDING and r.get("match") != "judge"]
         if pend:
             lines += ["", "待定（不计分）：" + "；".join(f"`{r['key']}`（{r['note']}）" for r in pend)]
         lines.append("")
     return "\n".join(lines)
+
+
+def _judge_section(meta: dict[str, Any], cases: list[dict[str, Any]]) -> list[str]:
+    """LLM 裁判的结论（#90）：校准前只列出、不计入准确率；没有 judge 字段时不输出。"""
+    rows = [(c, r) for c in cases for r in c.get("results") or [] if r.get("match") == "judge"]
+    if not rows:
+        return []
+    counts: dict[str, int] = {}
+    for _, r in rows:
+        v = r.get("judge_verdict") or "未裁判"
+        counts[v] = counts.get(v, 0) + 1
+    calls = sum((c.get("stats") or {}).get("judge_calls", 0) for c in cases)
+    hits = sum((c.get("stats") or {}).get("judge_hits", 0) for c in cases)
+    lines = ["## LLM 裁判（校准前不计分）", ""]
+    judge_model = meta.get("judge_model")
+    if judge_model and judge_model == meta.get("llm_model"):
+        lines += ["> ⚠️ 裁判与抽取用的是同一个模型，结论可能偏向系统，请用 EVAL_JUDGE_MODEL 换一个。", ""]
+    # DeepSeek 不可用时抽取由备用模型回答：备用模型就是裁判时同样是自评（#153 评审）
+    fell_back = [c.get("title") or c["case"] for c in cases if (c.get("stats") or {}).get("llm_fallback")]
+    if judge_model and fell_back and judge_model == meta.get("llm_fallback_model"):
+        lines += [f"> ⚠️ 以下案件部分抽取由备用模型 {judge_model} 回答，与裁判是同一个模型，这些案件的裁判结论"
+                  f"可能偏向系统：{'、'.join(_cell(t) for t in fell_back)}", ""]
+    lines += [
+        f"共 {len(rows)} 个字段：" + "，".join(f"{k} {n}" for k, n in counts.items())
+        + f"；模型调用 {calls} 次，缓存 {hits} 次。裁判结论只供参考，校准前不计入准确率。",
+        "",
+        "| 案件 | 字段 | 裁判结论 | 判定方 | 理由 | 律师句 | 系统句 |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    lines += [
+        f"| {_cell(c.get('title') or c['case'])} | `{r['key']}` | {r.get('judge_verdict') or '未裁判'} | "
+        f"{_cell(r.get('judge_by') or '—')} | {_cell(r.get('judge_reason'))} | {_cell(r['expected'])} | "
+        f"{_cell(r['actual'])} |"
+        for c, r in rows
+    ]
+    lines.append("")
+    return lines
 
 
 def _source_check(r: dict[str, Any]) -> str:

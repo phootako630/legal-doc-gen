@@ -34,7 +34,9 @@ expected.json：
         "payment_clause_location": {"value": "第5条", "review": "待核实"}  选填 review：审核页应标待核实
         "jurisdiction_text": {"value": "…", "match": "judge", "criteria": "…"}
                                                          交给 LLM 裁判（#90）：只用于规则拼接的句子，criteria 选填，
-                                                         只有 case_eval/judge_rubrics.py 白名单里的字段可用，其余退回逐字比对并警告
+                                                         只有 case_eval/judge_rubrics.py 白名单里的字段可用，其余退回逐字比对并警告；
+                                                         裁判模型默认通义千问（EVAL_JUDGE_MODEL 覆盖，需 DASHSCOPE_API_KEY），
+                                                         结论录进 cache/judge/，报告单列，校准前不计分
       }
     }
 
@@ -74,6 +76,7 @@ from app.agent.graph import reset_graph  # noqa: E402
 from app.services import branch_registry  # noqa: E402
 from scripts.case_eval import baseline  # noqa: E402
 from scripts.case_eval.cache import MODES  # noqa: E402
+from scripts.case_eval.judge import JUDGE_MODEL  # noqa: E402
 from scripts.case_eval.report import accuracy, find_previous, write_report  # noqa: E402
 from scripts.case_eval.runner import run_case  # noqa: E402
 
@@ -146,6 +149,7 @@ def main() -> None:
         "llm_model": config.DEEPSEEK_MODEL,
         "llm_fallback_model": config.LLM_FALLBACK_MODEL,
         "ocr_model": config.QWEN_OCR_MODEL,
+        "judge_model": JUDGE_MODEL,
         "cases": [os.path.basename(d) for d in dirs],
     }
     prev = find_previous(runs_dir, run_name)
