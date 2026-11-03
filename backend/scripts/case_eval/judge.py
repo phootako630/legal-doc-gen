@@ -47,7 +47,8 @@ def build_messages(criteria: str, lawyer: Any, system: Any) -> list[dict]:
 
 
 def parse_verdict(raw: Any) -> tuple[str, str]:
-    """模型的回答 → (结论, 理由)。不是 JSON 对象、结论不在三个选项里，都按「无法判断」。"""
+    """模型的回答 → (结论, 理由)。不是 JSON 对象、结论不在三个选项里、没给理由，都按「无法判断」
+    （没有理由的结论没法复核，#153 评审）。"""
     if isinstance(raw, str):
         try:
             raw = json.loads(raw)
@@ -59,16 +60,21 @@ def parse_verdict(raw: Any) -> tuple[str, str]:
     reason = str(raw.get("reason") or "").strip()[:200]
     if verdict not in VERDICTS:
         return UNSURE, f"裁判结论不在可选项里（{verdict[:20] or '空'}）{'：' + reason if reason else ''}"
+    if not reason:
+        return UNSURE, f"裁判没有给出理由（原结论「{verdict}」），按无法判断"
     return verdict, reason
 
 
 def precheck(expected: Any, actual: Any) -> tuple[str, str] | None:
     """不需要问模型的情况；返回 None 表示要交给模型。"""
     lawyer_blank, system_blank = _blank(expected), _blank(actual)
+    # 系统句还是【待补充】：起诉状里留着待补充，不论律师写没写都算不一致（#153 评审：不能当成「两边都没有」）
+    if system_blank and actual is not None and str(actual).strip():
+        return DISAGREE, "系统句仍是【待补充】"
     if lawyer_blank and system_blank:
         return AGREE, "两边都没有这句"
     if system_blank:
-        return DISAGREE, "系统没有生成这句（或仍是【待补充】）"
+        return DISAGREE, "系统没有生成这句"
     if lawyer_blank:
         return DISAGREE, "律师没有写这句，系统写了"
     if _norm_text(expected) == _norm_text(actual):

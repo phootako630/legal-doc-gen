@@ -59,6 +59,9 @@ def test_unsure_and_malformed_answers_become_unsure():
     assert parse_verdict("一致")[0] == UNSURE
     assert parse_verdict(["一致"])[0] == UNSURE
     assert parse_verdict({"reason": "x"})[0] == UNSURE
+    # 有结论没理由：没法复核，按「无法判断」（#153 评审）
+    assert parse_verdict({"verdict": "一致"})[0] == UNSURE
+    assert parse_verdict({"verdict": "不一致", "reason": "  "})[0] == UNSURE
 
 
 def test_code_decides_identical_or_missing_without_asking():
@@ -68,6 +71,11 @@ def test_code_decides_identical_or_missing_without_asking():
     assert (r.judge_verdict, r.judge_by) == (DISAGREE, BY_CODE) and not asked
     r, asked = _judged(LAWYER, "【待补充】人民法院", {"verdict": "一致"})
     assert r.judge_verdict == DISAGREE and not asked
+    # 律师没写、系统句是【待补充】：仍是不一致，不能当「两边都没有」（#153 评审）
+    r, asked = _judged(None, "【待补充】人民法院", {"verdict": "一致"})
+    assert (r.judge_verdict, r.judge_reason) == (DISAGREE, "系统句仍是【待补充】") and not asked
+    r, _ = _judged(None, None)
+    assert r.judge_verdict == AGREE
 
 
 def test_judge_failure_marks_field_only():
@@ -77,7 +85,7 @@ def test_judge_failure_marks_field_only():
 
 def test_judge_verdict_not_counted():
     # 裁判说一致也不计入正确：校准前（第 3 步）只列出
-    r, _ = _judged(LAWYER, SYSTEM, {"reason": "", "verdict": "一致"})
+    r, _ = _judged(LAWYER, SYSTEM, {"reason": "法院相同", "verdict": "一致"})
     assert r.verdict == PENDING and summarize([r])[PENDING] == 1
     assert r.as_dict()["judge_verdict"] == AGREE
 
@@ -123,6 +131,12 @@ def test_report_lists_judge_section(tmp_path):
     # 裁判与抽取同一模型时警告
     write_report(str(tmp_path / "out"), {**meta, "judge_model": "deepseek-flash"}, [case], None)
     assert "同一个模型" in text.read_text(encoding="utf-8")
+    # 抽取改由备用模型回答、备用模型就是裁判：也警告（#153 评审）
+    fallback = {**case, "stats": {**case["stats"], "llm_fallback": 2}}
+    write_report(str(tmp_path / "out"), {**meta, "llm_fallback_model": "qwen"}, [fallback], None)
+    assert "备用模型 qwen 回答，与裁判是同一个模型" in text.read_text(encoding="utf-8")
+    write_report(str(tmp_path / "out"), {**meta, "llm_fallback_model": "qwen"}, [case], None)
+    assert "同一个模型" not in text.read_text(encoding="utf-8")
 
 
 def test_no_judge_section_without_judge_fields(tmp_path):
