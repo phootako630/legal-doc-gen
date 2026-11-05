@@ -39,6 +39,32 @@ def test_kappa_penalizes_always_agree():
     assert cohen_kappa(pairs) == pytest.approx(0.0)
 
 
+def test_kappa_undefined_when_single_category():
+    # 两边都只用「一致」：κ 分母为 0、没有定义，不能显示成完美校准（#154 评审）
+    pairs = [_p(i, "一致", "一致") for i in range(5)]
+    assert agreement(pairs) == 1.0 and cohen_kappa(pairs) is None
+    assert "| 全部 | 5 | 100% | — |" in render(pairs, "m")
+
+
+def test_sheet_rows_shuffled_and_labels_mapped_by_id(tmp_path):
+    from openpyxl import load_workbook
+
+    pairs = [_p(i, "", "一致") for i in range(20)]
+    path = str(tmp_path / "表.xlsx")
+    write_sheet(pairs, path, seed=1)
+    wb = load_workbook(path)
+    ws = wb.active
+    ids = [ws.cell(r, 1).value for r in range(2, 22)]
+    assert sorted(ids, key=int) == [str(i) for i in range(20)] and ids != [str(i) for i in range(20)]
+    write_sheet(pairs, str(tmp_path / "again.xlsx"), seed=1)
+    assert [c.value for c in load_workbook(str(tmp_path / "again.xlsx")).active["A"][1:]] == ids
+    # 人工结论按编号对回，不按行序
+    row = ids.index("7") + 2
+    ws.cell(row, 6, "不一致")
+    wb.save(path)
+    assert read_labels(path) == {"7": "不一致"}
+
+
 def test_unlabeled_or_unjudged_pairs_not_scored():
     pairs = [_p(1, "一致", "一致"), _p(2, "", "一致"), _p(3, "不一致", "未裁判")]
     assert agreement(pairs) == 1.0
@@ -56,9 +82,10 @@ def test_sheet_roundtrip_hides_verdict(tmp_path):
     ws = wb.active
     cells = [str(c.value or "") for row in ws.iter_rows() for c in row]
     assert not any("裁判理由" in c for c in cells) and "真实" not in cells
+    first = ws["A2"].value
     ws["F2"] = "不一致"
     wb.save(path)
-    assert read_labels(path) == {"1": "不一致"}
+    assert read_labels(path) == {first: "不一致"}
     ws["F3"] = "差不多"
     wb.save(path)
     with pytest.raises(ValueError, match="差不多"):

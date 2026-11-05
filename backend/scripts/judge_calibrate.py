@@ -36,6 +36,7 @@ def main() -> None:
     sh = sub.add_parser("sheet", help="生成标注表")
     sh.add_argument("pairs")
     sh.add_argument("out")
+    sh.add_argument("--seed", type=int, help="打乱行序的随机种子（固定后顺序可复现）")
     run = sub.add_parser("run", help="跑裁判并对照人工结论")
     run.add_argument("pairs")
     run.add_argument("--labels", help="填好的标注表；不给则只跑裁判、录缓存")
@@ -47,7 +48,7 @@ def main() -> None:
 
     pairs = load_pairs(args.pairs)
     if args.cmd == "sheet":
-        write_sheet(pairs, args.out)
+        write_sheet(pairs, args.out, args.seed)
         _private(args.out)
         print(f"[校准] 标注表：{args.out}（{len(pairs)} 对）")
         return

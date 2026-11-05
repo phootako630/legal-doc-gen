@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import random
 from dataclasses import dataclass
 from typing import Any
 
@@ -58,8 +59,12 @@ def load_pairs(path: str) -> list[Pair]:
     return pairs
 
 
-def write_sheet(pairs: list[Pair], path: str) -> None:
-    """标注表：每对一行，「你的结论」一栏下拉选择；不含裁判结论，也不标真实 / 构造。"""
+def write_sheet(pairs: list[Pair], path: str, seed: int | None = None) -> None:
+    """
+    标注表：每对一行，「你的结论」一栏下拉选择；不含裁判结论，也不标真实 / 构造。
+    行序打乱（#154 评审：构造反例若集中排列，标注的人会从行序猜出分组），人工结论按编号对回；
+    seed 固定时顺序可复现。编号本身也不要透露真实 / 构造（配对文件里用 P01 这类中性编号）。
+    """
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font
     from openpyxl.worksheet.datavalidation import DataValidation
@@ -70,7 +75,9 @@ def write_sheet(pairs: list[Pair], path: str) -> None:
     ws.append(SHEET_HEADERS)
     for c in ws[1]:
         c.font = Font(bold=True)
-    for p in pairs:
+    rows = list(pairs)
+    random.Random(seed).shuffle(rows)
+    for p in rows:
         ws.append([p.id, p.key, p.criteria, _text(p.lawyer), _text(p.system), "", ""])
     dv = DataValidation(type="list", formula1='"' + ",".join(VERDICTS) + '"', allow_blank=True)
     ws.add_data_validation(dv)
@@ -121,7 +128,11 @@ def agreement(pairs: list[Pair]) -> float | None:
 
 
 def cohen_kappa(pairs: list[Pair]) -> float | None:
-    """κ = (实际一致率 − 碰巧一致率) / (1 − 碰巧一致率)；碰巧一致率按两边各自的结论分布算。"""
+    """
+    κ = (实际一致率 − 碰巧一致率) / (1 − 碰巧一致率)；碰巧一致率按两边各自的结论分布算。
+    两边都只用了同一种结论时分母为 0、κ 没有定义，返回 None（报告显示「—」），
+    不当成完美校准（#154 评审：这正是要暴露的类别失衡）。
+    """
     done = _scored(pairs)
     if not done:
         return None
@@ -131,7 +142,7 @@ def cohen_kappa(pairs: list[Pair]) -> float | None:
         (sum(p.human == v for p in done) / n) * (sum(p.verdict == v for p in done) / n) for v in VERDICTS
     )
     if pe == 1:
-        return 1.0 if po == 1 else 0.0  # 两边都只用了同一个结论：没有可比的区分度
+        return None
     return (po - pe) / (1 - pe)
 
 
