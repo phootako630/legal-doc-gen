@@ -17,7 +17,7 @@ from app.agent import checkpoint
 from app.agent.graph import get_graph
 from app.agent.state import CaseState, PendingDecision
 from app.services.file_names import unique_filenames
-from app.services import file_store, llm_progress, run_log
+from app.services import call_recorder, file_store, llm_progress, run_log
 
 
 def _config(run_id: str) -> dict:
@@ -99,7 +99,8 @@ async def purge_expired_cases() -> None:
         runs = await checkpoint.purge_expired()
         files = await asyncio.to_thread(file_store.purge_expired)
         logs = await asyncio.to_thread(run_log.purge_old)
-        run_log.log_event("purge", runs=runs, files=files, logs=logs)
+        calls = await asyncio.to_thread(call_recorder.purge_old)  # 线上案件快照的调用录制（#157）
+        run_log.log_event("purge", runs=runs, files=files, logs=logs, calls=calls)
     except Exception as exc:  # noqa: BLE001 — 清理是尽力而为
         run_log.log_event("purge_error", error=type(exc).__name__)
 

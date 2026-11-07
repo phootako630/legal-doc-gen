@@ -36,6 +36,11 @@ def set_run_id(run_id: str | None) -> None:
     _run_id.set(run_id)
 
 
+def current_run_id() -> str | None:
+    """当前协程所属的 run_id（runner 入口设置）；不在案件运行里（如上传时的 OCR）为 None。"""
+    return _run_id.get()
+
+
 def set_user(user: str | None) -> None:
     _user.set(user)
 

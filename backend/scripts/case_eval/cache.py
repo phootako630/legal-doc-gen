@@ -9,7 +9,6 @@
 # 缓存里是真实案卷的识别结果，只放在服务器的案卷目录下，不进仓库。
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import threading
@@ -19,6 +18,8 @@ from typing import Any, Callable
 from app import config
 from app.agent import nodes
 from app.services import llm_client, ocr_engine
+# 请求哈希键与线上调用录制共用（#157）：线上录下的返回可直接当这里的回放缓存
+from app.services.call_keys import digest, llm_key, ocr_key  # noqa: F401 — llm_key / ocr_key 供外部沿用
 from scripts.case_eval.tracing import NoopTracer, image_digest
 
 MODES = ("replay", "live")
@@ -54,22 +55,8 @@ class CacheStats:
         }
 
 
-def _digest(obj: Any) -> str:
-    raw = json.dumps(obj, ensure_ascii=False, sort_keys=True)
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-
-def llm_key(messages: list[dict], json_mode: bool) -> str:
-    return _digest({"model": config.DEEPSEEK_MODEL, "messages": messages, "json": json_mode})
-
-
 def judge_key(model: str, messages: list[dict]) -> str:
-    return _digest({"model": model, "messages": messages})
-
-
-def ocr_key(img_b64: str) -> str:
-    img = hashlib.sha256(img_b64.encode("ascii")).hexdigest()
-    return _digest({"model": config.QWEN_OCR_MODEL, "image": img})
+    return digest({"model": model, "messages": messages})
 
 
 class ReplayCache:
