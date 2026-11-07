@@ -20,6 +20,7 @@ from app.services.complaint_renderer import render_complaint
 from app.services.file_parser import parse_file
 from scripts.case_eval.cache import ReplayCache, patched
 from scripts.case_eval.judge import JUDGE_MODEL, call_judge, judge_results
+from scripts.case_eval.tracing import NoopTracer, Tracing
 from scripts.case_eval.scoring import score_case, summarize, summarize_causes, summarize_quality
 
 MATERIAL_EXTS = (".pdf", ".docx", ".doc")
@@ -89,12 +90,25 @@ def _as_of(expected: dict[str, Any]):
     return mock.patch.object(derived_fields, "_today", lambda: day)
 
 
-async def run_case(case_dir: str, mode: str = "replay", strict: bool = False) -> dict[str, Any]:
-    """跑一个案件，返回结果（含逐字段结论、断点、调用统计、生成的起诉状）。出错不抛，记在 error。"""
+async def run_case(case_dir: str, mode: str = "replay", strict: bool = False,
+                   tracing: Tracing | None = None) -> dict[str, Any]:
+    """跑一个案件，返回结果（含逐字段结论、断点、调用统计、生成的起诉状）。出错不抛，记在 error。
+    tracing：开了 --langfuse 时，这个案件记成一条 Langfuse trace（tracing.py）。"""
     name = os.path.basename(os.path.normpath(case_dir))
     result: dict[str, Any] = {"case": name, "error": None}
     started = time.monotonic()
     cache = ReplayCache(os.path.join(case_dir, "cache"), mode=mode, strict=strict)
+    with tracing.case(name, {"mode": mode, "strict": strict}) if tracing else nullcontext(NoopTracer()) as tracer:
+        cache.tracer = tracer
+        await _run(case_dir, cache, result)
+        tracer.finish(result)
+    result["stats"] = cache.stats.as_dict()
+    result["duration_s"] = round(time.monotonic() - started, 1)
+    return result
+
+
+async def _run(case_dir: str, cache: ReplayCache, result: dict[str, Any]) -> None:
+    name = result["case"]
     try:
         expected = load_expected(case_dir)
         result["title"] = expected.get("title") or name
@@ -132,6 +146,3 @@ async def run_case(case_dir: str, mode: str = "replay", strict: bool = False) ->
         result["causes"] = summarize_causes(scored)
     except Exception as exc:  # noqa: BLE001 — 一个案件出错不影响其他案件
         result["error"] = f"{type(exc).__name__}: {exc}"
-    result["stats"] = cache.stats.as_dict()
-    result["duration_s"] = round(time.monotonic() - started, 1)
-    return result

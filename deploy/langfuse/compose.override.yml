@@ -1,0 +1,14 @@
+# 覆盖官方 docker-compose.yml 的端口：网页（3000）、AI 网关（3031）、对象存储（9090）原本对所有网卡开放，
+# 改为只绑 127.0.0.1——trace 里有案卷内容，Langfuse 不对公网开放，从本机或 SSH 隧道访问。
+# 需要 Docker Compose 2.24 以上（!override 语法）。
+services:
+  langfuse-web:
+    ports: !override
+      - 127.0.0.1:3000:3000
+  langfuse-ai-gateway:
+    ports: !override
+      - 127.0.0.1:3031:3031
+  minio:
+    ports: !override
+      - 127.0.0.1:9090:9000
+      - 127.0.0.1:9091:9001
