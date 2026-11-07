@@ -91,6 +91,30 @@ python scripts/eval_cases.py eval_fixtures --strict --langfuse
 
    严格回放提示缓存未命中，说明代码改动让系统发了新的提示词或读了新的页：回服务器上按 `deploy/README.md`「案件 eval」重录，再重新打包。
 
+## 线上案件（律师日常处理的案件）
+
+线上系统给每个案件留快照（原件、模型调用返回、律师最终确认的字段，保留 180 天，见 `docs/agents/api.md`「线上案件快照」）。律师导出过起诉状的案件，可导出成 eval 案卷，在电脑上严格回放并记到 Langfuse：标准答案就是律师的最终版本，律师改过的字段判「错误」。
+
+1. 服务器上导出（在仓库目录；用当前部署的代码），打包取回，删掉临时文件：
+
+   ```bash
+   docker compose exec backend python scripts/export_snapshots.py /srv/backend/data/snapshots /tmp/exported
+   docker compose cp backend:/tmp/exported ./exported && docker compose exec backend rm -r /tmp/exported
+   tar -czf /tmp/exported.tar.gz exported && rm -r exported
+   ```
+
+   每个案件一行摘要（字段数、律师改了哪些）；「⚠️」行是警告，如缺原件（上传时快照还没开）、提示词已改过（严格回放会缓存未命中）。
+
+2. 电脑上取回、解开，用上面「真实案卷」第 3 步的 `docker run` 跑，把 `~/eval-cases` 换成解开的目录：
+
+   ```bash
+   mkdir -p ~/online-cases && scp <服务器>:/tmp/exported.tar.gz ~/
+   tar -xzf ~/exported.tar.gz -C ~/online-cases --strip-components=1 && rm ~/exported.tar.gz
+   ssh <服务器> rm /tmp/exported.tar.gz
+   ```
+
+   在 Langfuse 的 Scores 里筛「错误」，就是律师动过手的字段；点进 trace 看系统当时给模型发了什么、模型回了什么。
+
 ## 清理
 
 ```bash
