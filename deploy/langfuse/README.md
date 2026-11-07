@@ -4,7 +4,7 @@ Langfuse 是 LLM 应用的链路追踪与评测平台。本项目只在 **eval**
 
 ## 数据边界
 
-- trace 里有案卷内容（提示词里的合同文字、抽取结果、标准值）：**只发到自托管的实例**。`--langfuse` 遇到 `*.langfuse.com`（Langfuse Cloud）默认拒绝；`--langfuse-allow-cloud` 只用于虚构案卷集 `eval_fixtures/`。
+- trace 里有案卷内容（提示词里的合同文字、抽取结果、标准值）：**只发到自托管的实例**。`--langfuse` 遇到 `*.langfuse.com`（Langfuse Cloud）默认拒绝；`--langfuse-allow-cloud` 只放行仓库里的虚构案卷集 `backend/eval_fixtures/`（按真实路径核对），其他案卷目录加了也拒绝。
 - OCR 只记页面图片的哈希，不上传图片。
 - 网页不对公网开放：`compose.override.yml` 把所有端口绑到 `127.0.0.1`，从本机或 SSH 隧道访问。
 

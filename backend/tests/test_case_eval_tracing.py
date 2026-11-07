@@ -106,11 +106,28 @@ def test_finish_writes_scores_and_summary():
 def test_cloud_host_refused_unless_allowed():
     for host in ("https://cloud.langfuse.com", "https://us.cloud.langfuse.com"):
         with pytest.raises(SystemExit, match="Langfuse Cloud"):
-            check_host(host, allow_cloud=False)
-        check_host(host, allow_cloud=True)
-    check_host("http://localhost:3000", allow_cloud=False)
+            check_host(host, allow_cloud=False, root=tracing.FIXTURES_DIR)
+        check_host(host, allow_cloud=True, root=tracing.FIXTURES_DIR)
+    check_host("http://localhost:3000", allow_cloud=False, root="/srv/eval-cases")
     with pytest.raises(SystemExit, match="LANGFUSE_HOST"):
         check_host("", allow_cloud=False)
+
+
+def test_allow_cloud_only_for_repo_fixtures(tmp_path):
+    # 真实案卷目录加 --langfuse-allow-cloud 也不许上云（#156 评审）；指向虚构案卷集的软链接按真实路径放行
+    host = "https://cloud.langfuse.com"
+    for root in ("/srv/eval-cases", str(tmp_path), None, tracing.FIXTURES_DIR + "/../eval_fixtures_copy"):
+        with pytest.raises(SystemExit, match="只用于仓库里的虚构案卷集"):
+            check_host(host, allow_cloud=True, root=root)
+    link = tmp_path / "fx"
+    link.symlink_to(tracing.FIXTURES_DIR)
+    check_host(host, allow_cloud=True, root=str(link))
+    check_host(host, allow_cloud=True, root=tracing.FIXTURES_DIR + "/")
+    sneaky = tmp_path / "real"
+    sneaky.mkdir()
+    (tmp_path / "eval_fixtures").symlink_to(sneaky)  # 名字叫 eval_fixtures 但不是仓库那个
+    with pytest.raises(SystemExit):
+        check_host(host, allow_cloud=True, root=str(tmp_path / "eval_fixtures"))
 
 
 def test_make_tracing_needs_keys(monkeypatch):

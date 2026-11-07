@@ -135,7 +135,7 @@ def main() -> None:
     parser.add_argument("--langfuse", action="store_true",
                         help="把每个案件的调用与结论记到自托管 Langfuse（读 LANGFUSE_HOST / _PUBLIC_KEY / _SECRET_KEY）")
     parser.add_argument("--langfuse-allow-cloud", action="store_true",
-                        help="允许发往 Langfuse Cloud：只用于虚构案卷，真实案卷不许")
+                        help="允许发往 Langfuse Cloud：只对仓库里的 eval_fixtures/ 生效，其他案卷目录一律拒绝")
     args = parser.parse_args()
     if args.strict and args.mode != "replay":
         raise SystemExit("--strict 只用于 replay 模式")
@@ -152,7 +152,7 @@ def main() -> None:
     tracing = None
     if args.langfuse:
         tags = [args.mode] + (["strict"] if args.strict else []) + [os.path.basename(os.path.normpath(args.root))]
-        tracing = make_tracing(run_name, tags, allow_cloud=args.langfuse_allow_cloud)
+        tracing = make_tracing(run_name, tags, allow_cloud=args.langfuse_allow_cloud, root=args.root)
     cases = asyncio.run(_run_all(dirs, args.mode, args.strict, tracing))
     if tracing:
         tracing.flush()

@@ -16,6 +16,8 @@ from typing import Any, Iterator
 from urllib.parse import urlparse
 
 CLOUD_SUFFIX = "langfuse.com"
+# 允许发往 Langfuse Cloud 的唯一案卷目录：仓库里的虚构案卷集（按解析软链接后的真实路径比较）
+FIXTURES_DIR = os.path.realpath(os.path.join(os.path.dirname(__file__), "..", "..", "eval_fixtures"))
 
 
 class _NoopObs:
@@ -101,22 +103,32 @@ class Tracing:
         return os.environ.get("LANGFUSE_HOST") or os.environ.get("LANGFUSE_BASE_URL") or ""
 
 
-def check_host(host: str, allow_cloud: bool) -> None:
-    """真实案卷只许发到自托管的 Langfuse：Cloud 地址默认拒绝。"""
+def check_host(host: str, allow_cloud: bool, root: str | None = None) -> None:
+    """
+    真实案卷只许发到自托管的 Langfuse：Cloud 地址默认拒绝；--langfuse-allow-cloud 也只放行
+    仓库里的虚构案卷集 eval_fixtures/（#156 评审：只靠文档约束，真实案卷目录加上这个参数照样会上云）。
+    """
     netloc = urlparse(host).hostname or ""
     if not netloc:
         raise SystemExit("--langfuse 需要设置 LANGFUSE_HOST（自托管 Langfuse 的地址，如 http://localhost:3000）")
-    if (netloc == CLOUD_SUFFIX or netloc.endswith("." + CLOUD_SUFFIX)) and not allow_cloud:
+    if not (netloc == CLOUD_SUFFIX or netloc.endswith("." + CLOUD_SUFFIX)):
+        return
+    if not allow_cloud:
         raise SystemExit(
             f"LANGFUSE_HOST 指向 Langfuse Cloud（{netloc}）：trace 里有案卷内容，只许发到自托管的 Langfuse。"
-            "只跑虚构案卷时可加 --langfuse-allow-cloud"
+            "只跑虚构案卷集 eval_fixtures/ 时可加 --langfuse-allow-cloud"
+        )
+    if root is None or os.path.realpath(root) != FIXTURES_DIR:
+        raise SystemExit(
+            f"--langfuse-allow-cloud 只用于仓库里的虚构案卷集（{FIXTURES_DIR}），"
+            f"这次的案卷目录是 {root}：不许发往 Langfuse Cloud"
         )
 
 
-def make_tracing(run: str, tags: list[str], allow_cloud: bool = False) -> Tracing:
+def make_tracing(run: str, tags: list[str], allow_cloud: bool = False, root: str | None = None) -> Tracing:
     """按环境变量 LANGFUSE_HOST / LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY 连接；连不上直接报错退出。"""
     host = os.environ.get("LANGFUSE_HOST") or os.environ.get("LANGFUSE_BASE_URL") or ""
-    check_host(host, allow_cloud)
+    check_host(host, allow_cloud, root)
     if not (os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY")):
         raise SystemExit("--langfuse 需要设置 LANGFUSE_PUBLIC_KEY 和 LANGFUSE_SECRET_KEY（Langfuse 项目设置页生成）")
     from langfuse import Langfuse
