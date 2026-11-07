@@ -10,7 +10,7 @@ from typing import Any, Literal
 from fastapi import UploadFile
 
 from app.config import SCANNED_PAGE_TEXT_THRESHOLD, SCANNED_PDF_TEXT_THRESHOLD
-from app.services import file_store, ocr_engine
+from app.services import case_snapshot, file_store, ocr_engine
 from app.services.error_category import UnsupportedFileError
 
 logger = logging.getLogger(__name__)
@@ -100,14 +100,17 @@ async def parse_file(upload_file: UploadFile) -> dict[str, Any]:
     identified_type = _identify_type(filename)
 
     if filename.lower().endswith(".pdf"):
-        return await _parse_pdf(filename, content, identified_type)
+        result = await _parse_pdf(filename, content, identified_type)
     elif filename.lower().endswith((".docx", ".doc")):
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
+        result = await loop.run_in_executor(
             _PARSE_POOL, _parse_docx, filename, content, identified_type
         )
     else:
         raise UnsupportedFileError(f"不支持的文件格式：{filename}，仅支持 .pdf / .docx")
+    # 线上案件快照（#157）：原件按内容存一份，source_id 随材料交给分析接口；未开启时为 None
+    result["source_id"] = case_snapshot.put_material(content)
+    return result
 
 
 def _pdf_page_texts(content: bytes) -> list[str]:

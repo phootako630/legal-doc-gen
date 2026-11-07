@@ -15,6 +15,9 @@ services:
       TZ: Asia/Shanghai
       # 部署环境强制开启登录（写在这里优先于 backend/.env，不会被误关）
       AUTH_ENABLED: "1"
+      # 线上案件快照（#157，律所同意）：每个案件的原件、调用返回与律师最终字段留存 180 天，
+      # 导出成 eval 案卷回放分析；见 docs/agents/api.md「线上案件快照」
+      SNAPSHOT_ENABLED: "1"
     volumes:
       # 案件数据（checkpoint、上传的扫描件、原告信息表、运行日志）：命名卷，重建容器不丢
       - case-data:/srv/backend/data

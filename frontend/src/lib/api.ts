@@ -144,6 +144,7 @@ export async function analyzeCase(
         detected_type: f.detected_type ?? null,
         pages: f.pages ?? [],
         file_id: f.file_id ?? null,
+        source_id: f.source_id ?? null,
       })),
       internet_allowed: internetAllowed,
     }),

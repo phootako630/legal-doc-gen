@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.agent.runner import delivered_fields
-from app.services import run_log
+from app.services import case_snapshot, run_log
 from app.services.complaint_renderer import render_complaint
 
 router = APIRouter()
@@ -32,6 +32,8 @@ async def generate(req: GenerateRequest) -> GenerateResponse:
         except Exception:  # noqa: BLE001 — 统计改动是尽力而为，不能挡住生成起诉状
             delivered = None
         run_log.log_lawyer_edits(req.run_id, delivered, req.validated_json)
+        # 线上案件快照（#157）：律师最终确认的字段就是这个案件的标准答案
+        case_snapshot.finish(req.run_id, delivered, req.validated_json, run_log.current_user())
     try:
         complaint_text = render_complaint(req.validated_json, mark_fills=True)
     except FileNotFoundError as e:
