@@ -19,6 +19,7 @@ export interface ParsedFile {
   page_count: number;
   pages: PageText[];
   file_id?: string | null; // 扫描件暂存字节引用，供 agent 按需 OCR；非扫描件为 null
+  source_id?: string | null; // 线上案件快照（#157）存下的原件（内容 sha256）；原样带回分析接口
 }
 
 /** POST /api/upload 的响应 */

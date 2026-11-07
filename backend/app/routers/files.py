@@ -3,7 +3,7 @@
 import logging
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.services import upload_progress
 from app.services.file_names import renamed_notes, unique_filenames
@@ -30,6 +30,8 @@ class ParsedFile(BaseModel):
     pages: list[PageText] = []
     # 扫描件暂存字节的引用，供 agent 按需逐页 OCR；非扫描件为 None
     file_id: str | None = None
+    # 线上案件快照（#157）：原件内容的 sha256，前端原样带回分析接口；未开启快照时为 None
+    source_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class UploadResponse(BaseModel):

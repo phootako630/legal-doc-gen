@@ -6,7 +6,7 @@
 
 - 登录：账号由管理员在服务器上用 `scripts/manage_users.py` 创建（无注册入口），会话 Cookie 7 天免登录，律师可自行修改密码；部署时强制开启（`AUTH_ENABLED=1`），本地开发与单测默认关闭。
 - 案件状态（agent checkpoint、上传的扫描件）落盘到 `backend/data/`（SQLite + 文件），服务重启后仍可 resume；超过 `CASE_RETENTION_DAYS`（默认 7 天）自动清除（服务启动即清、之后每小时清，resume / 读取时也拒绝过期数据）。
-- 线上案件快照（#157，`SNAPSHOT_ENABLED`，默认关）：LLM（DeepSeek 主模型）与 OCR 调用的返回录进 `SNAPSHOT_DIR/calls/`（`services/call_recorder.py`）：按与 eval 回放缓存相同的请求哈希键（`services/call_keys.py` 线上与 eval 共用）分目录，同一请求的不同返回按返回指纹各存一份、互不覆盖，另按 run_id 记清单（这次运行用了哪一份）；导出时 `materialize` / `resolve` 还原成这个案件自己的回放缓存（上传时的 OCR 不属于任何运行，取运行开始前最近的一份，标「推断」）。各级目录 0700、文件 0600；备用模型的返回、空 OCR 不录；录制失败不影响主流程。内容是案卷原文，保留 `SNAPSHOT_RETENTION_DAYS`（默认 180 天，律所同意），由同一个定时清理循环删除。eval 脚本运行时强制关闭录制
+- 线上案件快照（#157，`SNAPSHOT_ENABLED`，代码默认关、`docker-compose.yml` 部署时开）：上传时原件按内容 sha256 去重存进 `SNAPSHOT_DIR/materials/`，`/api/upload` 返回 `source_id`，前端原样带回 `/api/analyze`（只进快照、分析前就从材料里去掉，免得提示词与 eval 回放时不同）；分析开始建 `cases/<run_id>/case.json`（材料清单含律师确认 / 系统识别的类型、internet_allowed、代码版本 `code_version`＝部署提交号（`deploy.sh` 构建时经 `APP_VERSION` 写进镜像）、提示词模板哈希、模型），`/resume` 在恢复成功后追加律师这一轮回答（失败重试不留没被接受的回答），`/generate` 写入交付字段、律师最终字段与当时的原告信息表（`branch/`，按内容去重），只认本账号的会话（`services/case_snapshot.py`）。调用录制：LLM（DeepSeek 主模型）与 OCR 调用的返回录进 `SNAPSHOT_DIR/calls/`（`services/call_recorder.py`）：按与 eval 回放缓存相同的请求哈希键（`services/call_keys.py` 线上与 eval 共用）分目录，同一请求的不同返回按返回指纹各存一份、互不覆盖，另按 run_id 记清单（这次运行用了哪一份）；导出时 `materialize` / `resolve` 还原成这个案件自己的回放缓存（上传时的 OCR 不属于任何运行，取运行开始前最近的一份，标「推断」）。各级目录 0700、文件 0600；备用模型的返回、空 OCR 不录；录制失败不影响主流程。内容是案卷原文，保留 `SNAPSHOT_RETENTION_DAYS`（默认 180 天，律所同意），由同一个定时清理循环删除。eval 脚本运行时强制关闭录制
 
 ## 路由
 

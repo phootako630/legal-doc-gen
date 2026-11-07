@@ -26,6 +26,7 @@ from typing import Any
 from app import config
 from app.services import run_log
 from app.services.call_keys import llm_key, ocr_key
+from app.services.snapshot_store import ensure_dir, write_text
 
 logger = logging.getLogger(__name__)
 _EXT = {"llm": "json", "ocr": "txt"}
@@ -36,28 +37,6 @@ def calls_dir() -> str:
     return os.path.join(config.SNAPSHOT_DIR, "calls")
 
 
-def _ensure_dir(path: str) -> None:
-    """从 SNAPSHOT_DIR 起逐级建目录，每一级都设成 0700（#158 评审：makedirs 的 mode 只管最后一级）。"""
-    root = os.path.abspath(config.SNAPSHOT_DIR)
-    parts = os.path.relpath(os.path.abspath(path), root).split(os.sep)
-    current = root
-    for part in [""] + [p for p in parts if p not in ("", ".")]:
-        current = os.path.join(current, part) if part else current
-        if not os.path.isdir(current):
-            os.makedirs(current, mode=0o700, exist_ok=True)
-        if os.stat(current).st_mode & 0o777 != 0o700:
-            os.chmod(current, 0o700)
-
-
-def _write(path: str, text: str) -> None:
-    _ensure_dir(os.path.dirname(path))
-    tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write(text)
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, path)
-
-
 def _variant(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
@@ -65,13 +44,13 @@ def _variant(text: str) -> str:
 def _record(kind: str, key: str, text: str) -> None:
     try:
         variant = _variant(text)
-        _write(os.path.join(calls_dir(), kind, key, f"{variant}.{_EXT[kind]}"), text)
+        write_text(os.path.join(calls_dir(), kind, key, f"{variant}.{_EXT[kind]}"), text)
         run_id = run_log.current_run_id()
         if run_id:
             line = json.dumps({"kind": kind, "key": key, "variant": variant, "t": time.time()})
             path = os.path.join(calls_dir(), "runs", f"{run_id}.jsonl")
             with _lock:
-                _ensure_dir(os.path.dirname(path))
+                ensure_dir(os.path.dirname(path))
                 with open(path, "a", encoding="utf-8") as fh:
                     fh.write(line + "\n")
                 os.chmod(path, 0o600)

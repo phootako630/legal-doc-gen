@@ -6,7 +6,7 @@
 import re
 
 from fastapi import APIRouter, Header, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.agent.runner import (
     Draining,
@@ -40,6 +40,8 @@ class FileInput(BaseModel):
     pages: list[PageText] = []
     # 扫描件暂存字节引用，供 agent 按需逐页 OCR
     file_id: str | None = None
+    # 线上案件快照（#157）：上传时存下的原件（内容 sha256）；只进快照，不进分析流程
+    source_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class AnalyzeRequest(BaseModel):

@@ -130,7 +130,8 @@ wait_idle() {
 # --force-recreate：后端已进入排空，即使这次只改了前端、后端镜像没变，也必须换成新进程，
 # 否则它会一直拒绝新分析
 up() {
-  docker compose build &&
+  # 构建时把当前提交号写进镜像（APP_VERSION），线上案件快照据此记下案件当时运行的代码版本（#157）
+  APP_VERSION="$(git rev-parse HEAD)" docker compose build &&
     wait_idle &&
     docker compose up -d --force-recreate --wait --wait-timeout 300
 }

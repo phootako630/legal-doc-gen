@@ -131,6 +131,8 @@ CASE_RETENTION_DAYS = int(os.getenv("CASE_RETENTION_DAYS", "7"))
 SNAPSHOT_ENABLED = os.getenv("SNAPSHOT_ENABLED", "0") == "1"
 SNAPSHOT_DIR = os.getenv("SNAPSHOT_DIR", os.path.join(_DATA_DIR, "snapshots"))
 SNAPSHOT_RETENTION_DAYS = int(os.getenv("SNAPSHOT_RETENTION_DAYS", "180"))
+# 代码版本（部署时的提交号，deploy.sh 构建镜像时写入）；本地开发没有时由快照现取 git 提交号
+APP_VERSION = os.getenv("APP_VERSION") or None
 # 就绪检查（/readyz）：数据目录所在磁盘剩余空间低于此值（MB）即未就绪。
 # 一次上传最多约 95MB，checkpoint 与日志另需余量，故默认 500MB
 READY_MIN_FREE_MB = int(os.getenv("READY_MIN_FREE_MB", "500"))

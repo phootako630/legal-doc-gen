@@ -17,7 +17,7 @@ from app.agent import checkpoint
 from app.agent.graph import get_graph
 from app.agent.state import CaseState, PendingDecision
 from app.services.file_names import unique_filenames
-from app.services import call_recorder, file_store, llm_progress, run_log
+from app.services import call_recorder, case_snapshot, file_store, llm_progress, run_log
 
 
 def _config(run_id: str) -> dict:
@@ -99,8 +99,10 @@ async def purge_expired_cases() -> None:
         runs = await checkpoint.purge_expired()
         files = await asyncio.to_thread(file_store.purge_expired)
         logs = await asyncio.to_thread(run_log.purge_old)
-        calls = await asyncio.to_thread(call_recorder.purge_old)  # 线上案件快照的调用录制（#157）
-        run_log.log_event("purge", runs=runs, files=files, logs=logs, calls=calls)
+        # 线上案件快照（#157）：调用录制与案件快照，保留期 SNAPSHOT_RETENTION_DAYS
+        calls = await asyncio.to_thread(call_recorder.purge_old)
+        snapshots = await asyncio.to_thread(case_snapshot.purge_old)
+        run_log.log_event("purge", runs=runs, files=files, logs=logs, calls=calls, snapshots=snapshots)
     except Exception as exc:  # noqa: BLE001 — 清理是尽力而为
         run_log.log_event("purge_error", error=type(exc).__name__)
 
@@ -186,6 +188,9 @@ async def _run_analyze(
     # 上传接口已给同名材料编号；直接调用分析接口的旧客户端、eval 也在这里兜底（#121）
     names, _ = unique_filenames([f.get("filename", "") for f in files])
     files = [{**f, "filename": name} for f, name in zip(files, names)]
+    # 线上案件快照（#157）：source_id 只进快照、不进分析流程——否则提示词与 eval 回放时不同，录下的调用对不上
+    case_snapshot.start(run_id, files, internet_allowed, owner)
+    files = [{k: v for k, v in f.items() if k != "source_id"} for f in files]
     run_log.log_event(
         "run_start",
         files=len(files),
@@ -234,6 +239,8 @@ async def _run_resume(run_id: str, decisions: dict) -> CaseState:
     run_log.log_event("resume", decided_keys=sorted(decisions), wait_s=_waited_s(snapshot))
     t0 = time.monotonic()
     await graph.ainvoke(Command(resume=decisions), config)
+    # 恢复成功才记入快照：失败重试不留下没被 agent 接受的回答（#159 评审）
+    case_snapshot.add_decisions(run_id, decisions)
     run_log.log_event("run_pass", duration_ms=round((time.monotonic() - t0) * 1000))
     return await _collect(run_id, config)
 
