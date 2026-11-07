@@ -98,7 +98,12 @@ def test_online_case_exports_and_replays(online, monkeypatch):
     assert run_id[:8] in info["case"] and info["edited"] == ["contract_no"] and info["warnings"] == []
     assert sorted(os.listdir(os.path.join(case_dir, "materials"))) == ["001.pdf", "审批表.pdf"]
     expected = json.load(open(os.path.join(case_dir, "expected.json"), encoding="utf-8"))
-    assert expected["internet_allowed"] is True and expected["decisions"] == {"total_amount": 900.0}
+    assert expected["internet_allowed"] is True and expected["decision_rounds"] == [{"total_amount": 900.0}]
+    # 整棵导出目录：目录 0700、文件 0600（含案卷原文与原告信息表，#160 评审）
+    for dirpath, _dirs, names in os.walk(case_dir):
+        assert os.stat(dirpath).st_mode & 0o777 == 0o700, dirpath
+        for n in names:
+            assert os.stat(os.path.join(dirpath, n)).st_mode & 0o777 == 0o600, n
     assert expected["material_types"] == {"审批表.pdf": "审批表"}
     assert "系统交付值：XG-2099-0001" in expected["fields"]["contract_no"]["note"]
     with pytest.raises(ValueError, match="已存在"):
@@ -173,3 +178,16 @@ def test_cli_exports_and_skips_existing(online, monkeypatch, capsys):
     assert f"-{run_id[:8]}" in out and "律师改过 1 个：contract_no" in out and "共导出 1 个案件" in out
     export_snapshots.main()  # 再跑一次：已导出过的跳过，不覆盖
     assert "跳过 1 个" in capsys.readouterr().out
+
+
+def test_decision_rounds_replayed_in_order():
+    # 同一字段两轮回答不同：按轮原样提交，不合并成最后一个值（#160 评审）
+    from scripts.case_eval.runner import _answers
+
+    pending = SimpleNamespace(field_keys=["total_amount"])
+    expected = {"decision_rounds": [{"total_amount": 800.0}, {"total_amount": 900.0, "note": "x"}]}
+    assert _answers(pending, expected, {}, 0) == {"total_amount": 800.0}
+    assert _answers(pending, expected, {}, 1) == {"total_amount": 900.0, "note": "x"}  # 原样、不按字段筛
+    assert _answers(pending, expected, {}, 2) == {}  # 没有更多轮：停在断点
+    # 旧写法 decisions 不变：按这个断点问到的字段取
+    assert _answers(pending, {}, {"total_amount": 1.0, "other": 2}, 0) == {"total_amount": 1.0}

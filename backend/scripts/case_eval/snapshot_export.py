@@ -5,7 +5,7 @@
 #   cache/llm|ocr/…       这个案件自己的模型调用返回（按运行清单取回；上传时的 OCR 不在清单里，按时间推断）
 #   branch_info.json      导出起诉状时的原告信息表
 #   expected.json         标准答案 = 律师最终确认的字段；律师改过的字段在 note 里写明系统交付值；
-#                         decisions（断点回答）、material_types（律师改过的材料类型）、material_order（上传顺序）、
+#                         decision_rounds（每轮断点回答）、material_types（律师改过的材料类型）、material_order（上传顺序）、
 #                         internet_allowed、as_of（导出那天）一并写入，回放时按律师当时的条件跑
 #   snapshot.json         溯源：run_id、代码版本、提示词哈希、模型、各项警告
 # 目录名只用日期与 run_id 前 8 位，不含当事人名称。
@@ -75,7 +75,7 @@ def export_case(snapshot_dir: str, run_id: str, out_root: str) -> dict[str, Any]
     if os.path.exists(case_dir):
         raise ValueError(f"{case_dir} 已存在，不覆盖")
     warnings: list[str] = []
-    os.makedirs(os.path.join(case_dir, "materials"), mode=0o700)
+    os.makedirs(os.path.join(case_dir, "materials"), mode=0o700)  # 写完整棵树再统一收紧（_lock_down）
 
     # 原件
     contents: dict[str, bytes] = {}
@@ -118,9 +118,6 @@ def export_case(snapshot_dir: str, run_id: str, out_root: str) -> dict[str, Any]
             warnings.append("缺当时的原告信息表（已过保留期），回放用全局那份")
 
     fields, edited = _expected_fields(case["final"], case.get("delivered"))
-    decisions: dict[str, Any] = {}
-    for round_ in case.get("decisions") or []:
-        decisions.update(round_.get("answers") or {})
     types = {f["filename"]: f["identified_type"] for f in case.get("files") or []
              if f.get("detected_type") and f.get("identified_type") != f.get("detected_type")}
     generated = datetime.fromtimestamp(case.get("generated_at") or case.get("started_at") or 0, _CST)
@@ -128,7 +125,8 @@ def export_case(snapshot_dir: str, run_id: str, out_root: str) -> dict[str, Any]
         "title": f"线上案件 {started:%Y-%m-%d}（{run_id[:8]}，律师改过 {len(edited)} 个字段）",
         "as_of": f"{generated:%Y-%m-%d}",
         "internet_allowed": bool(case.get("internet_allowed")),
-        "decisions": decisions,
+        # 律师每一轮断点的原样回答，按顺序回放（同一字段多轮回答不同也不会串轮）
+        "decision_rounds": [r.get("answers") or {} for r in case.get("decisions") or []],
         # 律师上传的顺序：材料在提示词里按这个顺序排列
         "material_order": [f["filename"] for f in case.get("files") or []],
         "fields": fields,
@@ -140,10 +138,21 @@ def export_case(snapshot_dir: str, run_id: str, out_root: str) -> dict[str, Any]
     current = case_snapshot.prompts_digest()
     if case.get("prompts") and current and case["prompts"] != current:
         warnings.append("提示词模板已改过：严格回放会缓存未命中，看「当时的代码」需切到 code_version 再跑")
+    _lock_down(case_dir)
     meta = {"run_id": run_id, "code_version": case.get("code_version"), "prompts": case.get("prompts"),
             "models": case.get("models"), "edited": edited, "warnings": warnings}
     _write_json(os.path.join(case_dir, "snapshot.json"), meta)
     return {"case": name, "fields": len(fields), "edited": edited, "warnings": warnings}
+
+
+def _lock_down(root: str) -> None:
+    """导出的案卷含案卷原文与原告信息表：整棵目录树目录 0700、文件 0600（#160 评审）。"""
+    os.chmod(root, 0o700)
+    for dirpath, dirs, files in os.walk(root):
+        for d in dirs:
+            os.chmod(os.path.join(dirpath, d), 0o700)
+        for f in files:
+            os.chmod(os.path.join(dirpath, f), 0o600)
 
 
 def _write_json(path: str, data: Any) -> None:

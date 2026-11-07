@@ -87,6 +87,18 @@ def _conflict_keys(validations: list[dict[str, Any]]) -> set[str]:
     return keys
 
 
+def _answers(pending: Any, expected: dict[str, Any], decisions: dict[str, Any], index: int) -> dict[str, Any]:
+    """
+    断点处的回答。expected.json 有 decision_rounds（线上案件快照导出：律师每一轮的原样回答）时，
+    第 index 次断点用第 index 轮、原样提交（同一字段多轮回答不同也能按当时回放，#160 评审）；
+    否则按 decisions（{字段: 取值}）取这个断点问到的字段。没有答案返回空。
+    """
+    rounds = expected.get("decision_rounds")
+    if rounds is not None:
+        return dict(rounds[index]) if index < len(rounds) else {}
+    return {k: decisions[k] for k in pending.field_keys if k in decisions}
+
+
 def _apply_material_types(files: list[dict[str, Any]], expected: dict[str, Any]) -> list[dict[str, Any]]:
     """expected.json 的 material_types（{文件名: 类型}）：律师在上传页改过的类型，按律师的来（线上案件快照导出）。"""
     types = expected.get("material_types") or {}
@@ -146,7 +158,7 @@ async def _run(case_dir: str, cache: ReplayCache, result: dict[str, Any]) -> Non
             case = await run_analyze(files, internet_allowed=bool(expected.get("internet_allowed", False)))
             pauses: list[dict[str, Any]] = []
             while case.pending and len(pauses) < MAX_RESUMES:
-                answered = {k: decisions[k] for k in case.pending.field_keys if k in decisions}
+                answered = _answers(case.pending, expected, decisions, len(pauses))
                 pauses.append(_pause_record(case.pending, answered))
                 if not answered:
                     break  # expected.json 没给这个断点的答案：停在断点（记为 stuck），不提交空决定

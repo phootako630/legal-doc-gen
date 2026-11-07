@@ -26,6 +26,7 @@ expected.json：
     {
       "title": "安装案 2（AH2009976 安装）",
       "decisions": {"payable_ratio": "100%"},          断点时代替律师作答：{字段: 取值}
+      "decision_rounds": [{"payable_ratio": "100%"}],  选填，代替 decisions：每次断点按顺序原样提交一轮（线上案件快照导出）
       "as_of": "2025-03-01",                            选填：当作生成日（质保期是否届满、违约金暂计日按这天算）
       "internet_allowed": true,                         选填：默认 false；它会写进提示词，线上案件按律师当时的选择
       "material_types": {"001.pdf": "审批表"},           选填：律师在上传页改过的材料类型

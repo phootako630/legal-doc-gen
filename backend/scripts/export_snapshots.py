@@ -32,7 +32,9 @@ def main() -> None:
     runs = args.run or completed_runs(args.snapshots)
     if not runs:
         raise SystemExit("没有可导出的案件（律师导出过起诉状的案件才有标准答案）")
-    os.makedirs(args.out, mode=0o700, exist_ok=True)
+    if not os.path.isdir(args.out):
+        os.makedirs(args.out, mode=0o700)
+        os.chmod(args.out, 0o700)
     done = skipped = 0
     for run_id in runs:
         try:
