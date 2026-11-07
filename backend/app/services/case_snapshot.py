@@ -6,8 +6,8 @@
 #   branch/<sha256>.json        导出起诉状时的原告信息表（同样按内容去重）
 #   cases/<run_id>/case.json    案件快照：
 #       分析开始时  files（文件名、律师确认的类型、系统识别的类型、原件 source_id …）、internet_allowed、
-#                   prompts（提示词模板的哈希：模板变了，旧快照回放会缓存未命中）、模型
-#       断点作答时  decisions 追加律师每一轮的回答
+#                   code_version（部署的提交号）、prompts（提示词模板的哈希：模板变了，旧快照回放会缓存未命中）、模型
+#       断点作答时  恢复成功后才追加这一轮回答（恢复失败、律师重试不会留下没被接受的回答）
 #       导出起诉状时 delivered（交给律师审核的字段）、final（律师确认后的字段）、branch_table
 #   LLM / OCR 调用的返回另由 call_recorder 录在 calls/。
 #
@@ -23,6 +23,7 @@ import logging
 import os
 import re
 import shutil
+import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -61,6 +62,27 @@ def prompts_digest() -> str | None:
         return h.hexdigest()[:16]
     except OSError:
         return None
+
+
+_git_version: str | None = None
+
+
+def code_version() -> str | None:
+    """
+    案件当时运行的代码版本：部署镜像里的 APP_VERSION（提交号）；本地开发没有时现取 git 提交号。
+    规则、解析、渲染代码变了而提示词没变时，靠它解释严格回放的差异（#159 评审）。
+    """
+    global _git_version
+    if config.APP_VERSION and config.APP_VERSION != "unknown":
+        return config.APP_VERSION
+    if _git_version is None:
+        try:
+            out = subprocess.run(["git", "-C", str(_PROMPTS_DIR.parent), "rev-parse", "HEAD"],
+                                 capture_output=True, text=True, timeout=2, check=True)
+            _git_version = out.stdout.strip() or "unknown"
+        except (OSError, subprocess.SubprocessError):
+            _git_version = "unknown"
+    return _git_version
 
 
 def put_material(content: bytes) -> str | None:
@@ -108,6 +130,7 @@ def start(run_id: str, files: list[dict], internet_allowed: bool, owner: str | N
             "owner": owner,
             "started_at": time.time(),
             "internet_allowed": internet_allowed,
+            "code_version": code_version(),
             "prompts": prompts_digest(),
             "models": {"llm": config.DEEPSEEK_MODEL, "ocr": config.QWEN_OCR_MODEL},
             "files": [{k: f.get(k) for k in _FILE_KEYS} for f in files],

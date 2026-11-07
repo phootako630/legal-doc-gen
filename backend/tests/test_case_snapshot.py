@@ -30,6 +30,7 @@ _FIELDS = {
 
 @pytest.fixture
 def snap(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "APP_VERSION", "abc1234")
     root = tmp_path / "snapshots"
     table = tmp_path / "branch_info.json"
     table.write_text('{"虚构": 1}', encoding="utf-8")
@@ -77,6 +78,7 @@ def test_full_flow_snapshot(snap, monkeypatch):
     assert case["files"][0]["source_id"] == parsed["source_id"]
     assert case["files"][0]["identified_type"] == "审批表" and case["files"][0]["detected_type"] == "未知"
     assert case["internet_allowed"] is True and case["prompts"] and case["owner"] == "lawyer-a"
+    assert case["code_version"] == "abc1234"  # 部署的提交号（#159 评审）
     assert [d["answers"] for d in case["decisions"]] == [{"total_amount": 900.0}]
     assert case["final"] == final
     assert case["delivered"]["defendant_name"]["value"] == "虚构丁戊置业有限公司"  # 交付值保留，便于看律师改了什么
@@ -137,3 +139,40 @@ def test_purge_keeps_referenced_materials_fresh(snap, monkeypatch):
         os.utime(path, (expired, expired))
     assert case_snapshot.purge_old() == 3
     assert not (snap / "cases" / run_id).exists() and not material.exists()
+
+
+def test_failed_resume_not_recorded_until_retry_succeeds(snap, monkeypatch):
+    # 恢复失败、律师重试：快照里只留成功那一轮（#159 评审）
+    from app.agent.graph import get_graph
+
+    monkeypatch.setattr(nodes_mod, "chat", AsyncMock(side_effect=[_FIELDS, "说明\n---HIGHLIGHT---\n- 1"]))
+
+    async def go():
+        run_log.set_user("lawyer-a")
+        state = await run_analyze([{"filename": "审批表.pdf", "text": "审批表 1000 600 300"}], True, "lawyer-a")
+        graph = await get_graph()
+        real = graph.ainvoke
+        calls = {"n": 0}
+
+        async def flaky(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("恢复失败")
+            return await real(*args, **kwargs)
+
+        monkeypatch.setattr(graph, "ainvoke", flaky)
+        with pytest.raises(RuntimeError):
+            await run_resume(state.run_id, {"total_amount": 800.0}, "lawyer-a")
+        assert case_snapshot.load(state.run_id)["decisions"] == []
+        await run_resume(state.run_id, {"total_amount": 900.0}, "lawyer-a")
+        return state.run_id
+
+    run_id = asyncio.run(go())
+    assert [d["answers"] for d in case_snapshot.load(run_id)["decisions"]] == [{"total_amount": 900.0}]
+
+
+def test_code_version_falls_back_to_git(monkeypatch):
+    monkeypatch.setattr(config, "APP_VERSION", None)
+    monkeypatch.setattr(case_snapshot, "_git_version", None)
+    version = case_snapshot.code_version()
+    assert version == "unknown" or len(version) == 40

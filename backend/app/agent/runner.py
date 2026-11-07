@@ -237,9 +237,10 @@ async def _run_resume(run_id: str, decisions: dict) -> CaseState:
     run_log.set_run_id(run_id)
     # 只记律师本次决定了哪些字段，不记取值；wait_s = 停在断点到律师作答的秒数（#75）
     run_log.log_event("resume", decided_keys=sorted(decisions), wait_s=_waited_s(snapshot))
-    case_snapshot.add_decisions(run_id, decisions)
     t0 = time.monotonic()
     await graph.ainvoke(Command(resume=decisions), config)
+    # 恢复成功才记入快照：失败重试不留下没被 agent 接受的回答（#159 评审）
+    case_snapshot.add_decisions(run_id, decisions)
     run_log.log_event("run_pass", duration_ms=round((time.monotonic() - t0) * 1000))
     return await _collect(run_id, config)
 

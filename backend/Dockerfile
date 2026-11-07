@@ -24,6 +24,9 @@ COPY backend/app/ ./app/
 COPY backend/scripts/ ./scripts/
 # data/ 挂载为命名卷：新卷会继承这里的属主与权限
 RUN mkdir -p data && chown app:app data && chmod 700 data
+# 代码版本（提交号，deploy.sh 传入）：线上案件快照记下案件当时运行的版本（#157）。放在最后，不影响前面的层缓存
+ARG APP_VERSION=unknown
+ENV APP_VERSION=${APP_VERSION}
 
 USER app
 EXPOSE 8000
