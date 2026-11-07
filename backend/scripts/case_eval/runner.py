@@ -15,7 +15,7 @@ from starlette.datastructures import UploadFile
 
 from app.agent.graph import get_graph
 from app.agent.runner import run_analyze, run_resume
-from app.services import derived_fields
+from app.services import branch_registry, derived_fields
 from app.services.complaint_renderer import render_complaint
 from app.services.file_parser import parse_file
 from scripts.case_eval.cache import ReplayCache, patched
@@ -35,11 +35,18 @@ def load_expected(case_dir: str) -> dict[str, Any]:
     return data
 
 
-def list_materials(case_dir: str) -> list[str]:
+def list_materials(case_dir: str, order: list[str] | None = None) -> list[str]:
+    """
+    材料按文件名排序；expected.json 给了 material_order（线上案件快照导出：律师上传的顺序）时按它排。
+    材料在提示词里按这个顺序排列，顺序不同录下的调用就对不上。
+    """
     folder = os.path.join(case_dir, "materials")
     names = sorted(n for n in os.listdir(folder) if n.lower().endswith(MATERIAL_EXTS))
     if not names:
         raise ValueError("materials/ 下没有 PDF / Word 文件")
+    if order:
+        rank = {n: i for i, n in enumerate(order)}
+        names.sort(key=lambda n: (rank.get(n, len(rank)), n))
     return [os.path.join(folder, n) for n in names]
 
 
@@ -80,6 +87,20 @@ def _conflict_keys(validations: list[dict[str, Any]]) -> set[str]:
     return keys
 
 
+def _apply_material_types(files: list[dict[str, Any]], expected: dict[str, Any]) -> list[dict[str, Any]]:
+    """expected.json 的 material_types（{文件名: 类型}）：律师在上传页改过的类型，按律师的来（线上案件快照导出）。"""
+    types = expected.get("material_types") or {}
+    return [{**f, "identified_type": types[f["filename"]]} if f["filename"] in types else f for f in files]
+
+
+def _branch_table(case_dir: str):
+    """案件目录自带 branch_info.json（线上案件快照导出的当时那份原告信息表）时用它，否则用全局那份。"""
+    path = os.path.join(case_dir, "branch_info.json")
+    if not os.path.isfile(path):
+        return nullcontext()
+    return mock.patch.object(branch_registry, "BRANCH_INFO_PATH", path)
+
+
 def _as_of(expected: dict[str, Any]):
     """expected.json 的 as_of（「2025-03-01」）：按这一天当作生成日（质保期是否届满、暂计日等），
     让真实案卷按律师起诉当时判分、虚构案卷不随日子过去而变；没写就是今天。"""
@@ -113,14 +134,16 @@ async def _run(case_dir: str, cache: ReplayCache, result: dict[str, Any]) -> Non
         expected = load_expected(case_dir)
         result["title"] = expected.get("title") or name
         decisions: dict[str, Any] = expected.get("decisions") or {}
-        with patched(cache), _as_of(expected):
-            files = [await _parse(p) for p in list_materials(case_dir)]
+        with patched(cache), _as_of(expected), _branch_table(case_dir):
+            paths = list_materials(case_dir, expected.get("material_order"))
+            files = _apply_material_types([await _parse(p) for p in paths], expected)
             result["materials"] = [
                 {"filename": f["filename"], "type": f["identified_type"], "scanned": f["is_scanned"]}
                 for f in files
             ]
-            # 联网查询目前是占位实现；关掉以免将来接入后结果随查询时间变化
-            case = await run_analyze(files, internet_allowed=False)
+            # 联网查询目前是占位实现；默认关掉，免得将来接入后结果随查询时间变化。线上案件快照导出的案卷
+            # 按律师当时的选择（expected.json 的 internet_allowed）：它会写进提示词，不一致录下的调用就对不上
+            case = await run_analyze(files, internet_allowed=bool(expected.get("internet_allowed", False)))
             pauses: list[dict[str, Any]] = []
             while case.pending and len(pauses) < MAX_RESUMES:
                 answered = {k: decisions[k] for k in case.pending.field_keys if k in decisions}
@@ -133,7 +156,7 @@ async def _run(case_dir: str, cache: ReplayCache, result: dict[str, Any]) -> Non
         fields = case.extracted_fields
         result["readiness"] = case.readiness
         result["fields"] = fields
-        with _as_of(expected):
+        with _as_of(expected), _branch_table(case_dir):
             result["complaint"] = render_complaint(fields)
         scored = score_case(
             expected["fields"], fields, await _final_files(case.run_id), _conflict_keys(case.validations)
