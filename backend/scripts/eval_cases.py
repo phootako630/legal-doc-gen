@@ -18,6 +18,7 @@
       安装案2/
         materials/            上传给系统的材料（审批表、合同、验收报告…），文件名保持原样
         expected.json         标准字段（见下）
+        branch_info.json      选填：这个案件用的原告信息表（线上案件快照导出时是律师当时那份），没有就用全局那份
         cache/                录制的 OCR / LLM 返回（自动生成）
       _runs/20261015-0930/    每次运行的 report.md、results.json、各案件 complaint.txt / fields.json
 
@@ -25,7 +26,11 @@ expected.json：
     {
       "title": "安装案 2（AH2009976 安装）",
       "decisions": {"payable_ratio": "100%"},          断点时代替律师作答：{字段: 取值}
+      "decision_rounds": [{"payable_ratio": "100%"}],  选填，代替 decisions：每次断点按顺序原样提交一轮（线上案件快照导出）
       "as_of": "2025-03-01",                            选填：当作生成日（质保期是否届满、违约金暂计日按这天算）
+      "internet_allowed": true,                         选填：默认 false；它会写进提示词，线上案件按律师当时的选择
+      "material_types": {"001.pdf": "审批表"},           选填：律师在上传页改过的材料类型
+      "material_order": ["审批表.pdf", "001.pdf"],       选填：材料顺序（默认按文件名）；材料在提示词里按这个顺序排列
       "fields": {
         "total_amount": 1488996,                         数字 → 按金额比（到分）
         "contract_sign_date": "2020年7月30日",           完整日期 → 按日期比
