@@ -30,7 +30,7 @@ from app.config import (
     LLM_TIMEOUT,
     LLM_TOTAL_TIMEOUT,
 )
-from app.services import run_log
+from app.services import call_recorder, run_log
 from app.services.error_category import LLMEmptyResponse
 
 logger = logging.getLogger(__name__)
@@ -335,6 +335,7 @@ async def chat(
     """
     global _primary_down_until
 
+    original = messages  # 录制按调用方传入的消息算键，与 eval 回放缓存一致（#157）
     if json_mode and not any(m.get("role") == "system" for m in messages):
         messages = [{"role": "system", "content": _JSON_SYSTEM_PROMPT}, *messages]
     _served_model.set(None)
@@ -343,7 +344,9 @@ async def chat(
         return await _chat_fallback(messages, json_mode)
 
     try:
-        return await _complete(_get_client(), DEEPSEEK_MODEL, messages, json_mode)
+        result = await _complete(_get_client(), DEEPSEEK_MODEL, messages, json_mode)
+        call_recorder.record_llm(original, json_mode, result)  # 只录主模型的返回
+        return result
     except (openai.AuthenticationError, openai.PermissionDeniedError) as e:
         raise _translate_error(e) from e  # key 无效属配置错误：不切换，提示去改 .env
     except _Unavailable as u:

@@ -29,7 +29,7 @@ from app.config import (
     QWEN_OCR_ENABLE_THINKING,
     QWEN_OCR_MODEL,
 )
-from app.services import run_log, upload_progress
+from app.services import call_recorder, run_log, upload_progress
 
 logger = logging.getLogger(__name__)
 
@@ -169,12 +169,14 @@ def _ocr_image_b64(img_b64: str) -> str:
 
     # DashScope 原生 API 响应结构：output.choices[0].message.content[0].text
     try:
-        return data["output"]["choices"][0]["message"]["content"][0]["text"].strip()
+        text = data["output"]["choices"][0]["message"]["content"][0]["text"].strip()
     except (KeyError, IndexError):
         # 只记结构，不记内容：返回里可能带识别出的案件原文
         keys = sorted(data) if isinstance(data, dict) else type(data).__name__
         logger.warning("OCR 返回结构异常，顶层字段：%s", keys)
         return ""
+    call_recorder.record_ocr(img_b64, text)  # 线上案件快照（#157），未开启时不录
+    return text
 
 
 def _ocr_one_page(page_idx: int, img_b64: str, total_pages: int) -> OcrPage:

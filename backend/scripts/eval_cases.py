@@ -73,6 +73,7 @@ _TMP = tempfile.mkdtemp(prefix="case-eval-")
 os.environ["CHECKPOINT_DB_PATH"] = os.path.join(_TMP, "checkpoints.sqlite")
 os.environ["UPLOAD_DIR"] = os.path.join(_TMP, "uploads")
 os.environ["RUN_LOG_ENABLED"] = "0"
+os.environ["SNAPSHOT_ENABLED"] = "0"  # 重录（--mode live）的调用不写进线上案件快照库（#157）
 
 from app import config  # noqa: E402
 from app.agent.graph import reset_graph  # noqa: E402

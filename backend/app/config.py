@@ -126,6 +126,11 @@ UPLOAD_DIR = os.getenv("UPLOAD_DIR", os.path.join(_DATA_DIR, "uploads"))
 # 案件数据（checkpoint 里的字段与原文、上传的原始文件）保留天数，超期自动清除。
 # 这些是客户机密：保留期应由律所明确，此处先给保守默认值。
 CASE_RETENTION_DAYS = int(os.getenv("CASE_RETENTION_DAYS", "7"))
+# 线上案件快照（#157）：LLM / OCR 调用的返回与律师导出时的案件快照，供导出成 eval 案卷回放分析。
+# 内容是案卷原文，与案件数据同一套保密要求；保留期由律所同意为半年，超期自动清除。
+SNAPSHOT_ENABLED = os.getenv("SNAPSHOT_ENABLED", "0") == "1"
+SNAPSHOT_DIR = os.getenv("SNAPSHOT_DIR", os.path.join(_DATA_DIR, "snapshots"))
+SNAPSHOT_RETENTION_DAYS = int(os.getenv("SNAPSHOT_RETENTION_DAYS", "180"))
 # 就绪检查（/readyz）：数据目录所在磁盘剩余空间低于此值（MB）即未就绪。
 # 一次上传最多约 95MB，checkpoint 与日志另需余量，故默认 500MB
 READY_MIN_FREE_MB = int(os.getenv("READY_MIN_FREE_MB", "500"))
