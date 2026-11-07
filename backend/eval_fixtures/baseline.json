@@ -51,10 +51,22 @@
         "source_ok": null,
         "verdict": "正确"
       },
+      "handover_text": {
+        "judge": "一致",
+        "silent": false,
+        "source_ok": null,
+        "verdict": "待定"
+      },
       "interest_term": {
         "silent": false,
         "source_ok": null,
         "verdict": "正确"
+      },
+      "jurisdiction_text": {
+        "judge": "不一致",
+        "silent": false,
+        "source_ok": null,
+        "verdict": "待定"
       },
       "paid_amount": {
         "silent": false,

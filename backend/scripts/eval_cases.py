@@ -164,6 +164,10 @@ def main() -> None:
         gate = baseline.compare(base, cases, args.root)
         gate_text, failed = baseline.render(gate, args.baseline), gate.failed
         print(gate_text, flush=True)
+        if os.environ.get("GITHUB_ACTIONS"):
+            # 在 PR 的检查结果里显示为黄色提示（不让 CI 失败）
+            for w in gate.warnings:
+                print(f"::warning title=LLM 裁判::{w}", flush=True)
     path = write_report(os.path.join(runs_dir, run_name), meta, cases, prev, gate_text)
     print(f"[eval] 报告：{path}", flush=True)
     if failed:
