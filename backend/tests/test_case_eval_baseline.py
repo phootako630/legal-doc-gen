@@ -103,3 +103,17 @@ def test_snapshot_keeps_judge_verdict_only_for_judge_fields(tmp_path):
     baseline.save(str(path), [_case("甲", [_j("h", "一致"), _r("a", CORRECT, True)])])
     data = baseline.load(str(path))["cases"]["甲"]
     assert data["h"]["judge"] == "一致" and "judge" not in data["a"]
+
+
+def test_judge_coverage_loss_warns():
+    # 基线里交给裁判的字段，这次被删或不再配 judge：提示「→ 未裁判」，不让裁判回放悄悄消失（#155 评审）
+    gate = baseline.compare(JBASE, [_case("甲", [])], "fx")
+    assert not gate.failed and gate.warnings == ["甲 / h：裁判结论 一致 → 未裁判（这次没有这个字段，expected.json 里被删了？）"]
+    gate = baseline.compare(JBASE, [_case("甲", [{**_r("h", CORRECT), "match": "text"}])], "fx")
+    assert not gate.failed and "这次不再交给裁判，按「text」比对" in gate.warnings[0]
+
+
+def test_new_judge_field_prompts_baseline_update():
+    gate = baseline.compare(JBASE, [_case("甲", [_j("h", "一致"), _j("k", "不一致")])], "fx")
+    assert not gate.failed
+    assert gate.warnings == ["甲 / k：新交给裁判的字段（不一致），确认后用 --update-baseline 写入基线"]

@@ -101,14 +101,9 @@ def compare(baseline: dict[str, Any], cases: list[dict[str, Any]], root: str) ->
             gate.errors.append(f"{name}：基线里没有这个案件，确认结论无误后用 --update-baseline 写入")
             continue
         old_fields = base[name]
+        gate.warnings += _judge_warnings(name, old_fields, c.get("results") or [])
         for r in c.get("results") or []:
             old = old_fields.get(r["key"])
-            if old is not None and r.get("match") == "judge":
-                was, now = old.get("judge") or "未裁判", r.get("judge_verdict") or "未裁判"
-                if was != now:
-                    gate.warnings.append(
-                        f"{name} / {r['key']}：裁判结论 {was} → {now}（{r.get('judge_reason') or ''}）"
-                    )
             if old is None or r["verdict"] == PENDING or old["verdict"] == PENDING:
                 continue
             new_rank, old_rank = _RANK.get(r["verdict"], 0), _RANK.get(old["verdict"], 0)
@@ -128,6 +123,32 @@ def compare(baseline: dict[str, Any], cases: list[dict[str, Any]], root: str) ->
             elif better:
                 gate.improvements.append(line)
     return gate
+
+
+def _judge_warnings(name: str, old_fields: dict[str, Any], results: list[dict[str, Any]]) -> list[str]:
+    """
+    以基线为准逐个检查裁判字段：结论变了要提示；基线里交给裁判、这次却没有——字段被删或不再配
+    match: judge——也提示「→ 未裁判」（#155 评审：否则裁判回放悄悄消失，CI 毫无提示）。
+    """
+    now_by_key = {r["key"]: r for r in results}
+    out = []
+    for key, old in old_fields.items():
+        if "judge" not in old:
+            continue
+        was = old.get("judge") or "未裁判"
+        r = now_by_key.get(key)
+        if r is None:
+            out.append(f"{name} / {key}：裁判结论 {was} → 未裁判（这次没有这个字段，expected.json 里被删了？）")
+        elif r.get("match") != "judge":
+            out.append(f"{name} / {key}：裁判结论 {was} → 未裁判（这次不再交给裁判，按「{r.get('match')}」比对）")
+        else:
+            now = r.get("judge_verdict") or "未裁判"
+            if was != now:
+                out.append(f"{name} / {key}：裁判结论 {was} → {now}（{r.get('judge_reason') or ''}）")
+    # 新配成 judge、基线里还没有裁判结论的字段：提示更新基线
+    out += [f"{name} / {r['key']}：新交给裁判的字段（{r.get('judge_verdict') or '未裁判'}），确认后用 --update-baseline 写入基线"
+            for r in results if r.get("match") == "judge" and "judge" not in (old_fields.get(r["key"]) or {})]
+    return out
 
 
 def render(gate: GateResult, baseline_path: str) -> str:
