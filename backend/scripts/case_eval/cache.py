@@ -4,6 +4,7 @@
 #   - app.agent.nodes.chat：DeepSeek 调用，键 = 模型 + 消息 + json_mode；
 #   - app.services.ocr_engine._ocr_image_b64：单页 OCR，键 = OCR 模型 + 页面图片。
 # 另外 eval 自己的 LLM 裁判（judge.py，#90）也经这里录制 / 回放（wrap_judge），键 = 裁判模型 + 消息。
+# 开了 --langfuse 时，三处每次调用（含命中缓存的回放）各记一条 Langfuse 记录（tracing.py）。
 # 页面图片由 PyMuPDF 确定性渲染，同一份 PDF 同一页每次哈希相同。
 # 缓存里是真实案卷的识别结果，只放在服务器的案卷目录下，不进仓库。
 from __future__ import annotations
@@ -18,6 +19,7 @@ from typing import Any, Callable
 from app import config
 from app.agent import nodes
 from app.services import llm_client, ocr_engine
+from scripts.case_eval.tracing import NoopTracer, image_digest
 
 MODES = ("replay", "live")
 
@@ -87,6 +89,7 @@ class ReplayCache:
         self.stats = CacheStats()
         self._lock = threading.Lock()  # OCR 在线程池里并发调用
         self.ocr_available = True  # 是否配置了 DashScope key（patched 进入时设置）
+        self.tracer: Any = NoopTracer()  # Langfuse 追踪（eval_cases.py --langfuse 时换成 CaseTracer）
 
     def _path(self, kind: str, key: str, ext: str) -> str:
         return os.path.join(self.root, kind, f"{key}.{ext}")
@@ -113,44 +116,54 @@ class ReplayCache:
 
     def wrap_chat(self, real: Callable[..., Any]) -> Callable[..., Any]:
         async def chat(messages: list[dict], json_mode: bool = False) -> Any:
-            path = self._path("llm", llm_key(messages, json_mode), "json")
-            cached = self._read(path)
-            if cached is not None:
-                self.stats.llm_hits += 1
-                return json.loads(cached)["result"]
-            if self.mode == "replay":
-                self._miss("LLM")
-            result = await real(messages, json_mode=json_mode)
-            self.stats.llm_calls += 1
-            served = llm_client.last_served_model()
-            if served and served != config.DEEPSEEK_MODEL:
-                # 备用模型的结果不能当成 DeepSeek 的录下来，否则之后的回放会混入另一个模型的输出
-                self.stats.llm_fallback += 1
+            with self.tracer.observe("LLM", "generation", model=config.DEEPSEEK_MODEL, input=messages) as obs:
+                path = self._path("llm", llm_key(messages, json_mode), "json")
+                cached = self._read(path)
+                if cached is not None:
+                    self.stats.llm_hits += 1
+                    result = json.loads(cached)["result"]
+                    obs.update(output=result, metadata={"cached": True, "json": json_mode})
+                    return result
+                if self.mode == "replay":
+                    self._miss("LLM")
+                result = await real(messages, json_mode=json_mode)
+                self.stats.llm_calls += 1
+                served = llm_client.last_served_model()
+                obs.update(output=result, model=served or config.DEEPSEEK_MODEL,
+                           metadata={"cached": False, "json": json_mode})
+                if served and served != config.DEEPSEEK_MODEL:
+                    # 备用模型的结果不能当成 DeepSeek 的录下来，否则之后的回放会混入另一个模型的输出
+                    self.stats.llm_fallback += 1
+                    return result
+                self._write(path, json.dumps({"result": result}, ensure_ascii=False))
                 return result
-            self._write(path, json.dumps({"result": result}, ensure_ascii=False))
-            return result
 
         return chat
 
     def wrap_ocr(self, real: Callable[[str], str]) -> Callable[[str], str]:
         def ocr(img_b64: str) -> str:
-            path = self._path("ocr", ocr_key(img_b64), "txt")
-            cached = self._read(path)
-            if cached is not None:
+            # 只记页面图片的哈希，不上传图片
+            page = {"page_image_sha256": image_digest(img_b64)}
+            with self.tracer.observe("OCR", "generation", model=config.QWEN_OCR_MODEL, input=page) as obs:
+                path = self._path("ocr", ocr_key(img_b64), "txt")
+                cached = self._read(path)
+                if cached is not None:
+                    with self._lock:
+                        self.stats.ocr_hits += 1
+                    obs.update(output=cached, metadata={"cached": True})
+                    return cached
+                if self.mode == "replay":
+                    self._miss("OCR")
+                if not self.ocr_available:
+                    raise RuntimeError("OCR 缓存里没有这一页，且未配置 DASHSCOPE_API_KEY")
+                text = real(img_b64)
                 with self._lock:
-                    self.stats.ocr_hits += 1
-                return cached
-            if self.mode == "replay":
-                self._miss("OCR")
-            if not self.ocr_available:
-                raise RuntimeError("OCR 缓存里没有这一页，且未配置 DASHSCOPE_API_KEY")
-            text = real(img_b64)
-            with self._lock:
-                self.stats.ocr_calls += 1
-            # 空串多半是接口异常（_ocr_image_b64 出错时返回空串），不录，下次重试
-            if text:
-                self._write(path, text)
-            return text
+                    self.stats.ocr_calls += 1
+                obs.update(output=text, metadata={"cached": False})
+                # 空串多半是接口异常（_ocr_image_b64 出错时返回空串），不录，下次重试
+                if text:
+                    self._write(path, text)
+                return text
 
         return ocr
 
@@ -158,18 +171,22 @@ class ReplayCache:
         """LLM 裁判的录制 / 回放；严格回放未命中抛 CacheMiss（judge.py 记为「未裁判」，不让案件出错）。"""
 
         async def judge(messages: list[dict]) -> Any:
-            path = self._path("judge", judge_key(model, messages), "json")
-            cached = self._read(path)
-            if cached is not None:
-                self.stats.judge_hits += 1
-                return json.loads(cached)["result"]
-            if self.mode == "replay":
-                self._miss("裁判")
-            result = await real(messages)
-            self.stats.judge_calls += 1
-            if result:
-                self._write(path, json.dumps({"result": result}, ensure_ascii=False))
-            return result
+            with self.tracer.observe("LLM 裁判", "evaluator", model=model, input=messages) as obs:
+                path = self._path("judge", judge_key(model, messages), "json")
+                cached = self._read(path)
+                if cached is not None:
+                    self.stats.judge_hits += 1
+                    result = json.loads(cached)["result"]
+                    obs.update(output=result, metadata={"cached": True})
+                    return result
+                if self.mode == "replay":
+                    self._miss("裁判")
+                result = await real(messages)
+                self.stats.judge_calls += 1
+                obs.update(output=result, metadata={"cached": False})
+                if result:
+                    self._write(path, json.dumps({"result": result}, ensure_ascii=False))
+                return result
 
         return judge
 

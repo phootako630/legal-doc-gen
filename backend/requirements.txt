@@ -28,6 +28,9 @@ langgraph==0.2.76
 langgraph-checkpoint-sqlite>=2.0,<3
 aiosqlite>=0.20,<0.22
 
+# eval 链路追踪（自托管 Langfuse，scripts/eval_cases.py --langfuse）：只有 eval 脚本导入，线上系统不用
+langfuse==5.2.0
+
 # 代码质量
 ruff==0.9.2
 

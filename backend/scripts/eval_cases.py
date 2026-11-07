@@ -9,6 +9,9 @@
     python scripts/eval_cases.py /srv/eval-cases --case 安装案2   # 只跑某个案件（可重复）
     python scripts/eval_cases.py eval_fixtures --strict --baseline eval_fixtures/baseline.json
                                                                   # 虚构案卷集 + 基线门槛（CI 用，变差即失败）
+    python scripts/eval_cases.py /srv/eval-cases --strict --langfuse
+                                                                  # 同时把每个案件的调用与结论记到自托管 Langfuse
+                                                                  # （读 LANGFUSE_HOST / _PUBLIC_KEY / _SECRET_KEY，见 deploy/langfuse/README.md）
 
 目录结构：
     /srv/eval-cases/
@@ -79,6 +82,7 @@ from scripts.case_eval.cache import MODES  # noqa: E402
 from scripts.case_eval.judge import JUDGE_MODEL  # noqa: E402
 from scripts.case_eval.report import accuracy, find_previous, write_report  # noqa: E402
 from scripts.case_eval.runner import run_case  # noqa: E402
+from scripts.case_eval.tracing import Tracing, make_tracing  # noqa: E402
 
 
 def _case_dirs(root: str, only: list[str]) -> list[str]:
@@ -96,18 +100,18 @@ def _case_dirs(root: str, only: list[str]) -> list[str]:
     return [os.path.join(root, n) for n in names]
 
 
-async def _run_all(dirs: list[str], mode: str, strict: bool) -> list[dict]:
+async def _run_all(dirs: list[str], mode: str, strict: bool, tracing: Tracing | None = None) -> list[dict]:
     try:
-        return await _run_cases(dirs, mode, strict)
+        return await _run_cases(dirs, mode, strict, tracing)
     finally:
         await reset_graph()  # 关掉 checkpoint 的 SQLite 连接线程，否则进程结束不了
 
 
-async def _run_cases(dirs: list[str], mode: str, strict: bool) -> list[dict]:
+async def _run_cases(dirs: list[str], mode: str, strict: bool, tracing: Tracing | None) -> list[dict]:
     cases = []
     for d in dirs:
         print(f"[eval] {os.path.basename(d)} …", flush=True)
-        result = await run_case(d, mode=mode, strict=strict)
+        result = await run_case(d, mode=mode, strict=strict, tracing=tracing)
         s = result.get("summary") or {}
         print(
             f"[eval] {os.path.basename(d)}："
@@ -128,6 +132,10 @@ def main() -> None:
     parser.add_argument("--out", help="报告目录，默认 <root>/_runs")
     parser.add_argument("--baseline", help="与这份基线比较，变差或缓存未命中时退出码 1（CI 用）")
     parser.add_argument("--update-baseline", action="store_true", help="把这次的结论写入 --baseline")
+    parser.add_argument("--langfuse", action="store_true",
+                        help="把每个案件的调用与结论记到自托管 Langfuse（读 LANGFUSE_HOST / _PUBLIC_KEY / _SECRET_KEY）")
+    parser.add_argument("--langfuse-allow-cloud", action="store_true",
+                        help="允许发往 Langfuse Cloud：只对仓库里的 eval_fixtures/ 生效，其他案卷目录一律拒绝")
     args = parser.parse_args()
     if args.strict and args.mode != "replay":
         raise SystemExit("--strict 只用于 replay 模式")
@@ -141,7 +149,14 @@ def main() -> None:
         branch_registry.BRANCH_INFO_PATH = fixture_table
     runs_dir = args.out or os.path.join(args.root, "_runs")
     run_name = datetime.now().strftime("%Y%m%d-%H%M%S")
-    cases = asyncio.run(_run_all(dirs, args.mode, args.strict))
+    tracing = None
+    if args.langfuse:
+        tags = [args.mode] + (["strict"] if args.strict else []) + [os.path.basename(os.path.normpath(args.root))]
+        tracing = make_tracing(run_name, tags, allow_cloud=args.langfuse_allow_cloud, root=args.root)
+    cases = asyncio.run(_run_all(dirs, args.mode, args.strict, tracing))
+    if tracing:
+        tracing.flush()
+        print(f"[eval] Langfuse：{tracing.url()}（Sessions 里找 {run_name}）", flush=True)
     meta = {
         "run": run_name,
         "mode": args.mode,
