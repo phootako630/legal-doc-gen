@@ -145,3 +145,15 @@ def test_no_judge_section_without_judge_fields(tmp_path):
     meta = {"run": "r", "mode": "replay", "llm_model": "m", "ocr_model": "o"}
     write_report(str(tmp_path), meta, [case], None)
     assert "LLM 裁判" not in (tmp_path / "report.md").read_text(encoding="utf-8")
+
+
+def test_judge_verdict_change_listed_in_run_diff():
+    # 与上次运行对比：值的结论没变（都是待定），裁判结论变了也要列出（#90 第 4 步）
+    from scripts.case_eval.report import diff_runs
+
+    r = score_field("handover_text", {"value": "已全部移交物业", "match": "judge"}, {"value": "已移交被告", "src": "x"})
+    r.judge_verdict = "一致"
+    prev = {"cases": [{"case": "c", "results": [r.as_dict()]}]}
+    r.judge_verdict = "不一致"
+    changes = diff_runs(prev, [{"case": "c", "results": [r.as_dict()]}])
+    assert changes == [{"case": "c", "key": "handover_text", "before": "待定（裁判：一致）", "after": "待定（裁判：不一致）"}]

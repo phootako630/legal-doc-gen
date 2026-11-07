@@ -15,6 +15,8 @@
     "elevator_qty": 2,
     "acceptance_latest_date": "2024年9月20日",
     "interest_term": "逾期付款利息",
-    "court_district": "徐州市鼓楼区"
+    "court_district": "徐州市鼓楼区",
+    "jurisdiction_text": {"value": "依据合同约定，争议向工程所在地法院起诉；工程位于徐州市鼓楼区，故原告向徐州市鼓楼区人民法院提起诉讼。", "match": "judge", "note": "LLM 裁判示例（#90）：律师写法与系统措辞不同"},
+    "handover_text": {"value": "电梯已全部移交给被告使用。", "match": "judge", "note": "LLM 裁判示例（#90）"}
   }
 }

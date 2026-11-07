@@ -70,3 +70,36 @@ def test_snapshot_roundtrip(tmp_path):
     data = baseline.load(str(path))
     assert data == {"cases": {"甲": {"a": {"verdict": CORRECT, "source_ok": True, "silent": False}}}}
     assert "系统" not in path.read_text(encoding="utf-8")  # 只存结论，不存取值
+
+
+# LLM 裁判（#90 第 4 步）：裁判结论变化、裁判缓存未命中只提示，不让门槛失败
+def _j(key, judge, reason="理由"):
+    return {**_r(key, PENDING), "match": "judge", "judge_verdict": judge, "judge_reason": reason}
+
+
+JBASE = {"cases": {"甲": {"h": {"verdict": PENDING, "source_ok": None, "silent": False, "judge": "一致"}}}}
+
+
+def test_judge_change_only_warns():
+    gate = baseline.compare(JBASE, [_case("甲", [_j("h", "不一致", "移交对象不同")])], "fx")
+    assert not gate.failed and not gate.regressions
+    assert gate.warnings == ["甲 / h：裁判结论 一致 → 不一致（移交对象不同）"]
+    text = baseline.render(gate, "fx/baseline.json")
+    assert "LLM 裁判提示" in text and "与基线一致，通过。" in text
+    assert not baseline.compare(JBASE, [_case("甲", [_j("h", "一致")])], "fx").warnings
+
+
+def test_judge_cache_miss_warns_but_other_miss_still_fails():
+    gate = baseline.compare(JBASE, [_case("甲", [_j("h", "未裁判")], misses=["裁判"])], "fx")
+    assert not gate.failed
+    assert any("裁判缓存未命中" in w for w in gate.warnings)
+    assert any("一致 → 未裁判" in w for w in gate.warnings)
+    gate = baseline.compare(JBASE, [_case("甲", [_j("h", "未裁判")], misses=["裁判", "LLM"])], "fx")
+    assert gate.failed and "严格回放缓存未命中" in gate.errors[0]
+
+
+def test_snapshot_keeps_judge_verdict_only_for_judge_fields(tmp_path):
+    path = tmp_path / "baseline.json"
+    baseline.save(str(path), [_case("甲", [_j("h", "一致"), _r("a", CORRECT, True)])])
+    data = baseline.load(str(path))["cases"]["甲"]
+    assert data["h"]["judge"] == "一致" and "judge" not in data["a"]

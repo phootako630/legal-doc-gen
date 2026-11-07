@@ -51,6 +51,8 @@ def find_previous(runs_dir: str, current: str) -> dict[str, Any] | None:
 def _label(r: dict[str, Any]) -> str:
     """一个字段的完整结论：值的结论，加上来源错误 / 静默错误（旧版 results.json 没有这两项）。"""
     parts = [r["verdict"]]
+    if r.get("match") == "judge" and "judge_verdict" in r:
+        parts[0] += f"（裁判：{r['judge_verdict'] or '未裁判'}）"  # 裁判结论变化也算「变了」（#90）
     if r.get("source_ok") is False:
         parts.append(SOURCE_WRONG)
     if r.get("silent"):
