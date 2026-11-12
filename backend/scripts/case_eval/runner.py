@@ -18,6 +18,7 @@ from app.agent.runner import run_analyze, run_resume
 from app.services import branch_registry, derived_fields
 from app.services.complaint_renderer import render_complaint
 from app.services.file_parser import parse_file
+from app.services.complaint_readiness import conflict_keys
 from scripts.case_eval.cache import ReplayCache, patched
 from scripts.case_eval.judge import JUDGE_MODEL, call_judge, judge_results
 from scripts.case_eval.tracing import NoopTracer, Tracing
@@ -73,18 +74,6 @@ async def _final_files(run_id: str) -> list[dict[str, Any]]:
     graph = await get_graph()
     snapshot = await graph.aget_state({"configurable": {"thread_id": run_id}})
     return list((snapshot.values or {}).get("files") or [])
-
-
-def _conflict_keys(validations: list[dict[str, Any]]) -> set[str]:
-    """审核页按冲突显示的字段（与前端 collectConflictKeys 一致）。"""
-    keys: set[str] = set()
-    for v in validations:
-        if not v.get("is_conflict"):
-            continue
-        keys.update(v.get("related_fields") or [])
-        if v.get("key") == "qty_consistency":
-            keys.add("elevator_qty")
-    return keys
 
 
 def _answers(pending: Any, expected: dict[str, Any], decisions: dict[str, Any], index: int) -> dict[str, Any]:
@@ -171,7 +160,7 @@ async def _run(case_dir: str, cache: ReplayCache, result: dict[str, Any]) -> Non
         with _as_of(expected), _branch_table(case_dir):
             result["complaint"] = render_complaint(fields)
         scored = score_case(
-            expected["fields"], fields, await _final_files(case.run_id), _conflict_keys(case.validations)
+            expected["fields"], fields, await _final_files(case.run_id), conflict_keys(case.validations)
         )
         # 规则拼接的句子交给 LLM 裁判（#90）：结论单独列出，不改变上面的打分
         await judge_results(scored, cache.wrap_judge(call_judge, JUDGE_MODEL))
