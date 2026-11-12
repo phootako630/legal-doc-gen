@@ -43,6 +43,9 @@ DELIVERED = {
     "contract_no": _node("HT-虚构-001", src="《合同.pdf》第1页（OCR）", channel="ocr", confidence=50),
     "defendant_legal_rep": {"value": None, "src": ""},
     "contacts": [{"name": {"value": "虚构联系人"}, "phone": {"value": "13800000000"}}],
+    # 审核页不显示的中间字段：律师导出时也会原样带回，不计入统计（#163 评审）
+    "elevator_qty_by_approval": _node(3),
+    "internet_lookup_status": _node("未查询"),
 }
 FINAL = {
     **DELIVERED,
@@ -51,6 +54,7 @@ FINAL = {
     "unpaid_amount": {"value": 400.0, "src": "律师填写"},  # 冲突字段被改 → 不算静默错误
     "contract_no": {"value": "", "src": ""},  # 待核实字段被清空
     "defendant_legal_rep": {"value": "张某某", "src": "律师填写"},  # 缺失字段被补填
+    "elevator_qty_by_approval": {"value": 4, "src": "规则改写"},  # 审核页不显示：不算律师改动
 }
 REVIEW = {
     "validations": [
@@ -81,7 +85,7 @@ def test_edit_kind():
 def test_review_status_matches_review_page():
     conflicts = sq.conflict_keys(REVIEW["validations"])
     assert conflicts == {"unpaid_amount", "elevator_qty"}  # 台数一致性对应展示字段 elevator_qty
-    status = {k: sq.review_status(v, conflicts, k) for k, v in DELIVERED.items()}
+    status = {k: sq.review_status(v, conflicts, k) for k, v in DELIVERED.items() if k in sq.REVIEW_FIELD_KEYS}
     assert status == {
         "defendant_name": "normal", "total_amount": "normal", "unpaid_amount": "conflict",
         "elevator_qty": "conflict", "contract_no": "ocr_uncertain", "defendant_legal_rep": "missing",
@@ -101,6 +105,7 @@ def test_summary_and_report(snap):
     assert s["edits_per_case"] == [4, 4]
     assert dict(s["per_key"]["defendant_name"]) == {"cases": 2, "修改": 2}
     assert s["per_key"]["total_amount"]["修改"] == 0
+    assert "elevator_qty_by_approval" not in s["per_key"] and "internet_lookup_status" not in s["per_key"]
     assert s["silent"] == {"defendant_name": 1}  # 旧快照还原不出状态，不计入
     assert dict(s["by_status"]["conflict"]) == {"n": 2, "edited": 1}
     assert dict(s["by_status"]["missing"]) == {"n": 1, "edited": 1}
@@ -174,3 +179,15 @@ def test_end_to_end_from_live_flow(snap, monkeypatch):
     report = sq.render(s)
     for value in SECRET_VALUES:
         assert value not in report
+
+
+def test_final_readiness_counts_unresolved_conflicts():
+    """律师停在断点直接导出、金额仍不勾稽：重新校验仍是冲突，不能显示成就绪（#163 评审）。"""
+    base = {
+        "total_amount": {"value": 1000.0, "src": "x"},
+        "paid_amount": {"value": 600.0, "src": "x"},
+        "unpaid_amount": {"value": 300.0, "src": "x"},
+    }
+    unresolved = sq.final_readiness(base)
+    resolved = sq.final_readiness({**base, "unpaid_amount": {"value": 400.0, "src": "律师填写"}})
+    assert unresolved is not None and resolved is not None and unresolved < resolved

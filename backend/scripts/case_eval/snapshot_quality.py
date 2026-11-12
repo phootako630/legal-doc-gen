@@ -11,6 +11,8 @@
 # 字段状态按审核页口径还原（前端 lib/buildReviewFields.ts）：值为空 → 缺失；出处写着冲突 / 不一致 → 冲突；
 # 出处含 OCR / 扫描 / 待核实 → 待核实；其余正常；确定性校验判为冲突的字段一律冲突（优先级最高）。
 # 校验结论来自快照的 delivered_review（#162 起才记）；更早的快照还原不出冲突，不计入静默错误，单独计数。
+# 只统计审核页实际展示的字段（REVIEW_FIELD_KEYS，与前端 reviewFieldKeys 同步）：律师导出时提交的是完整字段，
+# 里面还有审核页不显示的中间字段（三源台数、联网状态等），算进来会稀释改动率（#163 评审）。
 from __future__ import annotations
 
 import os
@@ -21,7 +23,8 @@ from typing import Any
 from app import config
 from app.services import case_snapshot
 from app.services.complaint_renderer import fill_status
-from scripts.case_eval.scoring import _contacts_text, _norm_text
+from app.services.validators import check_to_dict, run_all_checks
+from scripts.case_eval.scoring import REVIEW_FIELD_KEYS, _contacts_text, _norm_text
 
 STATUS_LABELS = {"normal": "正常", "ocr_uncertain": "待核实", "missing": "缺失", "conflict": "冲突"}
 CHANNEL_LABELS = {"text": "文字", "ocr": "OCR"}
@@ -123,10 +126,10 @@ def field_observations(case: dict[str, Any]) -> list[FieldObs]:
     review = case.get("delivered_review")
     conflicts = conflict_keys(review.get("validations") or []) if isinstance(review, dict) else None
     out = []
-    for key, after in final.items():
-        if key not in delivered:
+    for key in REVIEW_FIELD_KEYS:
+        if key not in delivered or key not in final:
             continue
-        node = delivered[key]
+        node, after = delivered[key], final[key]
         if not (isinstance(node, list) or (isinstance(node, dict) and "value" in node)):
             continue
         before = _value(node)
@@ -174,12 +177,17 @@ def _conf_bucket(conf: int | None) -> str:
 
 
 def final_readiness(final: dict[str, Any]) -> int | None:
-    """律师导出时的就绪度：同 agent 的口径（模板填空有值的占比），律师确认后不再有冲突。"""
+    """
+    律师导出时的就绪度，同 agent 的口径（模板填空有值且不冲突的占比，nodes._readiness）。
+    冲突对律师导出的字段重新跑确定性校验得出：律师停在断点直接导出、没解决的冲突照样不算就绪（#163 评审）。
+    """
     try:
         keys, missing = fill_status(final)
+        conflicts = conflict_keys([check_to_dict(c) for c in run_all_checks(final)])
     except Exception:  # noqa: BLE001 — 旧快照字段不全时不让整份报告失败
         return None
-    return round((len(keys) - len(missing)) / len(keys) * 100) if keys else None
+    good = sum(1 for k in keys if k not in missing and k not in conflicts)
+    return round(good / len(keys) * 100) if keys else None
 
 
 def summarize(cases: list[dict[str, Any]]) -> dict[str, Any]:
@@ -313,5 +321,6 @@ def render(s: dict[str, Any]) -> str:
         lines.append(f"\n另有 {s['old_rounds']} 轮作答来自旧快照，没记候选项，未计入。")
 
     lines += ["", "## 起诉状就绪度", "", _ready_line("交给律师时", s["delivered_ready"]),
-              _ready_line("律师导出时", s["final_ready"]), ""]
+              _ready_line("律师导出时", s["final_ready"]),
+              "", "导出时的就绪度对律师导出的字段重新校验：没解决的冲突同样不算就绪。", ""]
     return "\n".join(lines)
