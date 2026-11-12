@@ -7,8 +7,9 @@
 #   cases/<run_id>/case.json    案件快照：
 #       分析开始时  files（文件名、律师确认的类型、系统识别的类型、原件 source_id …）、internet_allowed、
 #                   code_version（部署的提交号）、prompts（提示词模板的哈希：模板变了，旧快照回放会缓存未命中）、模型
-#       断点作答时  恢复成功后才追加这一轮回答（恢复失败、律师重试不会留下没被接受的回答）
-#       导出起诉状时 delivered（交给律师审核的字段）、final（律师确认后的字段）、branch_table
+#       断点作答时  恢复成功后才追加这一轮回答与当时的断点（问题、候选项）（恢复失败、律师重试不会留下没被接受的回答）
+#       导出起诉状时 delivered（交给律师审核的字段）、delivered_review（交付时的校验结论与就绪度）、
+#                   final（律师确认后的字段）、branch_table
 #   LLM / OCR 调用的返回另由 call_recorder 录在 calls/。
 #
 # - 开关 SNAPSHOT_ENABLED；保留 SNAPSHOT_RETENTION_DAYS（默认 180 天，律所同意），超期由定时清理循环删除。
@@ -136,6 +137,7 @@ def start(run_id: str, files: list[dict], internet_allowed: bool, owner: str | N
             "files": [{k: f.get(k) for k in _FILE_KEYS} for f in files],
             "decisions": [],
             "delivered": None,
+            "delivered_review": None,
             "final": None,
             "branch_table": None,
             "generated_at": None,
@@ -144,23 +146,30 @@ def start(run_id: str, files: list[dict], internet_allowed: bool, owner: str | N
         _warn("开始", exc)
 
 
-def add_decisions(run_id: str, decisions: dict) -> None:
-    """律师在断点处的一轮回答（按顺序追加；回放时依次喂回给断点）。"""
+def add_decisions(run_id: str, decisions: dict, pending: dict | None = None) -> None:
+    """
+    律师在断点处的一轮回答（按顺序追加；回放时依次喂回给断点）。
+    pending 是这一轮断点当时的问题与候选项（kind、field_keys、options、field_options），
+    统计律师选了第几个候选还是自填（#74）；回放不用它。
+    """
     if not config.SNAPSHOT_ENABLED:
         return
     try:
         case = load(run_id)
         if case is None:
             return
-        case["decisions"].append({"at": time.time(), "answers": decisions})
+        case["decisions"].append({"at": time.time(), "answers": decisions, "pending": pending})
         _save(run_id, case)
     except Exception as exc:  # noqa: BLE001
         _warn("断点作答", exc)
 
 
-def finish(run_id: str | None, delivered: dict | None, final: dict, user: str | None) -> None:
+def finish(run_id: str | None, delivered: dict | None, final: dict, user: str | None,
+           review: dict | None = None) -> None:
     """
     律师导出起诉状：记下交付字段、律师最终字段和当时的原告信息表。多次导出以最后一次为准。
+    review 是交付时审核页的其余状态：validations（确定性校验结论，审核页据此把字段标为冲突）、
+    readiness（就绪度），统计「系统标正常、律师却改了」时按审核页口径还原字段状态（#74）。
     只更新这个账号自己发起的案件（别人的 run_id 不能改写别人的快照）。
     """
     if not config.SNAPSHOT_ENABLED or not run_id:
@@ -170,7 +179,7 @@ def finish(run_id: str | None, delivered: dict | None, final: dict, user: str | 
         if case is None or case.get("owner") != user:
             return
         case.update(delivered=delivered, final=final, generated_at=time.time(),
-                    branch_table=_snapshot_branch_table())
+                    delivered_review=review, branch_table=_snapshot_branch_table())
         _save(run_id, case)
         for f in case.get("files") or []:  # 引用的原件跟着案件快照续期
             path = material_path(f.get("source_id") or "")
