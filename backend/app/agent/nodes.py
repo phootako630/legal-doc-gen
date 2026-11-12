@@ -30,7 +30,7 @@ from app.services.acceptance_report import (
     latest_approved_date,
     report_first_page_ids,
 )
-from app.services.complaint_renderer import fill_status
+from app.services.complaint_readiness import readiness
 from app.services.conflict_options import conflict_options
 from app.services.doc_search import locate_clause_bodies
 from app.services.equipment_list import count_vge_units
@@ -115,30 +115,6 @@ _CONTRACT_AUTHORITATIVE_KEYS = [
     "elevator_qty_by_contract",
     "project_site",
 ]
-
-
-def _conflict_keys(checks: list[ValidationCheck]) -> set[str]:
-    keys: set[str] = set()
-    for c in checks:
-        if c.is_conflict:
-            keys.update(c.related_fields)
-            if c.key == "qty_consistency":
-                keys.add("elevator_qty")
-    return keys
-
-
-def _readiness(fields: dict, checks: list[ValidationCheck]) -> int:
-    """起诉状就绪度 0–100：模板里的填空中，有值且不冲突的占比。
-
-    原先只看 10 个固定字段，原告信用代码 / 负责人 / 住址、被告法定代表人 / 住址等
-    缺失时仍显示 100%；改为按模板实际填空统计，与预览页「N 处待补充」口径一致。
-    """
-    keys, missing = fill_status(fields)
-    if not keys:
-        return 0
-    conflicted = _conflict_keys(checks)
-    good = sum(1 for k in keys if k not in missing and k not in conflicted)
-    return round(good / len(keys) * 100)
 
 
 def _build_conflict_pending(conflicts: list[ValidationCheck], fields: dict) -> dict:
@@ -355,7 +331,7 @@ async def validate_node(state: GraphState) -> dict:
         payload = {
             "pending": _build_conflict_pending(conflicts, fields),
             "validations": [check_to_dict(c) for c in checks],
-            "readiness": _readiness(fields, checks),
+            "readiness": readiness(fields, checks),
         }
         # 暂停，把决策抛给前端；resume 时返回 {field_key: value}
         decisions = interrupt(payload)
@@ -371,7 +347,7 @@ async def validate_node(state: GraphState) -> dict:
         "validations": [check_to_dict(c) for c in checks],
         "validation_report": report,
         "highlight_list": highlight,
-        "readiness": _readiness(fields, checks),
+        "readiness": readiness(fields, checks),
         "pending": None,
     }
 

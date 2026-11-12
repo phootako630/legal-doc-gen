@@ -107,7 +107,7 @@ def test_resume_unknown_run_id_raises(monkeypatch):
 
 def test_readiness_counts_template_fills():
     # 就绪度按模板实际填空统计：原告 / 被告的待补充项会拉低就绪度（原先固定 10 个字段，缺这些仍 100%）
-    from app.agent.nodes import _readiness
+    from app.services.complaint_readiness import readiness
     from app.services.complaint_renderer import fill_status
 
     fields = {
@@ -122,6 +122,6 @@ def test_readiness_counts_template_fills():
     assert "contract_action" not in keys  # 措辞类不计入
     assert {"plaintiff_credit_code", "defendant_address", "defendant_legal_rep"} <= missing
     assert "unpaid_amount" not in missing
-    score = _readiness(fields, [])
+    score = readiness(fields, [])
     assert 0 < score < 100
     assert score == round((len(keys) - len(missing)) / len(keys) * 100)

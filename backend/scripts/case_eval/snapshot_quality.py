@@ -22,8 +22,8 @@ from typing import Any
 
 from app import config
 from app.services import case_snapshot
-from app.services.complaint_renderer import fill_status
-from app.services.validators import check_to_dict, run_all_checks
+from app.services.complaint_readiness import conflict_keys, readiness
+from app.services.validators import run_all_checks
 from scripts.case_eval.scoring import REVIEW_FIELD_KEYS, _contacts_text, _norm_text
 
 STATUS_LABELS = {"normal": "正常", "ocr_uncertain": "待核实", "missing": "缺失", "conflict": "冲突"}
@@ -90,18 +90,6 @@ def edit_kind(before: Any, after: Any) -> str | None:
     if _blank(after):
         return "清空"
     return None if _same(before, after) else "修改"
-
-
-def conflict_keys(validations: list[dict]) -> set[str]:
-    """确定性校验判为冲突的字段（同前端 collectConflictKeys：台数一致性对应展示字段 elevator_qty）。"""
-    keys: set[str] = set()
-    for v in validations or []:
-        if not isinstance(v, dict) or not v.get("is_conflict"):
-            continue
-        keys.update(v.get("related_fields") or [])
-        if v.get("key") == "qty_consistency":
-            keys.add("elevator_qty")
-    return keys
 
 
 def review_status(node: Any, conflicts: set[str], key: str) -> str:
@@ -178,16 +166,13 @@ def _conf_bucket(conf: int | None) -> str:
 
 def final_readiness(final: dict[str, Any]) -> int | None:
     """
-    律师导出时的就绪度，同 agent 的口径（模板填空有值且不冲突的占比，nodes._readiness）。
-    冲突对律师导出的字段重新跑确定性校验得出：律师停在断点直接导出、没解决的冲突照样不算就绪（#163 评审）。
+    律师导出时的就绪度：对律师导出的字段重新跑确定性校验，再用 agent 同一个就绪度函数
+    （services/complaint_readiness.readiness）——停在断点直接导出、没解决的冲突照样不算就绪（#163 评审）。
     """
     try:
-        keys, missing = fill_status(final)
-        conflicts = conflict_keys([check_to_dict(c) for c in run_all_checks(final)])
+        return readiness(final, run_all_checks(final))
     except Exception:  # noqa: BLE001 — 旧快照字段不全时不让整份报告失败
         return None
-    good = sum(1 for k in keys if k not in missing and k not in conflicts)
-    return round(good / len(keys) * 100) if keys else None
 
 
 def summarize(cases: list[dict[str, Any]]) -> dict[str, Any]:
