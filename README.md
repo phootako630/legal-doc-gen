@@ -11,7 +11,7 @@ After the lawyer reviews and confirms, the app generates a civil complaint as a 
 
 > **v1 → v2**: v1 was a fixed pipeline (`upload → checklist → extract → validate → generate`) with hard-wired control flow. v2 makes the core **agentic**. A tool-equipped LangGraph agent drives the control flow, OCRs only the scanned pages it needs, self-checks with deterministic code, and pauses at key disagreements to ask the lawyer (human-in-the-loop).
 >
-> **Current status**: deployed for lawyer trials (UAT), to validate AI extraction accuracy and the lawyer experience. The site has a Chinese login page, admin-created accounts and HTTPS. Case state is stored in a local SQLite database, so review can resume after a restart, and it is purged automatically after 7 days.
+> **Current status**: deployed for lawyer trials (UAT), to validate AI extraction accuracy and the lawyer experience. The site has a Chinese login page, admin-created accounts and HTTPS. Case state is stored in a local SQLite database, so review can resume after a restart, and it is purged automatically after 7 days. Separately, **production case snapshots** (the uploaded originals, recorded model responses and the lawyer's final fields) are kept for 180 days, with the law firm's consent, and are used only for evaluation and extraction-quality statistics.
 
 ## At a glance
 
@@ -53,6 +53,8 @@ Details: [System architecture](#system-architecture) and [Data flow](#data-flow-
   - rule-derived wording.
 
   The cause shows whether to work on OCR or on extraction next.
+- **From production back to eval.** Production keeps a 180-day snapshot of each case. A case the lawyer exported can be turned into an eval case and replayed for free, with the lawyer's final fields as the answer key. The snapshots also feed an extraction-quality report: which fields lawyers change, and silent errors.
+- **Judge and tracing.** Rule-built sentences can be scored by an allow-listed LLM judge (warn-only in CI, being calibrated). `--langfuse` sends each case's calls to a self-hosted Langfuse for inspection.
 
 Details: [Evaluation](#evaluation).
 
@@ -88,6 +90,7 @@ Details: [Evaluation](#evaluation).
 | Plaintiff info table | A firm-wide table of plaintiff credit codes, legal representatives and addresses. Anyone can view or download it as Excel; uploading a new version or restoring an old one needs the admin token. |
 | Login | Accounts are created by an admin on the server (there is no sign-up). Sessions last 7 days, lawyers can change their own password, and repeated wrong passwords lock the login. |
 | Operations | The run log records field keys, timings, tokens and account names, never case content. On top of it:<br>• usage per account, and a list of lawyer feedback<br>• cost per case / node / model (from configured unit prices), fixed error categories, how long lawyers wait at breakpoints and how often they abandon<br>• a daily summary written on the server, with alerts when thresholds are crossed (failed analyses, OCR failure rate, model fallbacks, paid-key use, key connectivity)<br>• browser errors and API 5xx reported from the frontend (error type and step only, never the message text)<br>GitHub Actions deploys after approval. Health checks are split into liveness (`/healthz`) and readiness (`/readyz`: database read/write, free disk, keys configured), and a deploy that is not ready rolls back automatically. |
+| Production case snapshots | Each case keeps a snapshot: the uploaded originals, the recorded LLM / OCR responses, each breakpoint's question and the lawyer's answer, the fields and validation results handed to the lawyer, and the fields the lawyer finally confirmed. Kept for 180 days, directories 0700 and files 0600; a failed snapshot write never affects the lawyer's flow. Uses:<br>• export as eval cases and replay them strictly on a developer laptop at no cost, with the lawyer's final version as the expected answer<br>• extraction-quality statistics straight from the snapshots: which fields lawyers change most, silent errors, whether confidence tracks the edit rate, and whether a breakpoint always gets the same answer |
 
 ---
 
@@ -99,7 +102,8 @@ Details: [Evaluation](#evaluation).
 | Backend | FastAPI (Python 3.10+) + PyMuPDF (PDF) + python-docx (Word) |
 | Agent orchestration | LangGraph (state graph + `interrupt` breakpoints + SQLite checkpoint; graph and checkpoints only, no full LangChain) |
 | OCR | Qwen multimodal via Alibaba Cloud DashScope (international), default `qwen3.8-flash`, with an optional paid backup key |
-| LLM | DeepSeek API (`deepseek-flash`, via the OpenAI SDK with structured output) |
+| LLM | DeepSeek API (`deepseek-flash`, served by V4.1-Flash-1017 since 2026-10-17; via the OpenAI SDK with structured output) |
+| Eval tracing | Self-hosted Langfuse on a developer laptop, for development and eval only; production does not use it |
 | Deployment | Docker Compose (backend + nginx), Let's Encrypt HTTPS, GitHub Actions auto-deploy after approval |
 
 ---
@@ -155,7 +159,7 @@ flowchart TB
                 BT["branch_table / branch_registry"]
             end
 
-            DB[("data/ volume: checkpoints.sqlite · uploads/<br/>auth.sqlite · branch_info.json · run_log.jsonl")]
+            DB[("data/ volume: checkpoints.sqlite · uploads/ · snapshots/<br/>auth.sqlite · branch_info.json · run_log.jsonl")]
         end
     end
 
@@ -265,12 +269,17 @@ legal-doc-gen/
 │   │       ├── extraction  anchoring  provenance  doc_search  validators  confidence
 │   │       ├── derived_fields  payment_nodes  acceptance_report  equipment_list  complaint_renderer
 │   │       ├── branch_table  branch_registry  company_lookup (placeholder)
-│   │       └── auth_store  login_guard  run_log  progress_table  llm_progress  upload_progress
-│   ├── scripts/{manage_users,list_feedback,usage_report,cost_report}.py  # Accounts / feedback / usage / cost & errors
+│   │       ├── auth_store  login_guard  run_log  progress_table  llm_progress  upload_progress
+│   │       ├── complaint_readiness (readiness & conflict fields, shared by agent / eval / snapshot stats)  readiness (/readyz)
+│   │       └── case_snapshot  call_recorder  call_keys  snapshot_store              # Production case snapshots and call recording
+│   ├── scripts/{manage_users,list_feedback,usage_report,cost_report,daily_summary}.py  # Accounts / feedback / usage / cost & errors / daily summary
 │   ├── scripts/eval_cases.py + case_eval/                    # Case eval: per-field scoring on real cases (kept out of the repo)
+│   ├── scripts/judge_calibrate.py                            # LLM-judge calibration against human labels
+│   ├── scripts/{export_snapshots,snapshot_quality}.py        # Production snapshots → eval cases / extraction-quality signals
 │   └── tests/                                                # pytest (synthetic data)
 │
-├── deploy/                          # nginx config, cert.sh, deploy.sh, deployment guide (Chinese)
+├── deploy/                          # nginx config, cert.sh, deploy.sh, backup.sh, deployment guide (Chinese)
+│   └── langfuse/                    # Self-hosted Langfuse (developer laptop, eval only)
 ├── docker-compose.yml
 └── .github/workflows/{ci,deploy}.yml
 ```
@@ -315,6 +324,10 @@ Unit tests check each rule in isolation. To see how the whole system does on rea
   - The one remaining miss is a clause number misread by OCR. By design the system does not silently correct OCR text, and it marks scanned values for the lawyer to verify.
 - **Case identity**: each case folder is named by contract number and contract type (e.g. `AH1234567_安装`), never by a sequence number. A local copy once paired one case's answers with another case's materials under a numbered folder name.
 - **Synthetic case set in CI**: [`backend/eval_fixtures/`](./backend/eval_fixtures/README.md) holds twelve fully synthetic cases (scanned contract read on demand, retention-money breakpoint, a strategic agreement with an arbitration clause, a reference to a strategic agreement that was not uploaded, VGE home elevators, a lump-sum penalty, a breach clause mixing the seller's late-delivery penalty with the buyer's late-payment interest, payment stages written as 「第一期 / 第二期」, retention money not yet due, an integrated contract priced as equipment plus installation, on-demand OCR stopping after the first batch, several jurisdiction rules, plus two cases with deliberate errors that pin down error attribution) with their recorded responses. Every pull request replays them strictly in CI and compares each field with a committed baseline. The job fails, naming the case and field, if any field gets worse or if a change makes the system send a request that was never recorded (for example after a prompt edit); the message gives the command to re-record. It needs no API keys and runs in seconds.
+- **LLM judge** ([#90](https://github.com/phootako630/legal-doc-gen/issues/90)): rule-built sentences (the jurisdiction sentence, the breach-clause citation and so on) are worded differently by different lawyers, so exact matching misjudges them. Such fields can go to a judge model that only answers whether the system's sentence means the same in law as the lawyer's (consistent / inconsistent / can't tell, with a reason). Only allow-listed fields may use the judge; parties, amounts, dates and clause text are always matched exactly. The judge is a domestic model (Qwen via DashScope), different from the extraction model, and its calls are recorded and replayed too. In CI a changed judge verdict only raises a warning. It is being calibrated against the lawyers' own judgement and does not count towards accuracy until then.
+- **Tracing**: `--langfuse` records each case as one trace, with every LLM / OCR / judge call's prompt and response and each field's verdict as a score, so you can tell whether an error came from OCR, extraction or a rule. Traces contain case content and may only go to a self-hosted instance (Langfuse Cloud is refused by default); setup is in [deploy/langfuse/README.md](./deploy/langfuse/README.md).
+- **Production cases → eval** ([#157](https://github.com/phootako630/legal-doc-gen/issues/157)): cases where the lawyer exported a complaint can be exported with `scripts/export_snapshots.py` into the same layout as the real-case set (originals, the case's own recorded responses, the lawyer's final fields as the expected answer). A strict replay reproduces what the lawyer saw at no cost; every field the lawyer changed scores as wrong, which is exactly where the system erred.
+- **Extraction-quality signals** ([#74](https://github.com/phootako630/legal-doc-gen/issues/74)): `scripts/snapshot_quality.py` reads the snapshots directly and reports how often each field was filled in, cleared or changed; silent errors (shown as normal on the review page but changed by the lawyer); edit rates by review-page status, source channel and confidence band; which candidate the lawyer picked at each breakpoint; and readiness at hand-off and at export. The report holds only field keys and counts, never values.
 
 ## Deployment (UAT / production)
 
