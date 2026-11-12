@@ -6,7 +6,7 @@
 
 > **v1 → v2**：v1 是固定流水线（`upload → 清点 → 抽取 → 校验 → 生成`，控制流写死）。v2 将核心处理改为 **agentic**：由带工具的 LangGraph agent 驱动控制流，按需 OCR 扫描页，用确定性代码自校验，在关键分歧点暂停问律师（human-in-the-loop）。
 >
-> **当前状态**：已部署上线供律师试用（UAT），用于验证 AI 抽取准确率和律师使用体验。站点有中文登录页，账号由管理员创建，走 HTTPS。案件状态存在本机 SQLite 里，服务重启后可以接着审核，超过 7 天自动清除。
+> **当前状态**：已部署上线供律师试用（UAT），用于验证 AI 抽取准确率和律师使用体验。站点有中文登录页，账号由管理员创建，走 HTTPS。案件状态存在本机 SQLite 里，服务重启后可以接着审核，超过 7 天自动清除。另有**线上案件快照**（原件、模型调用返回、律师最终确认的字段）保留 180 天（律所合伙人与负责人同意），只用于导出成 eval 案卷、统计抽取质量。
 
 ---
 
@@ -35,6 +35,7 @@
 | 原告信息表 | 全所共用的原告信用代码 / 负责人 / 住址底表。所有人可查看、下载 Excel；凭管理员口令上传新版或回退历史版本 |
 | 登录 | 管理员在服务器上建账号（无注册入口），7 天免登录，律师可自行改密码，连续输错密码会锁定 |
 | 运维 | 运行日志只记字段名、耗时、token 和账号名，不记案件内容。在此基础上：<br>• 按账号统计使用量，查看律师反馈<br>• 按配置的单价统计每案 / 每节点 / 每模型的成本，错误按固定类别统计，律师在断点停留时长与放弃率<br>• 每天在服务器上写运行小结，超过阈值的项单列「需要关注」（分析中断、OCR 失败率、改用备用模型、启用付费 key、Key 连通性）<br>• 前端上报浏览器报错与接口 5xx（只报错误类型和所在步骤，不报错误原文）<br>GitHub Actions 审批后自动部署。健康检查分存活（`/healthz`）和就绪（`/readyz`：数据库读写、磁盘余量、Key 已配置）两层，新版本不就绪自动回滚 |
+| 线上案件快照 | 每个案件留一份快照：上传的原件、LLM / OCR 调用的返回、断点处的问题与律师回答、交给律师的字段与校验结论、律师最终确认的字段。保留 180 天，目录 0700、文件 0600，写快照失败不影响律师的流程。用途：<br>• 导出成 eval 案卷，在开发者电脑上零费用严格回放，律师的最终版本就是标准答案<br>• 直接统计抽取质量：哪些字段律师最常改、静默错误、confidence 与改动率是否对得上、断点是否总选同一个候选 |
 
 ---
 
@@ -46,7 +47,8 @@
 | 后端 | FastAPI（Python 3.10+）+ PyMuPDF（PDF）+ python-docx（Word） |
 | Agent 编排 | LangGraph（状态图 + `interrupt` 断点 + SQLite checkpoint；只用图和检查点，不引入 LangChain 本体） |
 | OCR | Qwen 多模态（阿里云 DashScope 国际站，默认 `qwen3.8-flash`；可配付费备用 key） |
-| LLM | DeepSeek API（`deepseek-flash`，通过 OpenAI SDK 调用，启用结构化输出） |
+| LLM | DeepSeek API（`deepseek-flash`，2026-10-17 起官方指向 V4.1-Flash-1017；通过 OpenAI SDK 调用，启用结构化输出） |
+| eval 链路追踪 | 自托管 Langfuse（装在开发者电脑上，只用于开发与 eval；线上系统不接） |
 | 部署 | Docker Compose（backend + nginx）、Let's Encrypt HTTPS、GitHub Actions 审批后自动部署 |
 
 ---
@@ -102,7 +104,7 @@ flowchart TB
                 BT["branch_table / branch_registry"]
             end
 
-            DB[("data/ 卷：checkpoints.sqlite · uploads/<br/>auth.sqlite · branch_info.json · run_log.jsonl")]
+            DB[("data/ 卷：checkpoints.sqlite · uploads/ · snapshots/<br/>auth.sqlite · branch_info.json · run_log.jsonl")]
         end
     end
 
@@ -212,12 +214,17 @@ legal-doc-gen/
 │   │       ├── extraction  anchoring  provenance  doc_search  validators  confidence
 │   │       ├── derived_fields  payment_nodes  acceptance_report  equipment_list  complaint_renderer
 │   │       ├── branch_table  branch_registry  company_lookup（预留）
-│   │       └── auth_store  login_guard  run_log  progress_table  llm_progress  upload_progress
-│   ├── scripts/{manage_users,list_feedback,usage_report,cost_report}.py  # 账号管理 / 查看反馈 / 使用统计 / 成本与错误汇总
+│   │       ├── auth_store  login_guard  run_log  progress_table  llm_progress  upload_progress
+│   │       ├── complaint_readiness（就绪度与冲突字段，agent / eval / 快照统计共用）  readiness（/readyz）
+│   │       └── case_snapshot  call_recorder  call_keys  snapshot_store              # 线上案件快照与调用录制
+│   ├── scripts/{manage_users,list_feedback,usage_report,cost_report,daily_summary}.py  # 账号 / 反馈 / 使用统计 / 成本与错误 / 每日小结
 │   ├── scripts/eval_cases.py + case_eval/                    # 案件 eval：真实案卷逐字段打分（案卷不进仓库）
+│   ├── scripts/judge_calibrate.py                            # LLM 裁判校准（与人工判断对照）
+│   ├── scripts/{export_snapshots,snapshot_quality}.py        # 线上快照 → eval 案卷 / 抽取质量信号
 │   └── tests/                                                # pytest（虚构数据）
 │
-├── deploy/                          # nginx 配置、cert.sh、deploy.sh、中文部署指南
+├── deploy/                          # nginx 配置、cert.sh、deploy.sh、backup.sh、中文部署指南
+│   └── langfuse/                    # 自托管 Langfuse（开发者电脑，eval 专用）
 ├── docker-compose.yml
 └── .github/workflows/{ci,deploy}.yml
 ```
@@ -264,6 +271,10 @@ cd frontend && pnpm lint && pnpm test && pnpm build
   - 剩下没对上的 1 处是 OCR 把条款号识别错了。系统按设计不擅自纠正 OCR 文字，扫描件来源的值都会标待核实交律师确认。
 - **案件怎么识别**：案件目录按「合同号_合同类型」命名（如 `AH1234567_安装`），不用「安装案1」这类序号。曾有本地副本在序号目录下把一个案件的标准答案和另一个案件的材料放在了一起。
 - **虚构案卷集进 CI**：[`backend/eval_fixtures/`](./backend/eval_fixtures/README.md) 里有 12 个完全虚构的案件（扫描合同按需 OCR、质保金断点、战略合作协议约定仲裁、战略合同未上传、VGE 家用电梯、一次性违约金、违约条款混写乙方违约金与甲方逾期利息、「第一期 / 第二期」分期付款、质保金未到期、一体化合同、按需 OCR 首批即停、几种管辖规则，另有两个故意带错的案件固定错误归因），连同录制好的返回一起提交。每个 PR 都在 CI 里严格回放，逐字段与提交的基线比较：任一字段变差，或者改动让系统发出了没录过的请求（比如改了提示词），CI 就失败并指出是哪个案件的哪个字段，同时给出重录命令。不需要 API Key，几秒钟跑完。
+- **LLM 裁判**（[#90](https://github.com/phootako630/legal-doc-gen/issues/90)）：规则拼接的整句（管辖句、违约条款引用句等）律师写法不一，逐字比对会误判。这类字段可交给裁判模型判断「与律师写法法律意义上是否一致」，只给「一致 / 不一致 / 无法判断」+ 理由。只有白名单字段能交给裁判，主体、金额、日期、条款原文等一律逐字比对。裁判用国内模型（DashScope 通义千问），与抽取模型不同，调用同样录制回放；CI 里裁判结论变化只提示、不让 CI 失败。正在与律师的人工判断做校准，校准前不计入准确率。
+- **链路追踪**：`--langfuse` 把每个案件记成一条 trace，逐次看 LLM / OCR / 裁判调用的提示词和返回，逐字段结论写成 score，便于追查一个错误是 OCR 读错、模型抽错还是规则问题。trace 含案卷内容，只许发到自托管实例（发往 Langfuse Cloud 默认拒绝），部署见 [deploy/langfuse/README.md](./deploy/langfuse/README.md)。
+- **线上案件 → eval**（[#157](https://github.com/phootako630/legal-doc-gen/issues/157)）：律师导出过起诉状的线上案件，用 `scripts/export_snapshots.py` 导出成与真实案卷集同样的目录（原件、这个案件自己的调用返回、律师最终字段作标准答案），严格回放即可零费用复现律师当时看到的结果；律师改过的字段判「错误」，就是系统出错的地方。
+- **抽取质量信号**（[#74](https://github.com/phootako630/legal-doc-gen/issues/74)）：`scripts/snapshot_quality.py` 不用导出，直接从快照统计各字段的补填 / 清空 / 修改次数、静默错误（审核页标「正常」、律师却改了）、审核页状态 / 来源通道 / confidence 分段与改动率的对照、断点处律师选了第几个候选，以及交付时与导出时的就绪度。报告只有字段名和计数，不含取值。
 
 ## 部署（UAT / 生产）
 
