@@ -80,8 +80,16 @@ def test_full_flow_snapshot(snap, monkeypatch):
     assert case["internet_allowed"] is True and case["prompts"] and case["owner"] == "lawyer-a"
     assert case["code_version"] == "abc1234"  # 部署的提交号（#159 评审）
     assert [d["answers"] for d in case["decisions"]] == [{"total_amount": 900.0}]
+    # 断点当时的问题与候选项（#74）：统计律师选了哪个候选还是自填
+    pending = case["decisions"][0]["pending"]
+    assert pending["kind"] == "conflict" and "total_amount" in pending["field_keys"]
+    assert pending["field_options"]["total_amount"]
     assert case["final"] == final
     assert case["delivered"]["defendant_name"]["value"] == "虚构丁戊置业有限公司"  # 交付值保留，便于看律师改了什么
+    # 交付时的校验结论与就绪度（#74）：审核页据此标字段状态
+    review = case["delivered_review"]
+    assert isinstance(review["validations"], list) and review["validations"]
+    assert isinstance(review["readiness"], int)
     assert (snap / "branch" / f"{case['branch_table']}.json").read_text(encoding="utf-8") == '{"虚构": 1}'
 
     # source_id 只进快照，不进分析流程（提示词须与 eval 回放时一致）
@@ -176,3 +184,22 @@ def test_code_version_falls_back_to_git(monkeypatch):
     monkeypatch.setattr(case_snapshot, "_git_version", None)
     version = case_snapshot.code_version()
     assert version == "unknown" or len(version) == 40
+
+
+def test_export_while_paused_keeps_review_state(snap, monkeypatch):
+    """停在断点就导出：校验结论与就绪度取审核页看到的那份（interrupt payload），冲突照样记下（#74）。"""
+    monkeypatch.setattr(nodes_mod, "chat", AsyncMock(side_effect=[_FIELDS, "说明\n---HIGHLIGHT---\n- 1"]))
+
+    async def go():
+        run_log.set_user("lawyer-a")
+        state = await run_analyze([{"filename": "审批表.pdf", "text": "审批表 1000 600 300"}], True, "lawyer-a")
+        assert state.pending is not None
+        final = {k: dict(v) for k, v in state.extracted_fields.items()}
+        await generate(GenerateRequest(validated_json=final, run_id=state.run_id))
+        return state
+
+    state = asyncio.run(go())
+    review = case_snapshot.load(state.run_id)["delivered_review"]
+    assert review["validations"] == state.validations
+    assert any(v.get("is_conflict") for v in review["validations"])
+    assert review["readiness"] == state.readiness

@@ -238,9 +238,11 @@ async def _run_resume(run_id: str, decisions: dict) -> CaseState:
     # 只记律师本次决定了哪些字段，不记取值；wait_s = 停在断点到律师作答的秒数（#75）
     run_log.log_event("resume", decided_keys=sorted(decisions), wait_s=_waited_s(snapshot))
     t0 = time.monotonic()
+    pending = (_interrupt_payload(snapshot) or {}).get("pending")
     await graph.ainvoke(Command(resume=decisions), config)
-    # 恢复成功才记入快照：失败重试不留下没被 agent 接受的回答（#159 评审）
-    case_snapshot.add_decisions(run_id, decisions)
+    # 恢复成功才记入快照：失败重试不留下没被 agent 接受的回答（#159 评审）；
+    # 连同这一轮断点当时问的问题与候选项，统计律师选了哪个候选（#74）
+    case_snapshot.add_decisions(run_id, decisions, pending)
     run_log.log_event("run_pass", duration_ms=round((time.monotonic() - t0) * 1000))
     return await _collect(run_id, config)
 
@@ -314,18 +316,35 @@ async def get_case(run_id: str, user: str | None = None) -> CaseState | None:
     return await _collect(run_id, config)
 
 
-async def delivered_fields(run_id: str, user: str | None = None) -> dict | None:
+async def delivered_state(run_id: str, user: str | None = None) -> dict | None:
     """
-    交给律师审核时的字段（checkpoint 里的 extracted_fields；律师在断点处的决定已并入），
-    generate 时据此统计律师在审核页的改动。会话过期 / 不存在则 None。
+    交给律师审核时的状态：fields（checkpoint 里的 extracted_fields；律师在断点处的决定已并入）、
+    validations（确定性校验结论，审核页据此把字段标为冲突）、readiness（起诉状就绪度）。
+    generate 时据此统计律师在审核页的改动、记入案件快照。会话过期 / 不存在则 None。
     落在 checkpoint 里，服务重启后仍可对比，随会话一起过期清除。不是该账号的会话也返回 None。
     """
     if await checkpoint.is_expired(run_id) or not await checkpoint.can_access(run_id, user):
         return None
     graph = await get_graph()
     snapshot = await graph.aget_state(_config(run_id))
-    fields = (snapshot.values or {}).get("extracted_fields")
-    return fields if isinstance(fields, dict) else None
+    values = snapshot.values or {}
+    fields = values.get("extracted_fields")
+    if not isinstance(fields, dict):
+        return None
+    # 停在断点时，校验结论与就绪度在 interrupt 的 payload 里（同 _collect，审核页看到的就是它）
+    source = _interrupt_payload(snapshot) or values
+    validations = source.get("validations")
+    return {
+        "fields": fields,
+        "validations": validations if isinstance(validations, list) else [],
+        "readiness": source.get("readiness"),
+    }
+
+
+async def delivered_fields(run_id: str, user: str | None = None) -> dict | None:
+    """交给律师审核时的字段（见 delivered_state）。"""
+    state = await delivered_state(run_id, user)
+    return state["fields"] if state else None
 
 
 async def case_files(run_id: str, filename: str, user: str | None = None) -> list[dict]:
