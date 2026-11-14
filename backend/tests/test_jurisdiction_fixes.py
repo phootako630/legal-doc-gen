@@ -33,6 +33,12 @@ def test_picked_arbitration_still_arbitration():
     assert f["document_kind"]["value"] == "仲裁申请书"
 
 
+@pytest.mark.parametrize("pick", ["_1", "__1__", "１", "（1）"])
+def test_pick_written_in_blank_or_fullwidth(pick):
+    # 手填在下划线空格里的编号（OCR 成「方式_1解决」）、全角数字、带括号，都认得出选的是诉讼
+    assert _fields(CLAUSE.format(pick=pick))["document_kind"]["value"] == "民事起诉状"
+
+
 @pytest.mark.parametrize("pick", ["", "___", "3"])
 def test_unpicked_or_unknown_option_left_as_is(pick):
     # 没写选哪项、编号对不上：不猜，原样交给原有规则
@@ -70,7 +76,46 @@ def test_no_options_unchanged():
         ("青岛市黄岛区某某社区", "青岛市黄岛区"),
         ("某某市某某花园小区", None),  # 推不出就不推，交律师填
         ("某某市某某校区", None),
+        # 「矿区」有真实的市辖区，照常推定（#167 评审）
+        ("河北省石家庄市井陉矿区某某路", "石家庄市井陉矿区"),
+        ("邯郸市峰峰矿区某某镇", "邯郸市峰峰矿区"),
     ],
 )
 def test_residential_compound_is_not_district(address, court):
     assert derive_court_district(address) == court
+
+
+
+def _with_institution(clause, extracted):
+    return apply_derived_fields({
+        "dispute_clause_text": {"value": clause, "src": "《合同.pdf》第17条"},
+        "arbitration_institution": {"value": extracted, "src": "《合同.pdf》第17条"},
+        "project_site": {"value": "上海市杨浦区某某路1号", "src": "《合同.pdf》第1条"},
+    })
+
+
+def test_picked_litigation_ignores_institution_from_unpicked_option():
+    """选中的是诉讼（条款没写「法院」二字），抽取的仲裁机构来自没选的一项：不能兜底改成仲裁（#167 评审）。"""
+    f = _with_institution("任何一方可以按以下方式1解决：(1)依法提起诉讼；(2)向甲仲裁委员会申请仲裁。", "甲仲裁委员会")
+    assert f["document_kind"]["value"] == "民事起诉状"
+    assert "仲裁" not in (f["jurisdiction_text"]["value"] or "")
+
+
+def test_picked_option_names_its_own_institution():
+    """选中第 2 项乙仲裁委员会，抽取值却是没选的甲：以选中项为准（#167 评审）。"""
+    f = _with_institution(
+        "任何一方可以按以下方式2解决：(1)向甲仲裁委员会申请仲裁；(2)向乙仲裁委员会申请仲裁。", "甲仲裁委员会"
+    )
+    assert f["document_kind"]["value"] == "仲裁申请书"
+    assert "乙仲裁委员会" in f["jurisdiction_text"]["value"] and "甲仲裁委员会" not in f["jurisdiction_text"]["value"]
+    assert f["addressee"]["value"] == "乙仲裁委员会"
+
+
+def test_picked_arbitration_without_name_does_not_borrow_unpicked():
+    """选中项只写「申请仲裁」、没写机构：抽取值不在选中项里就不用，交律师补（宁缺勿造）。"""
+    f = _with_institution(
+        "任何一方可以按以下方式2解决：(1)向甲仲裁委员会申请仲裁；(2)向工程所在地有管辖权的机构申请仲裁。",
+        "甲仲裁委员会",
+    )
+    assert f["document_kind"]["value"] == "仲裁申请书"
+    assert "甲仲裁委员会" not in f["jurisdiction_text"]["value"]
