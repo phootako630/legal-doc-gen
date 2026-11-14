@@ -19,7 +19,8 @@ from scripts.case_eval.cache import CacheMiss
 from scripts.case_eval.judge_rubrics import JUDGE_PRINCIPLES
 from scripts.case_eval.scoring import _blank, _norm_text
 
-JUDGE_MODEL = os.getenv("EVAL_JUDGE_MODEL", config.LLM_FALLBACK_MODEL)
+# 默认 qwen3.8-max（#90 第 3 步律师校准：flash 放过过一处付款期限缺失，max 没有放过实质差异；也不再与 DeepSeek 的备用模型 qwen3.8-flash 同一个）
+JUDGE_MODEL = os.getenv("EVAL_JUDGE_MODEL", "qwen3.8-max")
 
 AGREE = "一致"
 DISAGREE = "不一致"
@@ -117,11 +118,20 @@ async def judge_one(criteria: str, expected: Any, actual: Any, ask: Ask,
     return verdict, reason, model
 
 
-async def judge_results(results: list[Any], ask: Ask, model: str = JUDGE_MODEL) -> None:
-    """给 match == judge 的字段填上裁判结论（judge_verdict / judge_reason / judge_by），就地修改。"""
+async def judge_results(
+    results: list[Any], ask: Ask, model: str = JUDGE_MODEL, paragraphs: dict[str, str | None] | None = None
+) -> None:
+    """
+    给 match == judge 的字段填上裁判结论（judge_verdict / judge_reason / judge_by），就地修改。
+    paragraphs：字段在起诉状里所在的整段（judge_rubrics.JUDGE_PARAGRAPH_KEYS），有就拿整段去比，
+    系统值也换成这段，报告里看到的就是裁判比的内容。
+    """
     for r in results:
         if r.match != "judge" or r.judge_verdict:
             continue
+        paragraph = (paragraphs or {}).get(r.key)
+        if paragraph and r.actual is not None:  # 字段本身没值时仍按缺失处理，不拿模板里的【待补充】去比
+            r.actual = paragraph
         r.judge_verdict, r.judge_reason, r.judge_by = await judge_one(
             r.criteria, r.expected, r.actual, ask, model
         )

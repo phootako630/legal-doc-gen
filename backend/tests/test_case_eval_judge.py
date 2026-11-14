@@ -157,3 +157,34 @@ def test_judge_verdict_change_listed_in_run_diff():
     r.judge_verdict = "不一致"
     changes = diff_runs(prev, [{"case": "c", "results": [r.as_dict()]}])
     assert changes == [{"case": "c", "key": "handover_text", "before": "待定（裁判：一致）", "after": "待定（裁判：不一致）"}]
+
+
+def test_paragraph_keys_judged_on_whole_complaint_paragraph():
+    """管辖句按起诉状整段比：模板写在字段前的「依据案涉合同第 X 条约定」也给裁判看（#90 校准）。"""
+    from app.services.complaint_renderer import rendered_paragraph
+    from scripts.case_eval.judge_rubrics import JUDGE_PARAGRAPH_KEYS
+
+    fields = {
+        "dispute_clause_location": {"value": "第十五条", "src": "《合同.pdf》第3页"},
+        "dispute_clause_text": {"value": "因本合同发生的争议，向某市人民法院起诉", "src": "《合同.pdf》第3页"},
+        "jurisdiction_text": {"value": "故原告向某市人民法院提起诉讼。", "src": "按律师规则"},
+    }
+    para = rendered_paragraph(fields, "jurisdiction_text")
+    assert para.startswith("依据案涉合同第十五条约定，因本合同发生的争议") and para.endswith("提起诉讼。")
+    assert rendered_paragraph(fields, "no_such_field") is None
+    assert set(JUDGE_PARAGRAPH_KEYS) == {"jurisdiction_text", "payment_cite_text"}
+
+    seen = []
+
+    async def ask(messages):
+        seen.append(messages[-1]["content"])
+        return {"reason": "条款与法院相同", "verdict": "一致"}
+
+    r = score_field("jurisdiction_text", {"value": LAWYER, "match": "judge"}, fields["jurisdiction_text"])
+    asyncio.run(judge_results([r], ask, paragraphs={"jurisdiction_text": para}))
+    assert r.actual == para and "第十五条" in seen[0]  # 裁判看到条款引用，报告里的系统值也是这段
+
+    # 字段本身没值：仍按缺失由代码判，不拿模板里的【待补充】去比
+    missing = score_field("jurisdiction_text", {"value": LAWYER, "match": "judge"}, None)
+    asyncio.run(judge_results([missing], ask, paragraphs={"jurisdiction_text": para}))
+    assert missing.actual is None and missing.judge_by == BY_CODE and len(seen) == 1
