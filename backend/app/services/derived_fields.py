@@ -51,12 +51,18 @@ _CITY_DISTRICT_RE = re.compile(
 # 和三字区名分不清边界，宁可不推、交律师填（#43 复审：不能凭长度拆分拼造辖区）
 _CITY_NO_SHI_RE = re.compile(f"^([{_CJK}]{{2}})([{_CJK}]{{2}}区)")
 _FUNCTION_ZONE_RE = re.compile(r"(?:开发|园|高新|新|保税|工业)区$")
+# 以「区」结尾却不是行政区的地名：「肥城市山水名园小区工地」不能推成「肥城市山水名园小区」法院
+# （律师校准时 LLM 裁判发现：管辖句写成「肥城市山水名园小区人民法院」）
+_NON_ADMIN_AREA_RE = re.compile(r"(?:小|社|校|厂|景|片|街|营|矿|林|牧|垦)区$")
 # 县级市法院不分区，地点只写「昆山」「常熟……项目」也能直接推定「昆山市」（确认单（六）B）。
-# 名单只收江苏、湖南（本所案件所在省份）的县级市，别省的仍需写全「XX市」；新增省份时补进来
+# 名单只收江苏、湖南、山东（本所案件所在省份）的县级市，别省的仍需写全「XX市」；新增省份时补进来
 _COUNTY_LEVEL_CITIES = (
     "江阴 宜兴 新沂 邳州 溧阳 常熟 张家港 昆山 太仓 启东 如皋 海安 东台 仪征 高邮 丹阳 扬中 句容 "
     "兴化 靖江 泰兴 "
-    "浏阳 宁乡 醴陵 湘乡 韶山 耒阳 常宁 武冈 邵东 汨罗 临湘 沅江 资兴 洪江 冷水江 涟源 吉首"
+    "浏阳 宁乡 醴陵 湘乡 韶山 耒阳 常宁 武冈 邵东 汨罗 临湘 沅江 资兴 洪江 冷水江 涟源 吉首 "
+    # 山东（律师新案例：泰安肥城）；章丘、即墨、蓬莱已改设区，不在其列
+    "胶州 平度 莱西 滕州 龙口 莱阳 莱州 招远 栖霞 海阳 青州 诸城 寿光 安丘 高密 昌邑 曲阜 邹城 新泰 肥城 "
+    "荣成 乳山 乐陵 禹城 临清 邹平"
 ).split()
 # 可带地级市前缀（「苏州昆山」「苏州市昆山」）。名字后紧跟「区 / 县」是同名的区县（「怀化市洪江区」），
 # 不当县级市（#65 评审）
@@ -130,6 +136,8 @@ def derive_court_district(address: str | None) -> str | None:
     s = _LEADING_WORDS_RE.sub("", s, count=1)
     s = _PROVINCE_RE.sub("", s, count=1)
     m = _CITY_DISTRICT_RE.match(s)
+    if m and _NON_ADMIN_AREA_RE.search(m.group(2)):
+        m = None  # 「XX市某某小区」：小区不是区，按县级市或推不出处理
     # 「市 + 开发区」这类功能区先看是不是县级市：「苏州市昆山开发区」→ 昆山市，
     # 不拆成「苏州市」+「昆山开发区」；写明的市辖区（「怀化市洪江区」）照常采纳
     if not m or _FUNCTION_ZONE_RE.search(m.group(2)):
@@ -1547,12 +1555,52 @@ STRATEGIC_UNRESOLVED_NOTE = (
 )
 
 
+# 争议条款列了几种解决方式、写明了选哪一种：「任何一方可以按以下方式 1 解决：(1)向工程所在地法院提起诉讼；
+# (2)向工程所在地仲裁委员会提请仲裁」。只按选中的那一项判管辖，没选中的不参与——否则列出来的仲裁选项
+# 会把整篇改成仲裁申请书（新案卷核对：富利买卖选的是方式 1 诉讼，系统误写成仲裁申请书）
+_OPTION_PICK_RE = re.compile(
+    r"(?:按|按照|采用|选择|选用)(?:以下|下列|如下)?第?"
+    r"(?:[（(]?([1-9一二三四])[)）]?种?(?:方式|项)|(?:方式|项)[（(]?([1-9一二三四])[)）]?)"
+)
+_OPTION_ITEM_RE = re.compile(r"[（(]([1-9一二三四])[)）]")
+_CN_DIGIT = {"一": "1", "二": "2", "三": "3", "四": "4"}
+
+
+def selected_dispute_option(dispute: str) -> str:
+    """
+    争议条款写明「按以下第 N 种方式」时，去掉没选中的选项，返回只含选中项的条款；
+    没写选哪项、选项编号对不上，原样返回（不猜）。传入的是去掉空白后的条款。
+    """
+    m = _OPTION_PICK_RE.search(dispute)
+    if not m:
+        return dispute
+    pick = _CN_DIGIT.get(m.group(1) or m.group(2), m.group(1) or m.group(2))
+    items: list[tuple[int, int]] = []  # 选项「(1)」「(2)」…的位置，须从 1 起连续编号
+    for it in _OPTION_ITEM_RE.finditer(dispute, m.end()):
+        n = int(_CN_DIGIT.get(it.group(1), it.group(1)))
+        if n != len(items) + 1:
+            break
+        items.append((it.start(), n))
+    if len(items) < 2 or int(pick) > len(items):
+        return dispute
+    last_end = dispute.find("。", items[-1][0])
+    last_end = len(dispute) if last_end < 0 else last_end
+    bounds = [pos for pos, _ in items[1:]] + [last_end]
+    chosen = dispute[items[int(pick) - 1][0]:bounds[int(pick) - 1]]
+    return dispute[:items[0][0]] + chosen + dispute[last_end:]
+
+
+def _dispute_compact(fields: dict) -> str:
+    """去掉空白、只留选中解决方式的争议条款（判管辖与截仲裁机构共用）。"""
+    return selected_dispute_option(re.sub(r"\s+", "", _str_value(fields, "dispute_clause_text") or ""))
+
+
 def _jurisdiction(fields: dict) -> tuple[str, str | None, str]:
     """
     按争议条款判定管辖方式，返回 (方式, 法院辖区或法院名, 说明)。
     方式：arbitration / strategic / named / plaintiff / defendant / sign_place / site / delivery / general。
     """
-    dispute = re.sub(r"\s+", "", _str_value(fields, "dispute_clause_text") or "")
+    dispute = _dispute_compact(fields)
     # 主合同把争议解决交给战略 / 框架合同，又没读到战略合同的争议条款（没上传或没识别出）：
     # 管辖、文书类型都定不了，不按「未约定」去套被告住所地法院（#126）；先于「仲裁」判断：
     # 「按战略合同关于仲裁的条款执行」不是主合同约定了仲裁（#133 评审）
@@ -1706,7 +1754,7 @@ def arbitration_institution(fields: dict) -> str | None:
     name = _compact(_str_value(fields, "arbitration_institution"))
     if name:
         return name
-    dispute = _compact(_str_value(fields, "dispute_clause_text")) or ""
+    dispute = _dispute_compact(fields)
     m = _ARBITRATION_BODY_RE.search(dispute)
     return _LEADING_VERBS_RE.sub("", m.group(1)) if m else None
 
