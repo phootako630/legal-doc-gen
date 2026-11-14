@@ -373,3 +373,14 @@ def render_complaint(
         return text
 
     return _PLACEHOLDER_RE.sub(_repl, template).strip()
+
+
+def rendered_paragraph(fields: dict, key: str) -> str | None:
+    """
+    起诉状里含 {{key}} 的那一段，渲染方式同 render_complaint；模板里没有这个占位符时 None。
+    eval 的 LLM 裁判用它按律师读到的整段比对：管辖句、付款引用句前面的「依据案涉合同第 X 条约定」
+    写在模板里、不在字段值里，只拿字段比会误判成缺了条款引用（#90 校准）。
+    """
+    marker = "{{" + key + "}}"
+    line = next((ln for ln in load_prompt("complaint-template.md").splitlines() if marker in ln), None)
+    return render_complaint(fields, template=line) if line else None

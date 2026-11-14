@@ -16,11 +16,12 @@ from starlette.datastructures import UploadFile
 from app.agent.graph import get_graph
 from app.agent.runner import run_analyze, run_resume
 from app.services import branch_registry, derived_fields
-from app.services.complaint_renderer import render_complaint
+from app.services.complaint_renderer import render_complaint, rendered_paragraph
 from app.services.file_parser import parse_file
 from app.services.complaint_readiness import conflict_keys
 from scripts.case_eval.cache import ReplayCache, patched
 from scripts.case_eval.judge import JUDGE_MODEL, call_judge, judge_results
+from scripts.case_eval.judge_rubrics import JUDGE_PARAGRAPH_KEYS
 from scripts.case_eval.tracing import NoopTracer, Tracing
 from scripts.case_eval.scoring import score_case, summarize, summarize_causes, summarize_quality
 
@@ -159,11 +160,12 @@ async def _run(case_dir: str, cache: ReplayCache, result: dict[str, Any]) -> Non
         result["fields"] = fields
         with _as_of(expected), _branch_table(case_dir):
             result["complaint"] = render_complaint(fields)
+            paragraphs = {k: rendered_paragraph(fields, k) for k in JUDGE_PARAGRAPH_KEYS}
         scored = score_case(
             expected["fields"], fields, await _final_files(case.run_id), conflict_keys(case.validations)
         )
         # 规则拼接的句子交给 LLM 裁判（#90）：结论单独列出，不改变上面的打分
-        await judge_results(scored, cache.wrap_judge(call_judge, JUDGE_MODEL))
+        await judge_results(scored, cache.wrap_judge(call_judge, JUDGE_MODEL), paragraphs=paragraphs)
         result["results"] = [r.as_dict() for r in scored]
         result["summary"] = summarize(scored)
         result["quality"] = summarize_quality(scored)
