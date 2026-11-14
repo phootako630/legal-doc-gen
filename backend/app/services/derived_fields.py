@@ -95,6 +95,9 @@ _PERCENT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%")
 # 争议条款里的仲裁机构名（LLM 未抽出时的兜底）；去掉前面的动词
 _ARBITRATION_BODY_RE = re.compile(f"([{_CJK}]{{2,20}}?仲裁委员会)")
 _LEADING_VERBS_RE = re.compile(r"^(?:提交|提请|交由|申请|向|由|至|到|报)+")
+# 争议条款写明选项时，从选中项截机构：支持仲裁委员会 / 仲裁院 / 仲裁中心，截到的串按这些介词 / 动词切开取最后一段
+_PICKED_BODY_RE = re.compile(f"([{_CJK}]{{2,30}}?(?:仲裁委员会|仲裁院|仲裁中心))")
+_BODY_LEAD_RE = re.compile(r"(?:提交|提请|交由|申请|向|由|至|到|报|给)")
 
 
 def _node(fields: dict, key: str) -> dict:
@@ -1570,38 +1573,52 @@ _OPTION_ITEM_RE = re.compile(r"[（(]([1-9１-９一二三四])[)）]")
 _CN_DIGIT = {"一": "1", "二": "2", "三": "3", "四": "4", **{chr(0xFF10 + i): str(i) for i in range(1, 10)}}
 
 
-def selected_dispute_option(dispute: str) -> str:
+def _option_spans(dispute: str) -> tuple[int, tuple[int, int], int] | None:
     """
-    争议条款写明「按以下第 N 种方式」时，去掉没选中的选项，返回只含选中项的条款；
-    没写选哪项、选项编号对不上，原样返回（不猜）。传入的是去掉空白后的条款。
+    争议条款写明「按以下第 N 种方式」时，返回 (第一项起点, 选中项的 [起, 止), 最后一项止)；
+    没写选哪项、选项编号对不上返回 None（不猜）。
     """
     m = _OPTION_PICK_RE.search(dispute)
     if not m:
-        return dispute
-    pick = _CN_DIGIT.get(m.group(1) or m.group(2), m.group(1) or m.group(2))
-    items: list[tuple[int, int]] = []  # 选项「(1)」「(2)」…的位置，须从 1 起连续编号
+        return None
+    pick = int(_CN_DIGIT.get(m.group(1) or m.group(2), m.group(1) or m.group(2)))
+    starts: list[int] = []  # 选项「(1)」「(2)」…的位置，须从 1 起连续编号
     for it in _OPTION_ITEM_RE.finditer(dispute, m.end()):
-        n = int(_CN_DIGIT.get(it.group(1), it.group(1)))
-        if n != len(items) + 1:
+        if int(_CN_DIGIT.get(it.group(1), it.group(1))) != len(starts) + 1:
             break
-        items.append((it.start(), n))
-    if len(items) < 2 or int(pick) > len(items):
-        return dispute
-    last_end = dispute.find("。", items[-1][0])
+        starts.append(it.start())
+    if len(starts) < 2 or pick > len(starts):
+        return None
+    last_end = dispute.find("。", starts[-1])
     last_end = len(dispute) if last_end < 0 else last_end
-    bounds = [pos for pos, _ in items[1:]] + [last_end]
-    chosen = dispute[items[int(pick) - 1][0]:bounds[int(pick) - 1]]
-    return dispute[:items[0][0]] + chosen + dispute[last_end:]
+    ends = starts[1:] + [last_end]
+    return starts[0], (starts[pick - 1], ends[pick - 1]), last_end
+
+
+def selected_dispute_option(dispute: str) -> str:
+    """
+    争议条款写明「按以下第 N 种方式」时，去掉没选中的选项，返回只含选中项的条款（前后文保留，供展示）；
+    没写选哪项、选项编号对不上，原样返回（不猜）。传入的是去掉空白后的条款。
+    """
+    spans = _option_spans(dispute)
+    if not spans:
+        return dispute
+    first, (a, b), last_end = spans
+    return dispute[:first] + dispute[a:b] + dispute[last_end:]
 
 
 def _dispute_selection(fields: dict) -> tuple[str, bool]:
     """
-    去掉空白、只留选中解决方式的争议条款，以及条款是否写明了选哪一项（判管辖与截仲裁机构共用）。
-    写明了选项时，抽取出来的仲裁机构可能来自没选中的那一项，不能直接采用（#167 评审）。
+    判管辖与截仲裁机构用的条款文字（去掉空白），以及条款是否写明了选哪一项。
+    写明了选项时只返回选中的那一项：前言「双方可诉讼或仲裁」、附文「仲裁裁决为终局」里的「仲裁」
+    都不能把选中的诉讼改成仲裁；抽取出来的仲裁机构也可能来自没选的那一项，不能直接采用（#167 评审）。
     """
     raw = re.sub(r"\s+", "", _str_value(fields, "dispute_clause_text") or "")
-    selected = selected_dispute_option(raw)
-    return selected, selected != raw
+    spans = _option_spans(raw)
+    if not spans:
+        return raw, False
+    a, b = spans[1]
+    return raw[a:b], True
 
 
 def _jurisdiction(fields: dict) -> tuple[str, str | None, str]:
@@ -1767,11 +1784,15 @@ def arbitration_institution(fields: dict) -> str | None:
     """
     name = _compact(_str_value(fields, "arbitration_institution"))
     dispute, picked = _dispute_selection(fields)
-    m = _ARBITRATION_BODY_RE.search(dispute)
-    from_clause = _LEADING_VERBS_RE.sub("", m.group(1)) if m else None
     if picked:
-        return from_clause or (name if name and name in dispute else None)
-    return name or from_clause
+        # 抽取值在选中项里出现，名称边界最可靠；否则从选中项截（仲裁委员会 / 仲裁院 / 仲裁中心），
+        # 截到的串里取最后一个「由 / 向 / 提交」等之后的部分，不把「争议应由」吞进机构名（#167 评审）
+        if name and name in dispute:
+            return name
+        m = _PICKED_BODY_RE.search(dispute)
+        return _BODY_LEAD_RE.split(m.group(1))[-1] if m else None
+    m = _ARBITRATION_BODY_RE.search(dispute)
+    return name or (_LEADING_VERBS_RE.sub("", m.group(1)) if m else None)
 
 
 def document_kind_field(fields: dict) -> dict:

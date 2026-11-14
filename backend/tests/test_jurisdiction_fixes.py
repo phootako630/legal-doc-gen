@@ -119,3 +119,33 @@ def test_picked_arbitration_without_name_does_not_borrow_unpicked():
     )
     assert f["document_kind"]["value"] == "仲裁申请书"
     assert "甲仲裁委员会" not in f["jurisdiction_text"]["value"]
+
+
+@pytest.mark.parametrize(
+    "clause",
+    [
+        "双方可诉讼或仲裁，按以下方式1解决：(1)向工程所在地法院起诉；(2)向甲仲裁委员会申请仲裁。",
+        "按以下方式1解决：(1)向工程所在地法院起诉；(2)向甲仲裁委员会申请仲裁。仲裁裁决为终局裁决。",
+    ],
+)
+def test_picked_litigation_ignores_arbitration_words_outside_option(clause):
+    """选中诉讼时只看选中项：前言「诉讼或仲裁」、附文「仲裁裁决为终局」里的「仲裁」不改文书类型（#167 复审）。"""
+    f = _with_institution(clause, None)
+    assert f["document_kind"]["value"] == "民事起诉状"
+
+
+@pytest.mark.parametrize("body", ["乙仲裁院", "乙国际仲裁中心"])
+def test_picked_option_institution_other_suffixes(body):
+    """选中项写的是仲裁院 / 仲裁中心，也能截出来，不借用没选的那一项（#167 复审）。"""
+    f = _with_institution(f"按以下方式2解决：(1)向甲仲裁院申请仲裁；(2)向{body}申请仲裁。", "甲仲裁院")
+    assert f["addressee"]["value"] == body
+    assert body in f["jurisdiction_text"]["value"]
+
+
+@pytest.mark.parametrize("extracted", ["北京某某仲裁委员会", None])
+def test_picked_institution_not_swallow_leading_words(extracted):
+    """抽取值在选中项里就用它；没有抽取值时截取不把「争议应由」吞进机构名（#167 复审）。"""
+    f = _with_institution(
+        "按以下方式1解决：(1)争议应由北京某某仲裁委员会仲裁；(2)向工程所在地法院起诉。", extracted
+    )
+    assert f["addressee"]["value"] == "北京某某仲裁委员会"
