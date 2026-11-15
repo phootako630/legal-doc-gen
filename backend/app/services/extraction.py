@@ -133,6 +133,24 @@ def _case_contract_kind(files: list[dict]) -> str | None:
     return "买卖" if sale else "安装"
 
 
+_UNPAID_TOTAL_RE = re.compile(r"未付款总金额[:：]?(\d[\d,，]*(?:\.\d+)?)")
+
+
+def approval_unpaid_total(files: list[dict]) -> float | None:
+    """
+    审批表「未付款总金额」（代码从原文读，不经模型）：文字版取 text，扫描版取 OCR 各页；
+    表格线、加粗符号、空白去掉后匹配（「| 未付款总金额 | 40,080.00 |」「**未付款总金额** 45,180.00」）。
+    """
+    for f in files:
+        if f.get("identified_type") != "审批表":
+            continue
+        text = (f.get("text") or "") + "".join(str(p.get("text") or "") for p in f.get("pages") or [])
+        m = _UNPAID_TOTAL_RE.search(re.sub(r"[\s|｜*]", "", text))
+        if m:
+            return parse_amount(m.group(1))
+    return None
+
+
 def apply_dual_contract_amounts(fields: dict, files: list[dict]) -> None:
     """
     审批表同时列了买卖、安装两份合同时，按本案合同取对应一栏的合同总额 / 已付 / 未付 / 未付质保金，

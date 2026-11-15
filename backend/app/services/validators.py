@@ -331,6 +331,66 @@ def check_materials(missing: list[str], note: str) -> ValidationCheck:
     return ValidationCheck(key, True, note, needs_review=True)
 
 
+def check_contract_total(
+    approval_total: object,
+    contract_total: object,
+    has_supplement: bool,
+    integrated_parts: tuple[object, object] = (None, None),
+) -> ValidationCheck:
+    """
+    合同里读到的合同总价与审批表合同总额不一致：只提醒，起诉金额仍按审批表未付款金额（确认单（七）
+    第 4 题选 B：公司录入审批表时可能没写全，由办案律师核对结算价后自行修改）。有补充协议时
+    起诉状已写「后双方签订补充协议，确认合同总价变更为…」，不重复提醒；一体化合同读到了设备款与安装款、
+    审批表只列其中一部分且合同总价正好是两者之和时，起诉状已按一体化规则写全部总价（确认单（六）第 6 题），也不提醒。
+    """
+    key = "contract_total_match"
+    related = ["total_amount", "contract_total_in_contract"]
+    approval, contract = parse_amount(approval_total), parse_amount(contract_total)
+    if approval is None or contract is None or has_supplement:
+        return ValidationCheck(key, True, "未核对合同总价与审批表合同总额。", related, applicable=False)
+    parts = [parse_amount(p) for p in integrated_parts]
+    if (
+        all(p is not None for p in parts)
+        and abs(contract - sum(parts)) <= 0.01
+        and any(abs(approval - p) <= 0.01 for p in parts)
+    ):
+        return ValidationCheck(
+            key, True, "一体化合同：审批表只列了其中一部分合同额，起诉状写设备款与安装款合计。", related, applicable=False
+        )
+    if abs(approval - contract) <= 0.01:
+        return ValidationCheck(key, True, f"合同总价与审批表合同总额一致（{_yuan(approval)}）。", related)
+    return ValidationCheck(
+        key,
+        True,
+        f"合同中读到的合同总价 {_yuan(contract)} 与审批表合同总额 {_yuan(approval)} 不一致"
+        f"（相差 {_yuan(abs(contract - approval))}）。起诉金额仍按审批表未付款金额；"
+        "如合同价款经变更签证或结算调整，请核对后在审核页修改。",
+        related,
+        needs_review=True,
+    )
+
+
+def check_unpaid_total(approval_unpaid_total: float | None, unpaid: object) -> ValidationCheck:
+    """
+    审批表「未付款总金额」大于本次取的「未付金额」：可能还含另一部分欠款（一体化合同审批表只列了买卖
+    部分、安装部分的欠款只在总额里），只提醒、不改起诉金额（律师确认前不定，确认单（八）第 2 题）。
+    """
+    key = "unpaid_total_match"
+    related = ["unpaid_amount"]
+    amount = parse_amount(unpaid)
+    if approval_unpaid_total is None or amount is None or approval_unpaid_total <= amount + 0.01:
+        return ValidationCheck(key, True, "审批表未付款总金额未多于未付金额。", related, applicable=False)
+    return ValidationCheck(
+        key,
+        True,
+        f"审批表「未付款总金额」{_yuan(approval_unpaid_total)} 多于本次起诉的未付金额 {_yuan(amount)}"
+        f"（相差 {_yuan(approval_unpaid_total - amount)}），可能还含另一部分欠款（如一体化合同的安装部分）。"
+        "起诉金额未改，请核实。",
+        related,
+        needs_review=True,
+    )
+
+
 def _field_value(fields: dict, key: str) -> object:
     """从 extracted_fields[key] 取 value；兼容 {value,src} 结构与裸值。"""
     node = fields.get(key)
@@ -370,6 +430,12 @@ def run_all_checks(fields: dict) -> list[ValidationCheck]:
             bool((fields.get("dispute_clause_text") or {}).get("strategic_supplement"))
             if isinstance(fields.get("dispute_clause_text"), dict)
             else False,
+        ),
+        check_contract_total(
+            _field_value(fields, "total_amount"),
+            _field_value(fields, "contract_total_in_contract"),
+            bool(_field_value(fields, "supplement_agreement")),
+            (_field_value(fields, "contract_equipment_amount"), _field_value(fields, "contract_install_amount")),
         ),
     ]
     return checks

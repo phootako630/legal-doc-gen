@@ -46,6 +46,7 @@ from app.services.extraction import (
     apply_rule_guards,
     apply_strategic_dispute_ref,
     apply_strategic_guards,
+    approval_unpaid_total,
     is_strategic_supplement,
     mark_strategic_supplement,
     prefer_strategic_original,
@@ -74,6 +75,7 @@ from app.services.validators import (
     ValidationCheck,
     check_materials,
     check_to_dict,
+    check_unpaid_total,
     parse_date,
     parse_qty,
     run_all_checks,
@@ -307,6 +309,14 @@ async def extract_node(state: GraphState) -> dict:
 def _all_checks(state: GraphState, fields: dict) -> list[ValidationCheck]:
     """字段校验 + 材料是否齐全（清点节点的结论，缺材料只提醒）。"""
     checks = run_all_checks(fields)
+    # 审批表「未付款总金额」多于本次取的未付金额：只提醒（一体化合同审批表只列了买卖部分等）
+    unpaid = fields.get("unpaid_amount")
+    checks.append(
+        check_unpaid_total(
+            approval_unpaid_total(state.get("files", [])),
+            unpaid.get("value") if isinstance(unpaid, dict) else unpaid,
+        )
+    )
     checklist = state.get("checklist")
     if checklist:  # 没跑过清点（如单测直接调本节点）时不报「材料齐全」
         checks.append(check_materials(checklist.get("missing") or [], checklist.get("notes") or ""))
