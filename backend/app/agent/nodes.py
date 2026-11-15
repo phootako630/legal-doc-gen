@@ -679,12 +679,19 @@ def _acceptance_from_approval(fields: dict) -> bool:
     return _is_missing(fields, "acceptance_latest_date") or "政府验收时间" in src
 
 
+# 每份扫描报告先读的页数：首页有设备品种 / 设备代码 / 报告编号 / 批准日期，个别报告的编号
+# 在第 2 页。各报告的前 2 页都读完了，才回头读其余页——多份报告一起上传时，预算不会被
+# 前几份报告的后页用完，后几份连首页都没读到、漏数台数。
+REPORT_HEAD_PAGES = 2
+
+
 async def report_ocr_node(state: GraphState) -> dict:
     """
     扫描验收报告按需 OCR（新案卷核对：报告常是手机拍照，没有文本层）：还有没读过的扫描报告就
-    逐页 OCR（上限 AGENT_MAX_REPORT_OCR_PAGES），再按**全部**验收报告汇总——文本报告已抽到的
-    批准日期与 OCR 读到的取最晚，台数 = 文本报告计数 + 扫描报告首页计数；预算用尽或有页识别失败时
-    在出处里注明可能不全（不把子集当全案结论）。
+    逐页 OCR（上限 AGENT_MAX_REPORT_OCR_PAGES；先读每份的前 REPORT_HEAD_PAGES 页，再读其余页），
+    再按**全部**验收报告汇总——文本报告已抽到的批准日期与 OCR 读到的取最晚，
+    台数 = 文本报告计数 + 扫描报告首页计数；预算用尽或有页识别失败时在出处里注明可能不全
+    （不把子集当全案结论）。
     """
     fields = state.get("extracted_fields", {})
     files = copy.deepcopy(state.get("files", []))
@@ -706,16 +713,31 @@ async def report_ocr_node(state: GraphState) -> dict:
     budget_hit = False  # 因页数上限没读完（区别于 OCR 本身失败）
     ocr_reports: list[tuple[str, list[dict]]] = []
     ocr_files: list[dict] = []
-    for f in scanned:
+    # 先读每份报告的前几页（首页与批准日期页），预算还有再按文件顺序读其余页：逐份读到底时，
+    # 8 份 7 页的报告读到第 5 份就用完 30 页，后 3 份一页没读、台数少数（新案卷核对：8 台数成 6 台）
+    pdfs: dict[int, bytes] = {}
+    head: list[tuple[int, int]] = []
+    rest: list[tuple[int, int]] = []
+    for i, f in enumerate(scanned):
         pdf = file_store.get(f.get("file_id"))
-        if pdf is None or budget <= 0:
+        if pdf is None:
             incomplete = True
-            budget_hit = budget_hit or pdf is not None
             continue
+        pdfs[i] = pdf
         unread = _unread_pages(f, pdf)
-        todo = unread[:budget]
-        if len(todo) < len(unread):
-            incomplete = budget_hit = True  # 预算不够读完这份报告
+        head += [(i, n) for n in unread[:REPORT_HEAD_PAGES]]
+        rest += [(i, n) for n in unread[REPORT_HEAD_PAGES:]]
+    planned = (head + rest)[: max(budget, 0)]
+    if len(planned) < len(head) + len(rest):
+        incomplete = budget_hit = True  # 预算不够读完全部报告页
+    plan: dict[int, list[int]] = {}
+    for i, n in planned:
+        plan.setdefault(i, []).append(n)
+    for i, f in enumerate(scanned):
+        pdf = pdfs.get(i)
+        todo = sorted(plan.get(i, []))
+        if pdf is None or not todo:
+            continue
         pages: list[dict] = []
         for start in range(0, len(todo), OCR_MAX_CONCURRENCY):
             batch = todo[start : start + OCR_MAX_CONCURRENCY]
@@ -846,7 +868,7 @@ def _merge_acceptance_qty(
                 counted += 1
             total += counted
             dup = len(ids) - counted
-            note = f"（其中 {dup} 份与其他报告的设备代码 / 报告编号重复，未重复计数）" if dup else ""
+            note = f"（另有 {dup} 页与已计数的报告设备代码 / 报告编号相同，不重复计数）" if dup else ""
             parts.append(f"{name}按报告首页计数 {counted} 份{note}")
             continue
         counted = count_acceptance_units([f])

@@ -1,6 +1,7 @@
 # derived_fields 单测：逾期利息常规话术 + 按工程所在地推定管辖法院 + 律师修改不被覆盖
 import pytest
 
+from app.services.complaint_renderer import render_complaint
 from app.services.derived_fields import (
     LPR_INTEREST_BASIS,
     apply_derived_fields,
@@ -258,10 +259,34 @@ def test_elevator_qty_follows_acceptance(
     assert ("待核实" in node["src"]) is uncertain
 
 
-def test_elevator_qty_kept_without_acceptance():
-    fields = apply_derived_fields(_f(elevator_qty=15, elevator_qty_by_approval=15))
-    assert fields["elevator_qty"]["value"] == 15
-    assert "derived" not in fields["elevator_qty"]
+@pytest.mark.parametrize(
+    ("extracted", "approval", "contract", "expected", "src_part"),
+    [
+        (None, 15, None, 15, "按审批表签约台数"),  # 没有验收报告：审批表签约台数兜底，不再是【待补充】
+        (None, 15, 15, 15, "按审批表签约台数"),
+        (None, 6, 8, 6, "（合同 8 台）"),  # 审批表与合同不一致：仍取审批表，写明合同台数
+        (None, None, 4, 4, "按合同台数"),
+        (7, 15, None, 15, "按审批表签约台数"),  # LLM 抽到的验收台数没有报告原件印证，不用
+    ],
+)
+def test_elevator_qty_without_acceptance_falls_back(extracted, approval, contract, expected, src_part):
+    fields = apply_derived_fields(
+        _f(elevator_qty=extracted, elevator_qty_by_approval=approval, elevator_qty_by_contract=contract)
+    )
+    node = fields["elevator_qty"]
+    assert node["value"] == expected and node["derived"] is True
+    assert "未见验收报告" in node["src"] and src_part in node["src"]
+    assert "待核实" in node["src"]  # 审核页标待核实、起诉状加「⚠️ 待核实」
+
+
+def test_elevator_qty_without_any_source_kept():
+    fields = apply_derived_fields(_f(elevator_qty=None))
+    assert fields["elevator_qty"]["value"] is None
+
+
+def test_elevator_qty_fallback_rendered_as_uncertain():
+    fields = apply_derived_fields(_f(elevator_qty_by_approval=3))
+    assert "⚠️ 待核实：3" in render_complaint(fields)
 
 
 @pytest.mark.parametrize(

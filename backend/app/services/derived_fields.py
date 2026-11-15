@@ -514,17 +514,31 @@ def elevator_qty_contract_field(fields: dict) -> dict | None:
     return None
 
 
+def _qty_without_acceptance(approval: int | None, contract: int | None) -> dict | None:
+    """没有验收报告台数时的兜底：审批表签约台数优先，其次合同台数，均标待核实。"""
+    if approval is not None:
+        src = "未见验收报告，按审批表签约台数"
+        if contract is not None and contract != approval:
+            src += f"（合同 {contract} 台）"
+        return {"value": approval, "src": f"{src}，待核实", "channel": "text"}
+    if contract is not None:
+        return {"value": contract, "src": "未见验收报告，按合同台数，待核实", "channel": "text"}
+    return None
+
+
 def elevator_qty_field(fields: dict) -> dict | None:
     """
-    「N 台电梯均于……验收合格」：取验收报告台数；没有则不派生（保留抽取值）。
+    「N 台电梯均于……验收合格」：取验收报告台数。
+    没有验收报告（或报告没数出台数）：用审批表签约台数兜底，审批表没有再用合同台数，
+    一律标待核实——验收合格的台数没有原件印证，由律师核对。两者都没有则不派生（保留抽取值）。
     合同台数与报告不一致时：差额正好是 VGE 家用电梯（无需验收报告）→ 继续并提醒；
     其余情况由 qty_check 断点问律师（补充确认单第 2 题）。
     """
     acceptance = parse_qty(_str_value(fields, "elevator_qty_by_acceptance"))
-    if acceptance is None:
-        return None
     approval = parse_qty(_str_value(fields, "elevator_qty_by_approval"))
     contract = parse_qty(_str_value(fields, "elevator_qty_by_contract"))
+    if acceptance is None:
+        return _qty_without_acceptance(approval, contract)
     vge = parse_qty(_str_value(fields, "elevator_qty_vge")) or 0
     src = "按验收报告台数"
     if contract is not None and contract != acceptance:
