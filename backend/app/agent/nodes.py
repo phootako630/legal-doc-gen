@@ -1041,11 +1041,12 @@ def _ask_qty(fields: dict, pending: dict) -> dict:
 
 def _qty_without_acceptance_pending(fields: dict, files: list[dict]) -> dict | None:
     """
-    没有验收报告台数、起诉状台数也空着，但审批表 / 合同写了台数：暂停请律师确认验收合格的台数。
-    签约台数不能证明已验收（宁缺勿造），不自动写进「N 台电梯均于……验收合格」；问题里列出
-    各来源台数及原出处，并区分「没有验收报告」与「报告已上传但没数出台数」（保留原因）。
+    没有验收报告台数、律师也没确认过起诉状台数，但审批表 / 合同写了台数：暂停请律师确认验收合格的
+    台数。签约台数不能证明已验收（宁缺勿造），不自动写进「N 台电梯均于……验收合格」（抽取模型预填的
+    elevator_qty 已由 derived_fields.elevator_qty_field 清空，律师不作答也不会流入起诉状）。
+    问题里列出各来源台数及原出处，并区分「没有验收报告」与「报告已上传但没数出台数」（保留原因）。
     """
-    if not _is_missing(fields, "elevator_qty") or _lawyer_edited_qty(fields):
+    if _lawyer_edited_qty(fields):
         return None
     if parse_qty(_str_value(fields, "elevator_qty_by_acceptance")) is not None:
         return None

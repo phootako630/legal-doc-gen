@@ -516,13 +516,15 @@ def elevator_qty_contract_field(fields: dict) -> dict | None:
 
 def elevator_qty_field(fields: dict) -> dict | None:
     """
-    「N 台电梯均于……验收合格」：取验收报告台数；没有则不派生（保留抽取值）。
+    「N 台电梯均于……验收合格」：取验收报告台数。没有验收报告台数时清空（宁缺勿造）：抽取模型
+    预填的值多是签约台数，不能证明已验收；由 qty_check 断点列出审批表 / 合同台数请律师确认，
+    律师确认过的值不经过这里（apply_derived_fields 跳过律师修改）。
     合同台数与报告不一致时：差额正好是 VGE 家用电梯（无需验收报告）→ 继续并提醒；
     其余情况由 qty_check 断点问律师（补充确认单第 2 题）。
     """
     acceptance = parse_qty(_str_value(fields, "elevator_qty_by_acceptance"))
     if acceptance is None:
-        return None
+        return {"value": None, "src": "未数出验收报告台数，待律师确认（签约台数不能代替验收台数），待补充"}
     approval = parse_qty(_str_value(fields, "elevator_qty_by_approval"))
     contract = parse_qty(_str_value(fields, "elevator_qty_by_contract"))
     vge = parse_qty(_str_value(fields, "elevator_qty_vge")) or 0

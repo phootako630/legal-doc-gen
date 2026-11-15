@@ -258,10 +258,14 @@ def test_elevator_qty_follows_acceptance(
     assert ("待核实" in node["src"]) is uncertain
 
 
-def test_elevator_qty_kept_without_acceptance():
+def test_elevator_qty_cleared_without_acceptance():
+    # 没有验收台数：抽取模型预填的台数（多是签约台数）不能证明已验收，清空待律师确认（#168 复审）
     fields = apply_derived_fields(_f(elevator_qty=15, elevator_qty_by_approval=15))
-    assert fields["elevator_qty"]["value"] == 15
-    assert "derived" not in fields["elevator_qty"]
+    assert fields["elevator_qty"]["value"] is None
+    assert "待律师确认" in fields["elevator_qty"]["src"]
+    # 律师确认过的台数不被清掉
+    kept = apply_derived_fields({**_f(elevator_qty_by_approval=15), "elevator_qty": {"value": 15, "src": "律师确认"}})
+    assert kept["elevator_qty"]["value"] == 15
 
 
 @pytest.mark.parametrize(

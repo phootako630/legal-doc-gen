@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 from app.agent import nodes as nodes_mod
 from app.agent.runner import run_analyze, run_resume
 from app.services import file_store
+from app.services.complaint_renderer import render_complaint
 from app.services.equipment_list import count_vge_units
 
 _MD_TABLE = """第四部分 合同计价清单
@@ -242,9 +243,27 @@ def test_uploaded_report_not_counted_keeps_reason():
 
 def test_no_acceptance_pause_skipped_when_not_needed():
     base = _no_acceptance(8, 8)
-    assert nodes_mod._qty_without_acceptance_pending({**base, "elevator_qty": {"value": 8, "src": "《起诉材料》"}}, []) is None
     assert nodes_mod._qty_without_acceptance_pending({**base, "elevator_qty": {"value": "8", "src": "律师确认"}}, []) is None
     with_report = {**base, "elevator_qty_by_acceptance": {"value": 8, "src": "《验收报告》"}}
     assert nodes_mod._qty_without_acceptance_pending(with_report, []) is None
     bare = {k: v for k, v in base.items() if not k.startswith("elevator_qty")}
     assert nodes_mod._qty_without_acceptance_pending(bare, []) is None  # 没有任何台数：不问，留【待补充】
+
+
+def test_model_prefilled_qty_without_acceptance_still_asks(monkeypatch):
+    # 抽取模型预填了 elevator_qty（实为签约台数）、没有验收台数：不能绕过律师确认（#168 复审）。
+    # 预填值在派生时清空；停在断点或律师没作答时，起诉状都留【待补充】，不写「8 台电梯均于……验收合格」
+    files = [{"filename": "合同.docx", "identified_type": "合同", "text": "无设备清单"}]
+    extracted = _no_acceptance(8, 8)
+    extracted["elevator_qty"] = {"value": 8, "src": "《审批表.pdf》签约台数"}
+    state = _run(monkeypatch, extracted, files)
+    p = state.pending
+    assert p is not None and p.field_keys == ["elevator_qty"] and p.options == ["8"]
+    assert "审批表写 8 台：《审批表.pdf》签约台数" in p.question
+    # 律师停在断点直接导出：渲染时重新派生，预填值被清掉
+    assert "8 台电梯均于" not in render_complaint(state.extracted_fields)
+
+    resumed = asyncio.run(run_resume(state.run_id, {"elevator_qty": ""}))
+    assert resumed.pending is None
+    assert resumed.extracted_fields["elevator_qty"]["value"] is None
+    assert "8 台电梯均于" not in render_complaint(resumed.extracted_fields)
