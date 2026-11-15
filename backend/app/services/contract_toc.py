@@ -20,8 +20,9 @@ from app.services.doc_search import is_toc_page
 
 _MARGIN = 3  # 按页数估算时，各部分范围两侧放宽的页数
 _MIN_ROWS = 2  # 目录至少解析出这么多行才用
-# 页码写法里标题直接写着目标条款的条目（「付款方式 …… 12」）只先读前几页：目录只列了少数条目时，
-# 到下一条目的距离可能有几十页，整段排在前面会把后面的争议条款挤出页数上限（#174 评审）
+# 页码写法里标题直接写着目标条款的条目（「付款方式 …… 12」）先各读前几页，再读各条目的其余页：目录只列了
+# 少数条目时，到下一条目的距离可能有几十页，整段排在前面会把后面的争议条款挤出页数上限；条目后段（如附录里的
+# 仲裁机构）仍排在其他部分之前（#174 评审）
 _ENTRY_SPAN = 6
 
 # 与目标条款对应的目录标题关键词
@@ -39,9 +40,11 @@ _CLAUSE_SECTION_RE = re.compile(
 _TABLE_ROW_RE = re.compile(r"^\s*\|(.+)\|\s*$")
 _LINE_ROW_RE = re.compile(r"^\s*(?P<title>.*?[一-鿿].*?)[\s.．…·_—\-]*(?<![/／\d])(?P<num>\d{1,3})\s*$")
 _NUM_CELL_RE = re.compile(r"^\d{1,3}$")
-# 页数写法的表头：只认表头行（「| 序号 | 文件内容 | 页数 |」「文件内容 页数」），页脚的「文件总页数：120」不算
+# 页数写法的表头：只认表头行（「| 序号 | 文件内容 | 页数 |」「序号 标题 页数」「文件内容页数」）：整行没有数字、
+# 冒号，以「页数」这一栏结尾；页脚的「文件总页数：120」不算（#174 评审）
 _COUNT_HEADER_RE = re.compile(
-    r"^\s*\|?[^|\d]*(?:\|[^|\d]*)*\|\s*页\s*数\s*\|?\s*$|^[^|\d]*?(?:内容|名称|文件)\s*页\s*数\s*$"
+    r"^\s*\|?[^|\d]*(?:\|[^|\d]*)*\|\s*页\s*数\s*\|?\s*$"
+    r"|^[^|\d:：]*?(?:\s|内容|名称|文件|标题)页\s*数\s*$"
 )
 _SEQ_CELL_RE = re.compile(r"^(?:第?[\d一二三四五六七八九十]{1,3}[章节条部分]?|[\d.．]+)$")
 
@@ -112,10 +115,18 @@ def toc_priority_pages(pages: list[dict], page_total: int, targets: set[str]) ->
     patterns = [_TARGET_TITLE_RE[t] for t in sorted(targets) if t in _TARGET_TITLE_RE]
     direct = [rg for rg in ranges if any(p.search(rg[0].title) for p in patterns)]
     clause = [rg for rg in ranges if rg not in direct and _CLAUSE_SECTION_RE.search(rg[0].title)]
+    spans = [(s, e) for _, s, e in direct]
     if not counts:
+        # 先读各目标条目的前几页，再读它们的其余页
         toc_page = first[-1]["page"]
-        direct = [(r, s, min(e, s + _ENTRY_SPAN - 1 + toc_page)) for r, s, e in direct]
+        heads = [(s, min(e, s + _ENTRY_SPAN - 1 + toc_page)) for s, e in spans]
+        spans = heads + [(h_end + 1, e) for (_, h_end), (_, e) in zip(heads, spans) if h_end < e]
+    spans += [(s, e) for _, s, e in clause]
     order: list[int] = []
-    for _, start, end in direct + clause:
-        order.extend(n for n in range(start, end + 1) if n not in order)
+    seen: set[int] = set()
+    for start, end in spans:
+        for n in range(start, end + 1):
+            if n not in seen:
+                seen.add(n)
+                order.append(n)
     return order

@@ -153,3 +153,24 @@ def test_count_header_only_from_header_row():
     toc = "合同目录\n序号 文件内容 页数\n1 合同协议书 3\n2 技术参数表 50\n3 专用条件 6"
     order = toc_priority_pages(_pages(toc), 70, {"dispute"})
     assert 56 in order and 62 in order and 30 not in order
+
+
+def test_plain_header_with_title_column_is_count_mode():
+    # 不带竖线的「序号 标题 页数」表头同样是页数写法；页数 50 → 6 不是页码倒退（#174 复审）
+    toc = "合同目录\n序号 标题 页数\n1 合同协议书 3\n2 技术参数表 50\n3 专用条件 6"
+    order = toc_priority_pages(_pages(toc), 70, {"dispute"})
+    assert 56 in order and 62 in order and 30 not in order
+    # 页脚「文件总页数：120」仍不算表头
+    footer = "目录\n付款方式……12\n争议解决……85\n其他……86\n文件总页数：120"
+    assert toc_priority_pages(_pages(footer), 120, {"dispute"})[0] == 85
+
+
+def test_start_toc_reads_rest_of_target_entry_before_other_parts():
+    # 「争议解决……85」下一条「其他……100」：第 85 页只是转引、第 94 页附录才写仲裁机构。
+    # 先读各目标条目前几页，再读条目其余页，第 94 页仍在优先列表里、且排在付款条目后段之前（#174 复审）
+    toc = "目录\n付款方式……12\n技术要求……20\n争议解决……85\n其他……100"
+    order = toc_priority_pages(_pages(toc), 150, {"dispute", "payment"})
+    assert order.index(85) < 15
+    assert 94 in order
+    assert order.index(12) < order.index(85) < order.index(94)
+    assert 50 not in order and 120 not in order
