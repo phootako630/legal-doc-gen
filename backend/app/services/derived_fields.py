@@ -1518,26 +1518,86 @@ def _cn_date(d: date) -> str:
     return f"{d.year}年{d.month}月{d.day}日"
 
 
+# 质保期条款位置：抽取时写在 warranty_period 的出处里（「《安装合同.pdf》第13.1条（OCR识别）」
+# 「第2条第（6）项」）；「第8页」不是条款号
+_CLAUSE_LOC_RE = re.compile(r"(?:第[^《》，。；;,\s页]{1,12}?[条款项章])+")
+# 分期返还的期限：「满1年」「满二年」「期满2年后」「2年期满后」
+# 「2年免费维修保养期期满后」：期限与「期满」之间可隔几个字（不跨标点、不跨百分比）
+_STAGE_PERIOD_RE = re.compile(
+    r"满\s*([0-9一二两三四五六七八九十]+)\s*(年|个月)"
+    r"|([0-9一二两三四五六七八九十]+)\s*(年|个月)[^，。；;,%％\d]{0,10}?期满"
+)
+_CN_NUM = {1: "一", 2: "二", 3: "三", 4: "四", 5: "五", 6: "六", 7: "七", 8: "八", 9: "九", 10: "十"}
+
+
+def _warranty_clause_location(fields: dict) -> str | None:
+    """质保期条款号，只写最细一级：「第六条6.1款」→「第6.1条」，「第1页第二条第(6)款」→「第二条第(6)款」。"""
+    src = re.sub(r"《[^》]*》", "", str(_node(fields, "warranty_period").get("src") or ""))
+    # 去掉起算点说明、OCR 提示等较长的括注（其中的「满6个月」等不是条款号）；「(6)」这类编号保留
+    src = re.sub(r"[（(][^（()）]{4,}[）)]", "", src)
+    m = _CLAUSE_LOC_RE.search(src)
+    if not m:
+        return None
+    dotted = _DOTTED_CLAUSE_RE.match(src, m.end())  # 「第六条6.1款」：章条号后紧跟的分级编号
+    return finest_clause_no(m.group(0) + (dotted.group(0) if dotted else ""))
+
+
+def _stage_period_labels(fields: dict) -> list[str]:
+    """质保金条款里各期返还的期限，按出现顺序：「满1年…满2年」→ ["满一年", "满二年"]。"""
+    labels = []
+    for m in _STAGE_PERIOD_RE.finditer(_str_value(fields, "retention_clause_text") or ""):
+        num, unit = (m.group(1), m.group(2)) if m.group(1) else (m.group(3), m.group(4))
+        n = int(num) if num.isdigit() else _cn_int(num)
+        labels.append(f"满{_CN_NUM.get(n, num) if n else num}{unit}")
+    return labels
+
+
 def warranty_expiry_field(fields: dict) -> dict:
     """
-    欠款含质保金时写「，质保期已于X年X月X日到期」（确认单（五）第 7 题）：
-    到期日 = 最晚验收合格日 + 质保期，标待核实。质保期不自验收起算、读不到、
-    或还没到期时不写，在出处里说明原因。
+    欠款含质保金时，在移交句后写「，根据合同第X条约定，案涉电梯质保期已经届满」（核对表 Q42 / Q43
+    律师说明；取代确认单（五）第 7 题「质保期已于X年X月X日到期」，不再推算到期日）：
+    - 质保金到期后一次性返还 →「已经届满」；
+    - 分期返还（满一年返还部分、满二年返还剩余）→ 按本次诉请的「支付至 X%」对应到哪一期：
+      全部质保金 →「已经届满」，只含前几期 →「已经满一年」等。
+    第 X 条为质保期条款（取自 warranty_period 的出处），标待核实。质保金尚未到期、本次只诉到期部分时不写；
+    支付至比例对不上任何一期时留【待补充】交律师。
     """
     if not _retention_in_debt(fields):
-        return {"value": "", "src": "欠款不含质保金，不写质保期到期句"}
-    expiry, note = _warranty_expiry(fields)
-    if expiry is None:
-        if note.startswith("质保期不是"):
-            return {"value": "", "src": "质保期不是自验收合格之日起算，到期日请律师补写"}
-        return {"value": "", "src": "欠款含质保金，但验收日期或质保期未识别，质保期到期句请律师补写"}
-    when = _cn_date(expiry)
-    if expiry > _today():
-        return {"value": "", "src": f"欠款含质保金，但质保期到 {when} 才届满，请律师核对诉请"}
-    period_text = _str_value(fields, "warranty_period") or ""
+        return {"value": "", "src": "欠款不含质保金，不写质保期句"}
+    if undue_retention(fields) is not None:
+        return {"value": "", "src": "质保金尚未到期，本次只诉到期部分，不写质保期句"}
+    location = _warranty_clause_location(fields)
+    loc_text = location or _MISSING
+    basis = f"质保期条款：{_node(fields, 'warranty_period').get('src') or '出处未注明'}"
+    if not location:
+        basis += "；质保期条款位置未识别，请律师补写"
+    stages = retention_stages(fields)
+    if len(stages) <= 1:
+        return {
+            "value": f"，根据合同{loc_text}约定，案涉电梯质保期已经届满",
+            "src": f"按律师规则：质保金到期后一次性返还（{basis}），待核实",
+        }
+    payable = parse_percent(_str_value(fields, "payable_ratio"))
+    labels = _stage_period_labels(fields)
+    if payable is None:
+        return {"value": None, "src": f"质保金分期返还，但支付至比例未定，质保期句请律师补写（{basis}）"}
+    if abs(payable - 100) < 1e-6:
+        return {
+            "value": f"，根据合同{loc_text}约定，案涉电梯质保期已经届满",
+            "src": f"按律师规则：质保金分期返还，本次诉请含全部质保金（支付至 100%）（{basis}），待核实",
+        }
+    base = 100 - sum(stages)
+    for k in range(1, len(stages)):
+        if abs(payable - (base + sum(stages[:k]))) < 1e-6:
+            if len(labels) != len(stages):
+                break  # 各期期限读不全：写不出「满几年」，交律师
+            return {
+                "value": f"，根据合同{loc_text}约定，案涉电梯质保期已经{labels[k - 1]}",
+                "src": f"按律师规则：质保金分期返还，本次诉请支付至 {payable:g}%，对应第 {k} 期（{labels[k - 1]}）（{basis}），待核实",
+            }
     return {
-        "value": f"，质保期已于{when}到期",
-        "src": f"按律师规则：最晚验收合格日 + 质保期「{period_text}」推算{note}，待核实",
+        "value": None,
+        "src": f"质保金分期返还，支付至 {payable:g}% 对不上各期返还比例或期限，质保期句请律师补写（{basis}）",
     }
 
 
@@ -1970,6 +2030,11 @@ def retention_stages(fields: dict) -> list[float]:
     text = _str_value(fields, "retention_clause_text") or ""
     stages = [float(x) for x in _PERCENT_RE.findall(text)]
     stages = [x for x in stages if 0 < x < 100]
+    if total is not None and len(stages) > 2 and abs(stages[0] - total) < 1e-6:
+        # 「质量保留金5%分二次支付，满1年支付3%，满2年支付2%」：开头的 5% 是总比例，不是一期
+        rest = stages[1:]
+        if abs(sum(rest) - total) < 1e-6:
+            return rest
     if stages and (total is None or abs(sum(stages) - total) < 1e-6):
         return stages
     return [total] if total else []
