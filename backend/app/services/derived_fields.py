@@ -621,31 +621,36 @@ LOAN_RATE_PLAIN = "plain"
 LOAN_RATE_ADJUSTED = "adjusted"
 
 
-# 加成只在提到贷款利率的那一小句里找：「最高不超过合同总价的10%」这类上限在另一句，不算加成
-_CLAUSE_CHUNK_RE = re.compile(r"[，,。；;]")
+# 上限说法（「最高不超过合同总价10%」「违约金总额以拖延金额的2%为限」「封顶」）先去掉，再找加成：
+# 这些百分比限定的是违约金总额，不是贷款利率本身的加成。不靠标点切分（「按同期贷款利率，
+# 上浮30%」是同一个计算标准，#169 复审）
+_CAP_PHRASE_RE = re.compile(
+    r"(?:最高|最多|总额|累计)?(?:不得?超过|不应超过|不高于|最高为|最多为|上限为?|封顶)[^，。；;,）)】]*"
+    r"|以[^，。；;,）)】]{0,30}?为限"
+)
 
 
 def _loan_rate_hits(fields: dict) -> tuple[str | None, list[str]]:
     """
-    抽出的利率原文与条款原文都看（摘录可能省掉了「的1.5倍」，#169 评审）：任一处提到贷款利率的
-    那句话里有上浮 / 倍数 / 另加比率 → LOAN_RATE_ADJUSTED；都没有 → LOAN_RATE_PLAIN；
-    没提到贷款利率 → None。同时返回提到贷款利率的字段出处（文件 + 位置）。
+    抽出的利率原文与条款原文都看（摘录可能省掉了「的1.5倍」，#169 评审）：提到贷款利率时，
+    去掉上限说法后两处任一处还有上浮 / 倍数 / 比率 → LOAN_RATE_ADJUSTED（判断不了一律交律师，
+    不自动套 LPR）；都没有 → LOAN_RATE_PLAIN；没提到贷款利率 → None。
+    同时返回提到贷款利率的字段出处（文件 + 位置）。
     """
-    kind: str | None = None
+    texts = {
+        key: re.sub(r"\s+", "", _str_value(fields, key) or "")
+        for key in ("breach_interest_rate_text", "breach_clause_text")
+    }
+    mentioned = [key for key, text in texts.items() if _LOAN_RATE_RE.search(text)]
+    if not mentioned:
+        return None, []
     srcs: list[str] = []
-    for key in ("breach_interest_rate_text", "breach_clause_text"):
-        text = re.sub(r"\s+", "", _str_value(fields, key) or "")
-        chunks = [c for c in _CLAUSE_CHUNK_RE.split(text) if _LOAN_RATE_RE.search(c)]
-        if not chunks:
-            continue
+    for key in mentioned:
         src = str(_node(fields, key).get("src") or "").strip()
         if src and src not in srcs:
             srcs.append(src)
-        if any(_LOAN_RATE_ADJUST_RE.search(c) for c in chunks):
-            kind = LOAN_RATE_ADJUSTED
-        elif kind is None:
-            kind = LOAN_RATE_PLAIN
-    return kind, srcs
+    adjusted = any(_LOAN_RATE_ADJUST_RE.search(_CAP_PHRASE_RE.sub("", text)) for text in texts.values())
+    return (LOAN_RATE_ADJUSTED if adjusted else LOAN_RATE_PLAIN), srcs
 
 
 def loan_rate_reference(fields: dict) -> str | None:

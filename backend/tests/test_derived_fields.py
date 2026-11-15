@@ -711,6 +711,8 @@ def test_loan_rate_keeps_clause_source_and_ignores_separate_cap():
         (None, "甲方逾期付款的，按银行同期贷款利率上浮30%向乙方支付违约金。"),
         # 利率摘录省掉了倍数、条款原文保留：仍按加成处理，不套 LPR（#169 评审）
         ("同期贷款利率", "甲方逾期付款的，按同期贷款利率的1.5倍向乙方支付违约金。"),
+        # 逗号隔开的仍是同一个计算标准（#169 复审）
+        (None, "甲方逾期付款的，按同期贷款利率，上浮30%计算违约金。"),
     ],
 )
 def test_adjusted_loan_rate_left_to_lawyer(rate, clause):
@@ -727,3 +729,17 @@ def test_non_loan_penalty_rate_unchanged():
     )
     assert fields["interest_term"]["value"] == "违约金"
     assert fields["interest_rate_basis"]["value"] == "每日万分之五"
+
+
+@pytest.mark.parametrize(
+    "clause",
+    [
+        "甲方逾期付款的，按同期贷款利率支付违约金（最高不超过合同总价10%）。",  # 括号里的上限（#169 复审）
+        "甲方逾期付款的，按同期贷款利率支付违约金，违约金总额以拖延付款金额的2%为限。",
+        "甲方逾期付款的，按同期贷款利率支付违约金，最高为合同总价的百分之五。",
+    ],
+)
+def test_loan_rate_cap_is_not_adjustment(clause):
+    fields = apply_derived_fields(_f(breach_interest_rate_text=None, breach_clause_text=clause))
+    assert fields["interest_term"]["value"] == "逾期付款利息"
+    assert fields["interest_rate_basis"]["value"] == LPR_INTEREST_BASIS
