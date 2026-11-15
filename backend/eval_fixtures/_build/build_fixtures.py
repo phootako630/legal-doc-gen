@@ -52,6 +52,38 @@ def _scanned_pdf(path: str, pages: list[str | tuple[str, list[list[str]]]]) -> N
     out.save(path, garbage=4, deflate=True)
 
 
+def _seal(page: fitz.Page, center: fitz.Point, opacity: float) -> None:
+    """红色圆形公章（环 + 半透明填充 + 「合同专用章」），盖在页面上。"""
+    page.draw_circle(center, 42, color=(0.85, 0.1, 0.1), fill=(0.9, 0.2, 0.2), width=3, fill_opacity=opacity)
+    page.insert_text(fitz.Point(center.x - 30, center.y + 5), "合同专用章", fontname=_FONT, fontsize=12,
+                     color=(0.8, 0.05, 0.05))
+
+
+def _sealed_scanned_pdf(path: str, clause_pages: list[str], sign: dict) -> None:
+    """扫描合同（彩色）：前几页条款，最后一页签署栏——公共签约日期被甲方红色公章盖住，
+    乙方（我方）盖章旁另写清楚的日期（确认单（七）第 7 题的情形）。"""
+    src = fitz.open()
+    for text in clause_pages:
+        src.new_page().insert_textbox(fitz.Rect(60, 60, 535, 790), text.strip(), fontname=_FONT, fontsize=12)
+    page = src.new_page()
+    page.insert_text((60, 120), "本合同一式四份，签约方各执二份，各方盖章后生效。", fontname=_FONT, fontsize=12)
+    prefix = "签约方于 "
+    page.insert_text((60, 170), f"{prefix}{sign['shared_date']} 在 盖章前确认以上条款：", fontname=_FONT, fontsize=12)
+    date_x = 60 + fitz.get_text_length(prefix, fontname=_FONT, fontsize=12)
+    date_w = fitz.get_text_length(sign["shared_date"], fontname=_FONT, fontsize=12)
+    page.insert_text((60, 240), f"甲方（盖章）：{sign['party_a']}", fontname=_FONT, fontsize=12)
+    page.insert_text((320, 240), f"乙方（盖章）：{sign['party_b']}", fontname=_FONT, fontsize=10)
+    page.insert_text((360, 300), f"日期：{sign['our_date']}", fontname=_FONT, fontsize=12)
+    _seal(page, fitz.Point(date_x + date_w / 2, 166), opacity=0.92)  # 甲方章正好压在公共日期上，几乎盖死
+    _seal(page, fitz.Point(470, 250), opacity=0.25)  # 乙方章在名称旁，不挡日期
+    out = fitz.open()
+    for pg in src:
+        pix = pg.get_pixmap(dpi=120)
+        new = out.new_page(width=pg.rect.width, height=pg.rect.height)
+        new.insert_image(new.rect, stream=pix.tobytes("png"))
+    out.save(path, garbage=4, deflate=True)
+
+
 def _approval(case: str, filename: str, v: dict) -> None:
     """仿 KA 诉讼审批表：标签与取值各占一行（与真实审批表 PDF 提取出的文字形态一致）。"""
     rows = [
@@ -784,6 +816,57 @@ def case_amount_reminders() -> None:
         })
 
 
+def case_sealed_sign_date() -> None:
+    """签约日期被印章遮挡（确认单（七）第 7 题选 B）：扫描合同签署栏的公共日期「2024年8月10日」被甲方红色公章几乎盖死，
+    乙方（我方）盖章旁写「2024年6月18日」（与审批表签约时间一致）。端到端场景：签署栏专用识别报告公共日期被印章覆盖，
+    签约日期为我方日期。合成页面上普通 OCR 会照抄下面清楚的日期，抽取已取到 6 月 18 日，不走改写；
+    「抽取取到被遮挡的错日期 → 改取我方日期」由 tests/test_signature_seal_date.py 覆盖。"""
+    case = "虚构遮挡案N"
+    os.makedirs(os.path.join(ROOT, case, "materials"), exist_ok=True)
+    _approval(case, "AH9000014无锡虚构置业有限公司诉讼审批表.pdf", {
+        "serial": "SS2099-000141", "title": "AH9000014无锡虚构置业有限公司虚构园项目",
+        "contract_no": "AH9000014", "branch_path": "集团/营销网络/梧桐分公司",
+        "buyer": "无锡虚构置业有限公司", "contact": "虚构壬", "contact_phone": "13800000014",
+        "buyer_address": "无锡市梁溪区虚构路14号", "site": "无锡市梁溪区虚构路14号虚构园",
+        "contract_type": "安装合同", "amount_label": "安装", "sign_date": "2024-06-18", "qty": "2", "qty_actual": "2",
+        "total": "100,000.00", "paid": "40,000.00", "unpaid": "60,000.00",
+        "gov_accept": "2024-11-20", "last_pay_date": "2024-07-01", "reason": "电梯已验收，买方未付验收款。",
+    })
+    _sealed_scanned_pdf(os.path.join(ROOT, case, "materials", "无锡虚构园项目电梯安装合同.pdf"), [
+        """电梯安装合同
+
+合同编号：AH9000014
+甲方：无锡虚构置业有限公司
+乙方：日立电梯（中国）有限公司梧桐分公司
+
+第一条 工程概况
+工程地点：无锡市梁溪区虚构路14号虚构园。乙方负责安装电梯共2台。
+
+第二条 合同价款
+本合同安装总价为人民币100,000元（大写：拾万元整）。
+
+第三条 付款方式
+3.1 电梯进场后10日内，甲方支付合同金额的40%。
+3.2 电梯经政府验收合格后30日内，甲方支付至合同金额的100%。
+
+第四条 违约责任
+甲方逾期付款的，应向乙方支付逾期付款利息。
+
+第五条 争议解决
+因本合同发生的争议，双方协商不成的，向工程所在地人民法院提起诉讼。""",
+    ], {
+        "shared_date": "2024年8月10日", "party_a": "无锡虚构置业有限公司",
+        "party_b": "日立电梯（中国）有限公司梧桐分公司", "our_date": "2024年6月18日",
+    })
+    for i, code in enumerate(["31103202202400000141", "31103202202400000142"], start=1):
+        _report(case, f"电梯监督检验报告{i}.pdf", {
+            "report_no": f"XG-DTJ-2024-94{i:02d}", "user": "无锡虚构置业有限公司",
+            "installer": "日立电梯（中国）有限公司梧桐分公司", "device_code": code,
+            "inspect_date": "2024年11月13日", "approve_date": "2024年11月20日",
+            "site": "无锡市梁溪区虚构路14号虚构园", "model": "HGP",
+        })
+
+
 if __name__ == "__main__":
     case_install_scanned()
     case_sales_arbitration()
@@ -797,4 +880,5 @@ if __name__ == "__main__":
     case_retention_not_due()
     case_integrated_contract()
     case_amount_reminders()
+    case_sealed_sign_date()
     print("已生成：", ", ".join(sorted(n for n in os.listdir(ROOT) if not n.startswith(("_", ".")) and os.path.isdir(os.path.join(ROOT, n)))))

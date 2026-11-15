@@ -1,0 +1,20 @@
+{
+  "title": "虚构遮挡案 N（签约日期被印章遮挡，确认单（七）第 7 题：扫描合同签署栏公共日期被甲方红色公章盖住，乙方（我方）盖章旁写 2024年6月18日 → 签署栏专用识别后取我方日期，标待核实）",
+  "as_of": "2025-06-01",
+  "fields": {
+    "plaintiff_name_final": "日立电梯（中国）有限公司梧桐分公司",
+    "defendant_name": "无锡虚构置业有限公司",
+    "contract_sign_date": {"value": "2024年6月18日", "review": "待核实"},
+    "total_amount": 100000,
+    "paid_amount": 40000,
+    "unpaid_amount": 60000,
+    "claim_amount": 60000,
+    "payable_ratio": "100%",
+    "debt_term": "剩余合同款",
+    "elevator_qty": 2,
+    "acceptance_latest_date": "2024年11月20日",
+    "payment_cite_location": {"value": "3.2", "match": "contains"},
+    "interest_term": "逾期付款利息",
+    "court_district": "无锡市梁溪区"
+  }
+}
