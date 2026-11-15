@@ -647,6 +647,22 @@ def apply_strategic_guards(fields: dict, files: list[dict]) -> None:
         }
 
 
+# 条款位置的取值里不该带文件名：模型有时写成「《某合同.pdf》第五条5.2」，拼进起诉状就成了
+# 「依据合同《某合同.pdf》第五条约定」（新案卷核对）。文件名只留在出处（src）里
+_FILE_IN_LOCATION_RE = re.compile(r"《[^》]*?\.(?:pdf|docx?|jpe?g|png)》\s*", re.I)
+
+
+def strip_filename_from_locations(fields: dict) -> None:
+    """各条款位置字段（*_location）的取值去掉《文件名.pdf》，出处原样保留。"""
+    for key, node in fields.items():
+        if not key.endswith("_location") or not isinstance(node, dict):
+            continue
+        value = node.get("value")
+        if isinstance(value, str) and _FILE_IN_LOCATION_RE.search(value):
+            cleaned = _FILE_IN_LOCATION_RE.sub("", value).strip()
+            node["value"] = cleaned or None
+
+
 def apply_rule_guards(fields: dict) -> None:
     """
     抽取后按律师规则把关（确定性代码，不依赖模型是否照做）：
@@ -670,6 +686,7 @@ def apply_rule_guards(fields: dict) -> None:
     if _RETENTION_RETURN_RE.search(clause) and not _CONTRACT_PRICE_RE.search(clause):
         for key in ("breach_clause_text", "breach_interest_rate_text", "breach_interest_clause_location"):
             fields[key] = {"value": None, "src": "按律师规则：该条款是逾期返还保修款 / 质保金的约定，不是逾期支付合同价款的违约条款"}
+    strip_filename_from_locations(fields)
     _guard_contract_no(fields)
     _guard_breach_clause(fields)
     # 合同当事人只能取自合同：曾把验收报告上的「施工单位」「使用单位」当成合同乙方 / 甲方（律师反馈）

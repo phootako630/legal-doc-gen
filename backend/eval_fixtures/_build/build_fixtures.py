@@ -866,6 +866,58 @@ def case_sealed_sign_date() -> None:
         })
 
 
+def case_payment_sections() -> None:
+    """付款节点（核对表 Q18 / Q22 / Q23）：一体化合同付款条款分「设备付款方式 / 安装付款方式」两段，本案诉安装款 →
+    只按安装段拆节点；安装段末期写成「留安装合同价的5%作为质保金」（先写比例后写名称）；欠款对上的第2项带
+    「该笔款支付最晚不超过安装完成之日起6个月」→ 照抄原文、引用写到「安装付款方式第2项」。审批表未付 70000 含
+    质保金 5000、as_of 在质保期内 → 只诉到期部分（应付到 95%，#138）。"""
+    case = "虚构付款节点案O"
+    os.makedirs(os.path.join(ROOT, case, "materials"), exist_ok=True)
+    _approval(case, "AH9000015常州虚构置业有限公司诉讼审批表.pdf", {
+        "serial": "SS2099-000151", "title": "AH9000015常州虚构置业有限公司虚构城项目",
+        "contract_no": "AH9000015", "branch_path": "集团/营销网络/梧桐分公司",
+        "buyer": "常州虚构置业有限公司", "contact": "虚构子", "contact_phone": "13800000015",
+        "buyer_address": "常州市天宁区虚构路15号", "site": "常州市天宁区虚构路15号虚构城",
+        "contract_type": "安装合同", "amount_label": "安装", "sign_date": "2024-02-20", "qty": "2", "qty_actual": "2",
+        "total": "100,000.00", "paid": "30,000.00", "unpaid": "70,000.00", "retention": "5,000.00元",
+        "gov_accept": "2024-09-26", "last_pay_date": "2024-03-01", "reason": "电梯已验收，买方未付验收款。",
+    })
+    _text_pdf(os.path.join(ROOT, case, "materials", "常州虚构城项目电梯设备及安装一体化合同.pdf"), [
+        """电梯设备及安装一体化合同
+
+合同编号：AH9000015
+买方：常州虚构置业有限公司
+卖方：日立电梯（中国）有限公司梧桐分公司
+
+第一条 工程概况
+工程地点：常州市天宁区虚构路15号虚构城。卖方负责供货并安装客梯2台。
+
+第二条 合同价款
+设备总价为人民币300,000元，安装总价为人民币100,000元。
+
+第三条 付款方式
+设备付款方式：1. 合同签订后买方支付设备总价的30%作为定金；2. 发货前买方付至设备总价的90%；3. 余款10%为质保金，质保期满后付清。
+安装付款方式：1. 安装进场后买方支付安装合同价的30%。2. 电梯经政府部门验收合格后30日内，买方付至安装合同价的95%，该笔款支付最晚不超过安装完成之日起6个月。3. 留安装合同价的5%作为质保金，质保期（自验收合格之日起24个月）满后无息付清。""",
+        """第四条 违约责任
+买方逾期付款的，应向卖方支付逾期付款利息。
+
+第五条 争议解决
+因本合同发生的争议，双方协商不成的，向工程所在地人民法院提起诉讼。
+
+（以下无正文）
+买方（盖章）：常州虚构置业有限公司
+卖方（盖章）：日立电梯（中国）有限公司梧桐分公司
+签订日期：2024年2月22日""",
+    ])
+    for i, code in enumerate(["31103204202400000151", "31103204202400000152"], start=1):
+        _report(case, f"电梯监督检验报告{i}.pdf", {
+            "report_no": f"XG-DTJ-2024-95{i:02d}", "user": "常州虚构置业有限公司",
+            "installer": "日立电梯（中国）有限公司梧桐分公司", "device_code": code,
+            "inspect_date": "2024年9月19日", "approve_date": "2024年9月26日",
+            "site": "常州市天宁区虚构路15号虚构城", "model": "HGP",
+        })
+
+
 if __name__ == "__main__":
     case_install_scanned()
     case_sales_arbitration()
@@ -880,4 +932,5 @@ if __name__ == "__main__":
     case_integrated_contract()
     case_amount_reminders()
     case_sealed_sign_date()
+    case_payment_sections()
     print("已生成：", ", ".join(sorted(n for n in os.listdir(ROOT) if not n.startswith(("_", ".")) and os.path.isdir(os.path.join(ROOT, n)))))

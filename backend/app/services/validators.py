@@ -13,7 +13,7 @@ import unicodedata
 from dataclasses import dataclass, field
 
 from app.services.doc_search import refers_to_strategic
-from app.services.payment_nodes import match_cumulative, parse_payment_stages
+from app.services.payment_nodes import case_payment_section, match_cumulative, parse_payment_stages
 
 # ── 结果模型 ──────────────────────────────────────────────────────────────────
 
@@ -420,7 +420,14 @@ def run_all_checks(fields: dict) -> list[ValidationCheck]:
             _field_value(fields, "total_amount"),
             _field_value(fields, "paid_amount"),
             _field_value(fields, "unpaid_amount"),
-            _field_value(fields, "payment_clause_text"),
+            # 一体化合同分设备 / 安装两段时只核对本案那段（核对表 Q18 / Q22）
+            case_payment_section(
+                _field_value(fields, "payment_clause_text"),
+                _field_value(fields, "contract_type"),
+                parse_amount(_field_value(fields, "total_amount")),
+                parse_amount(_field_value(fields, "contract_equipment_amount")),
+                parse_amount(_field_value(fields, "contract_install_amount")),
+            )[0],
         ),
         check_strategic_dispute(
             _field_value(fields, "dispute_clause_text"),

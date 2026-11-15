@@ -27,7 +27,13 @@ from app.services.branch_registry import lookup_plaintiff, resolve_plaintiff_nam
 from app.services.branch_table import normalize_name
 from app.services.doc_search import refers_to_strategic
 from app.services.extraction import RATE_MARK_RE, SELLER_RATE_DROPPED_NOTE
-from app.services.payment_nodes import PaymentStage, match_cumulative, owed_stages, parse_payment_stages
+from app.services.payment_nodes import (
+    PaymentStage,
+    case_payment_section,
+    match_cumulative,
+    owed_stages,
+    parse_payment_stages,
+)
 from app.services.validators import parse_amount, parse_date, parse_qty
 
 # 逾期付款利息的常规话术（诉状中"按照……计至实际付清之日止"）
@@ -2134,7 +2140,7 @@ PAYABLE_FROM_STAGES = "按律师规则：付款节点"
 def _payment_progress(fields: dict) -> tuple[list[PaymentStage], float, float] | None:
     """付款节点 + 已付比例 + 「已付 + 欠款」比例（%）；节点解析不出或金额缺失时返回 None。"""
     total, paid, unpaid = _amount_parts(fields)
-    stages = parse_payment_stages(_str_value(fields, "payment_clause_text"))
+    stages = parse_payment_stages(_case_payment(fields)[0])
     if not stages or not total or paid is None or unpaid is None:
         return None
     # 未到期的质保金不算本次到期的欠款（确认单（六）第 1 题，#138）：按到期部分匹配付款节点
@@ -2155,13 +2161,35 @@ def undue_retention(fields: dict) -> float | None:
     return retention if expiry and expiry > _today() else None
 
 
+def _case_payment(fields: dict) -> tuple[str | None, str | None]:
+    """本案对应的付款条款文字与段名（一体化合同分设备 / 安装两段时只取本案那段，核对表 Q18 / Q22）。"""
+    return case_payment_section(
+        _str_value(fields, "payment_clause_text"),
+        _str_value(fields, "contract_type"),
+        parse_amount(_node(fields, "total_amount").get("value")),
+        parse_amount(_node(fields, "contract_equipment_amount").get("value")),
+        parse_amount(_node(fields, "contract_install_amount").get("value")),
+    )
+
+
+# 条款位置末尾的附注括号（「第8条（付款方式）」「（OCR识别）」）去掉；「第六条第（二）款」这类编号括号保留
+_LOC_NOTE_RE = re.compile(r"\s*[（(](?![一二三四五六七八九十\d]{1,3}[）)])[^（()）]*[）)]\s*$")
+
+
 def _stage_label(fields: dict, no: str) -> str:
-    """节点编号 → 起诉状写法：多级编号写「第7.6条」；一级编号挂在条款位置后（「第二十八章第1项」）。"""
+    """
+    节点编号 → 起诉状写法：多级编号写「第7.6条」；一级编号挂在条款位置后（「第二十八章第1项」）；
+    一体化合同分段时带上段名（「第六条第（二）款安装付款方式第4项」，与设备段的同号节点区分）。
+    """
     if "." in no or "．" in no:
         return f"第{no}条"
     loc = _str_value(fields, "payment_clause_location") or ""
-    loc = re.sub(r"[（(].*$", "", loc).strip()
-    return f"{loc}第{no}项" if loc.startswith("第") else f"第{no}项"
+    while _LOC_NOTE_RE.search(loc):
+        loc = _LOC_NOTE_RE.sub("", loc)
+    loc = loc.strip()
+    part = _case_payment(fields)[1]
+    section = f"{part}付款方式" if part else ""
+    return f"{loc}{section}第{no}项" if loc.startswith("第") else f"{section}第{no}项"
 
 
 def payable_ratio_unmatched_note(fields: dict) -> str | None:

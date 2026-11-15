@@ -312,3 +312,56 @@ def test_unmatched_ratio_fallback_explains_why_and_flags_review():
     loc = apply_derived_fields(fields)["payment_cite_location"]
     assert loc["value"] == "第4.2条"
     assert "都对不上" in loc["src"] and "待核实" in loc["src"]
+
+
+def test_retention_ratio_written_before_name():
+    # 「留合同总价的5%作为质保金」先写比例、后写名称（核对表 Q23）：认作末期 5%，累计到 100%，
+    # 欠款对上 95% 节点时照抄原文，「该笔款支付最晚不超过产品出厂之日起6个月」这类期限不会被归纳掉
+    text = (
+        "6.1、甲方在合同签订后支付设备价款的5%作为定金，交货期40日前甲方向乙方付至电梯总价的80%作为提货款。"
+        "6.2、经技术监督部门验收合格后15日内，甲方应向乙方付至电梯总价的95%，该笔款支付最晚不超过产品出厂之日起6个月。"
+        "6.3、留合同总价的5%作为质保金，质保期满后无质量问题30天内无息付清。"
+    )
+    stages = parse_payment_stages(text)
+    assert [(s.no, s.end) for s in stages] == [("6.1", 80.0), ("6.2", 95.0), ("6.3", 100.0)]
+    assert "最晚不超过产品出厂之日起6个月" in match_cumulative(stages, 95).text
+
+
+def test_filename_stripped_from_clause_locations():
+    # 条款位置里混进文件名（新案卷核对：「依据合同《….pdf》第五条约定」）：取值去掉文件名，出处保留
+    from app.services.extraction import apply_rule_guards
+
+    fields = {
+        "payment_clause_location": {"value": "《AH9000099 设备 虚构项目（2020-8-27）(OCR).pdf》第五条5.2", "src": "《合同.pdf》第3页"},
+        "dispute_clause_location": {"value": "《虚构合同.PDF》第十七条第2款及第一条第1.3款", "src": "x"},
+        "breach_interest_clause_location": {"value": "第十四条第4款", "src": "x"},
+    }
+    apply_rule_guards(fields)
+    assert fields["payment_clause_location"] == {"value": "第五条5.2", "src": "《合同.pdf》第3页"}
+    assert fields["dispute_clause_location"]["value"] == "第十七条第2款及第一条第1.3款"
+    assert fields["breach_interest_clause_location"]["value"] == "第十四条第4款"
+
+
+def test_integrated_contract_cites_install_section_only():
+    # 一体化合同付款条款分设备 / 安装两段、本案诉安装款（审批表合同总额 = 安装款）：只按安装段拆节点、
+    # 引用写「第六条第（二）款安装付款方式第N项」（核对表 Q18 / Q22）
+    clause = (
+        "设备付款方式：1. 合同签订后支付设备价款的20%作为定金；2. 发货前支付设备总价的55%；"
+        "3. 验收合格后支付设备总价的10%；4. 结算完成后支付至结算总价的97%；5. 质保金：保修期满后支付至结算总价的100%。"
+        "安装付款方式：1. 安装进场后支付安装费用的20%。2. 安装完毕验收合格后支付安装合同价的50%。"
+        "3. 政府部门验收合格后支付安装合同价的15%。4. 办理移交并审计确认结算总价后，支付至安装工程结算价的97%。"
+        "5. 质保金：保修期满后支付至结算总价的100%。"
+    )
+    fields = {
+        "payment_clause_text": {"value": clause, "src": "《合同.pdf》第六条第（二）款"},
+        "payment_clause_location": {"value": "第六条第（二）款", "src": "《合同.pdf》"},
+        "contract_type": {"value": "安装合同", "src": "《审批表》"},
+        "total_amount": {"value": 100000, "src": "《审批表》"},
+        "paid_amount": {"value": 85000, "src": "《审批表》"},
+        "unpaid_amount": {"value": 12000, "src": "《审批表》"},
+        "contract_equipment_amount": {"value": 200000.0, "src": "《合同》"},
+        "contract_install_amount": {"value": 100000.0, "src": "《合同》"},
+    }
+    out = apply_derived_fields(fields)
+    assert out["payment_cite_location"]["value"] == "第六条第（二）款安装付款方式第4项"
+    assert out["payment_cite_text"]["value"] == "“办理移交并审计确认结算总价后，支付至安装工程结算价的97%”"
