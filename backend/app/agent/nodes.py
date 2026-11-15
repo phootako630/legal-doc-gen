@@ -783,8 +783,14 @@ def seal_date_override(fields: dict, data: dict, filename: str, page: int) -> di
         ymd = max(parsed)
         if ymd == old_ymd:
             return None
-        src = (f"{head}：双方日期均清楚，按律师规则取盖章页记载的最晚日期（{was}）"
-               "（OCR识别，请核实），待核实")
+        if len(dates) == 1:
+            # 签署栏只有一处写了日期（其余各方没写，不是看不清）：出处只说看到的（#172 复审）
+            src = (f"{head}：签署栏只有{dates[0][0]}处写了日期，其余未写日期（{was}）"
+                   "（OCR识别，请核实），待核实")
+        else:
+            who = "、".join(d[0] for d in dates)
+            src = (f"{head}：{who}日期均清楚，按律师规则取盖章页记载的最晚日期（{was}）"
+                   "（OCR识别，请核实），待核实")
     return {"value": f"{ymd[0]}年{ymd[1]}月{ymd[2]}日", "src": src, "page": page, "channel": "ocr"}
 
 
@@ -798,21 +804,20 @@ def _signature_target(fields: dict, files: list[dict]) -> tuple[dict, int] | Non
     """
     sign = fields.get("contract_sign_date")
     sign = sign if isinstance(sign, dict) else {}
-    if str(sign.get("src") or "").startswith("律师"):
+    src = str(sign.get("src") or "")
+    if src.startswith("律师"):
         return None
     scanned = [f for f in files if f.get("identified_type") == "合同" and f.get("is_scanned")]
-    if not _is_missing(fields, "contract_sign_date") and isinstance(sign.get("page"), int) and (
-        sign.get("channel") == "ocr" or "OCR" in str(sign.get("src") or "")
-    ):
-        source = sign.get("source_file")
-        for f in scanned:
-            if (source and f.get("filename") == source) or (
-                not source and f"《{f.get('filename')}》" in str(sign.get("src") or "")
-            ):
-                return f, sign["page"]
-        return None
-    if not _is_missing(fields, "contract_sign_date") and "审批表" not in str(sign.get("src") or ""):
-        return None  # 出自文字版合同：日期是文字层，不复核
+    source = sign.get("source_file")
+    types = {f.get("filename"): f.get("identified_type") for f in files}
+    # 暂取审批表日期（含扫描审批表 OCR 出来、也带页码与 OCR 通道的）：去合同签章页复核（#172 复审）
+    from_approval = types.get(source) == "审批表" if source else "审批表" in src
+    if not _is_missing(fields, "contract_sign_date") and not from_approval:
+        if isinstance(sign.get("page"), int) and (sign.get("channel") == "ocr" or "OCR" in src):
+            for f in scanned:
+                if (source and f.get("filename") == source) or (not source and f"《{f.get('filename')}》" in src):
+                    return f, sign["page"]
+        return None  # 出自文字版合同（文字层日期）或找不到对应的扫描合同：不复核
     for f in scanned:
         for pg in reversed(f.get("pages") or []):
             if isinstance(pg.get("page"), int) and _SIGNATURE_PAGE_RE.search(str(pg.get("text") or "")):

@@ -103,11 +103,26 @@ def test_skipped_when_not_from_scanned_page(monkeypatch):
         assert out == {} and ocr.await_count == 0
 
 
+def test_only_one_date_written_describes_what_was_seen(monkeypatch):
+    # 签署栏只有我方写了日期（甲方、公共日期都没写，不是看不清）：出处只说看到的，不称「双方日期均清楚」（#172 复审）
+    out, _ = _run(monkeypatch, _sig(shared=None, shared_legible=_MISSING))
+    node = out["extracted_fields"]["contract_sign_date"]
+    assert node["value"] == "2021年12月15日"
+    assert "只有供货方处写了日期" in node["src"] and "双方" not in node["src"] and "均清楚" not in node["src"]
+
+
 def test_missing_or_approval_date_reads_located_signature_page(monkeypatch):
-    # 普通 OCR 因遮挡没读出签约日期，或暂取审批表日期：从已识别的扫描签章页复核（#172 评审）
-    for sign in ({"value": None, "src": ""}, {"value": "2021-12-01", "src": "《审批表.pdf》签约时间"}):
+    # 普通 OCR 因遮挡没读出签约日期，或暂取审批表日期（含扫描审批表 OCR 出来、带页码与 OCR 通道的）：
+    # 从已识别的扫描签章页复核（#172 评审 / 复审）
+    for sign in (
+        {"value": None, "src": ""},
+        {"value": "2021-12-01", "src": "《审批表.pdf》签约时间"},
+        {"value": "2021-12-01", "src": "《审批表.pdf》第1页签约时间（OCR识别，请核实）", "page": 1,
+         "channel": "ocr", "source_file": "审批表.pdf"},
+    ):
         state = _state()
         state["extracted_fields"]["contract_sign_date"] = sign
+        state["files"].append({"filename": "审批表.pdf", "identified_type": "审批表", "is_scanned": True})
         state["files"][0]["pages"] = [
             {"page": 1, "text": "第一条 工程概况"},
             {"page": 3, "text": "签约方于 ____ 在 盖章前确认以上条款：\n甲方（盖章）：虚构置业有限公司"},
