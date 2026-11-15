@@ -134,8 +134,10 @@ def _case_contract_kind(files: list[dict]) -> str | None:
 
 
 # 「未付款总金额」：标签后可带「（元）」、冒号、币种符号；金额可带「万」（「6.44万元」）
+# 单位可写在表头（「未付款总金额（万元）：6.44」）或数字后（「6.44万元」），两处都参与换算
 _UNPAID_TOTAL_RE = re.compile(
-    r"未付款总金额(?:[（(](?:人民币)?(?:万?元)[）)])?[:：]?(?:¥|￥|RMB|人民币)?(\d[\d,，]*(?:\.\d+)?)(万)?"
+    r"未付款总金额(?:[（(](?:人民币)?(?P<head_wan>万)?元[）)])?[:：]?(?:¥|￥|RMB|人民币)?"
+    r"(?P<num>\d[\d,，]*(?:\.\d+)?)(?P<tail_wan>万)?"
 )
 
 
@@ -143,10 +145,10 @@ def _unpaid_total_in(text: str) -> float | None:
     m = _UNPAID_TOTAL_RE.search(re.sub(r"[\s|｜*]", "", text or ""))
     if not m:
         return None
-    amount = parse_amount(m.group(1))
+    amount = parse_amount(m.group("num"))
     if amount is None:
         return None
-    return round(amount * 10000, 2) if m.group(2) else amount
+    return round(amount * 10000, 2) if (m.group("head_wan") or m.group("tail_wan")) else amount
 
 
 def approval_unpaid_total(files: list[dict], unpaid_node: object = None) -> tuple[float, str] | None:

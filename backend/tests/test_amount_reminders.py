@@ -52,6 +52,8 @@ def test_contract_total_check_in_run_all_checks():
         "未付款总金额：¥64,400.00",
         "未付款总金额（元）：64,400.00",
         "未付款总金额6.44万元",
+        "| 未付款总金额（万元） | 6.44 |",  # 单位写在表头（#171 复审）
+        "未付款总金额(万元)：6.44",
     ],
 )
 def test_approval_unpaid_total_parsed(text):
