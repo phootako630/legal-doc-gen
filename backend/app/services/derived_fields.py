@@ -1568,14 +1568,15 @@ def _target_stage(fields: dict) -> tuple[str | None, str | None]:
     """
     stages = retention_stages(fields)
     payable = parse_percent(_str_value(fields, "payable_ratio"))
-    if stages and payable is not None and abs(payable - (100 - sum(stages))) < 1e-6:
-        return "", f"本次诉请不含质保金（支付至 {payable:g}%）"
-    if len(stages) <= 1:
-        return "届满", None
     if payable is None:
-        return None, "质保金分期返还，但支付至比例未定"
+        return None, "支付至比例未定，不知本次诉请含哪部分质保金"
+    if stages and abs(payable - (100 - sum(stages))) < 1e-6:
+        return "", f"本次诉请不含质保金（支付至 {payable:g}%）"
     if abs(payable - 100) < 1e-6:
         return "届满", None
+    if len(stages) <= 1:
+        # 一次性返还：支付至比例既不是全诉也不是不诉（#170 复审）
+        return None, f"支付至 {payable:g}% 与质保金比例对不上（既不是全部质保金，也不是不含质保金）"
     labels = _stage_period_labels(fields)
     base = 100 - sum(stages)
     for k in range(1, len(stages)):
@@ -1601,7 +1602,13 @@ def warranty_expiry_field(fields: dict) -> dict:
         return {"value": "", "src": "欠款不含质保金，不写质保期句"}
     location = _warranty_clause_location(fields)
     loc_text = location or _MISSING
-    basis = f"质保期条款：{_node(fields, 'warranty_period').get('src') or '出处未注明'}"
+    # 出处：质保期条款、质保金（分期）条款、验收日期，各自的文件与位置（#170 复审）
+    parts = [f"质保期条款：{_node(fields, 'warranty_period').get('src') or '出处未注明'}"]
+    if _str_value(fields, "retention_clause_text"):
+        parts.append(f"质保金条款：{_node(fields, 'retention_clause_text').get('src') or '出处未注明'}")
+    if _str_value(fields, "acceptance_latest_date"):
+        parts.append(f"验收日期：{_node(fields, 'acceptance_latest_date').get('src') or '出处未注明'}")
+    basis = "；".join(parts)
     if not location:
         basis += "；质保期条款位置未识别，请律师补写"
     state, why = _target_stage(fields)
@@ -1617,9 +1624,20 @@ def warranty_expiry_field(fields: dict) -> dict:
             "src": f"{note or '验收日期或质保期未识别'}，无法判断质保期是否{'届满' if state == '届满' else '已' + state}，"
             f"请律师核实后补写（{basis}）",
         }
-    due = expiry if state == "届满" else _add_months(date(*accepted), _stage_months(state) or 0)
-    if state != "届满" and not _stage_months(state):
-        return {"value": None, "src": f"质保金分期期限「{state}」无法换算，请律师补写（{basis}）"}
+    if state == "届满":
+        due = expiry
+        if len(retention_stages(fields)) > 1:
+            # 全诉分期质保金：末期返还可能晚于质保期（「质保期24个月，满3年返2%」），取两者较晚的（#170 复审）
+            labels = _stage_period_labels(fields)
+            last = _stage_months(labels[-1]) if len(labels) == len(retention_stages(fields)) else None
+            if not last:
+                return {"value": None, "src": f"质保金分期返还，末期返还期限读不出，无法判断是否已全部届满，请律师补写（{basis}）"}
+            due = max(due, _add_months(date(*accepted), last))
+    else:
+        months = _stage_months(state)
+        if not months:
+            return {"value": None, "src": f"质保金分期期限「{state}」无法换算，请律师补写（{basis}）"}
+        due = _add_months(date(*accepted), months)
     if due > _today():
         return {
             "value": "",
