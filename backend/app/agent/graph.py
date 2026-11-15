@@ -39,9 +39,9 @@ async def get_graph():
         # 按需 OCR：缺条款且有扫描合同时，逐页 OCR 定向补齐（命中即停）
         builder.add_node("ocr_augment", traced_node("ocr_augment", ocr_augment_node))
         # 扫描验收报告（手机拍照等）按需 OCR：取批准日期、安装地点、按设备代码数台数
+        builder.add_node("report_ocr", traced_node("report_ocr", report_ocr_node))
         # 签约日期出自扫描签署页：签署栏专用识别，日期被印章遮挡时取我方盖章处日期（确认单（七）第 7 题）
         builder.add_node("signature_ocr", traced_node("signature_ocr", signature_ocr_node))
-        builder.add_node("report_ocr", traced_node("report_ocr", report_ocr_node))
         # 台数核对：合同与验收报告台数不一致时补读合同设备清单数 VGE 家用电梯，仍对不上则暂停问律师
         builder.add_node("contract_scan", traced_node("contract_scan", contract_scan_node))
         builder.add_node("qty_check", traced_node("qty_check", qty_check_node))
@@ -54,9 +54,10 @@ async def get_graph():
         # 缺材料不终止：律师在上传页已选择「仍然分析」（#70）
         builder.add_edge("intake", "extract")
         builder.add_edge("extract", "ocr_augment")
-        builder.add_edge("ocr_augment", "signature_ocr")
-        builder.add_edge("signature_ocr", "report_ocr")
-        builder.add_edge("report_ocr", "contract_scan")
+        builder.add_edge("ocr_augment", "report_ocr")
+        # 签署栏复核排在验收报告 OCR 之后：不抢报告首页的页数（#172 评审）
+        builder.add_edge("report_ocr", "signature_ocr")
+        builder.add_edge("signature_ocr", "contract_scan")
         builder.add_edge("contract_scan", "qty_check")
         builder.add_edge("qty_check", "retention")
         builder.add_edge("retention", "validate")

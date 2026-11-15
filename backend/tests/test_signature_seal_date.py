@@ -26,14 +26,20 @@ def _state(sign_src=f"《{_FILE}》第2页签署栏（OCR识别，请核实）",
     }
 
 
+_MISSING = object()
+
+
 def _sig(shared="2021年10月18日", shared_legible=True, ours="2021-12-15", ours_legible=True, notes=""):
-    return json.dumps({
-        "parties": [
-            {"role": "购货方", "name": "虚构置业有限公司", "date": None, "date_legible": False},
-            {"role": "供货方", "name": "某电梯有限公司", "date": ours, "date_legible": ours_legible},
-        ],
-        "shared_date": shared, "shared_date_legible": shared_legible, "notes": notes,
-    }, ensure_ascii=False)
+    our_party = {"role": "供货方", "name": "某电梯有限公司", "date": ours}
+    if ours_legible is not _MISSING:
+        our_party["date_legible"] = ours_legible
+    data = {
+        "parties": [{"role": "购货方", "name": "虚构置业有限公司", "date": None, "date_legible": False}, our_party],
+        "shared_date": shared, "notes": notes,
+    }
+    if shared_legible is not _MISSING:
+        data["shared_date_legible"] = shared_legible
+    return json.dumps(data, ensure_ascii=False)
 
 
 def _run(monkeypatch, text, state=None):
@@ -46,29 +52,42 @@ def _run(monkeypatch, text, state=None):
 @pytest.mark.parametrize(
     "kw",
     [
-        {"notes": "左侧签约日期被红色印章覆盖，但字迹清晰可辨"},  # 说明里写了日期被印章覆盖（即使模型自评可读）
-        {"shared_legible": False},  # 公共日期看不清
+        {"shared_legible": False},  # 公共日期明确标看不清
+        {"shared_legible": _MISSING, "notes": "左侧签约日期被红色印章覆盖"},  # 没标可读性、说明写了日期被覆盖
     ],
 )
 def test_occluded_takes_our_seal_date(monkeypatch, kw):
     out, ocr = _run(monkeypatch, _sig(**kw))
     node = out["extracted_fields"]["contract_sign_date"]
     assert node["value"] == "2021年12月15日"
-    assert "我方" in node["src"] and "待核实" in node["src"] and "2021年10月15日" in node["src"]
+    assert "我方" in node["src"] and "遮挡" in node["src"] and "待核实" in node["src"]
+    assert "2021年10月15日" in node["src"]  # 原识别值
     assert node["page"] == 2 and out["ocr_pages_used"] == 1
     assert ocr.await_args.args[1] == 2  # 读的是签约日期所在的那一页
+
+
+def test_all_legible_takes_latest_even_if_notes_mention_seal(monkeypatch):
+    # 说明提到「被红章覆盖，但字迹清晰可辨」、各日期都明确标清楚：以清楚为准，按（六）第 4 题取最晚日期（#172 评审）
+    state = _state()
+    state["extracted_fields"]["contract_sign_date"]["value"] = "2022年1月1日"
+    out, _ = _run(monkeypatch, _sig(shared="2022-01-01", ours="2021-12-15", notes="签约日期被红章覆盖，但字迹清晰可辨"), state)
+    assert "extracted_fields" not in out  # 现值已是最晚的 2022-01-01，不改成我方较早日期
+    # 现值是普通 OCR 错读的日期：取签署栏里清楚的最晚日期
+    out, _ = _run(monkeypatch, _sig(shared="2021-10-18", ours="2021-12-15"))
+    node = out["extracted_fields"]["contract_sign_date"]
+    assert node["value"] == "2021年12月15日" and "最晚日期" in node["src"] and "待核实" in node["src"]
 
 
 @pytest.mark.parametrize(
     "kw",
     [
-        {},  # 双方日期都清楚：仍按确认单（六）第 4 题，不改
-        {"notes": "被印章覆盖", "ours_legible": False},  # 我方日期也看不清：不猜
-        {"notes": "被印章覆盖", "ours": "2021-1?-15"},
-        {"notes": "被印章覆盖", "ours": "2021-10-15"},  # 与现值相同
-        # 双方日期都清楚、只是没有公共日期（模型把 legible 填 false）：按（六）第 4 题取最晚日期，不改
-        {"shared": None, "shared_legible": False},
-        {"notes": "甲方名称位于红色印章下方"},  # 说的不是日期
+        {"shared_legible": False, "ours_legible": False},  # 我方日期也看不清：不猜
+        {"shared_legible": False, "ours_legible": _MISSING},  # 我方没标可读性：不当作清楚（#172 评审）
+        {"shared_legible": False, "ours": "2021-1?-15"},
+        {"shared_legible": False, "ours": "2021-10-15"},  # 与现值相同
+        {"shared_legible": _MISSING},  # 可读性说不清、说明也没提遮挡：不改
+        {"shared": None, "shared_legible": False, "ours": "2021-10-15"},  # 没有公共日期，不算遮挡
+        {"shared_legible": _MISSING, "notes": "甲方名称位于红色印章下方"},  # 说的不是日期
     ],
 )
 def test_no_override(monkeypatch, kw):
@@ -77,20 +96,47 @@ def test_no_override(monkeypatch, kw):
 
 
 def test_skipped_when_not_from_scanned_page(monkeypatch):
-    for state in (_state(sign_src="《审批表.pdf》签约时间"), _state(sign_src="律师填写")):
+    for state in (_state(sign_src="《合同.docx》第5条签署处"), _state(sign_src="律师填写")):
         state["extracted_fields"]["contract_sign_date"]["channel"] = "text"
-        out, ocr = _run(monkeypatch, _sig(notes="覆盖"), state)
+        state["extracted_fields"]["contract_sign_date"].pop("source_file")
+        out, ocr = _run(monkeypatch, _sig(shared_legible=False), state)
         assert out == {} and ocr.await_count == 0
-    out, ocr = _run(monkeypatch, _sig(notes="覆盖"), _state(used=10_000))  # 全案 OCR 页数已用完
-    assert out == {} and ocr.await_count == 0
 
 
-def test_ocr_failure_or_bad_json_keeps_value(monkeypatch):
-    out, _ = _run(monkeypatch, "识别不出")
-    assert "extracted_fields" not in out
-    monkeypatch.setattr(nodes_mod, "ocr_signature_page", AsyncMock(side_effect=RuntimeError("x")))
-    out = asyncio.run(nodes_mod.signature_ocr_node(_state()))
-    assert "extracted_fields" not in out and out["ocr_pages_used"] == 1
+def test_missing_or_approval_date_reads_located_signature_page(monkeypatch):
+    # 普通 OCR 因遮挡没读出签约日期，或暂取审批表日期：从已识别的扫描签章页复核（#172 评审）
+    for sign in ({"value": None, "src": ""}, {"value": "2021-12-01", "src": "《审批表.pdf》签约时间"}):
+        state = _state()
+        state["extracted_fields"]["contract_sign_date"] = sign
+        state["files"][0]["pages"] = [
+            {"page": 1, "text": "第一条 工程概况"},
+            {"page": 3, "text": "签约方于 ____ 在 盖章前确认以上条款：\n甲方（盖章）：虚构置业有限公司"},
+        ]
+        out, ocr = _run(monkeypatch, _sig(shared_legible=False), state)
+        assert ocr.await_args.args[1] == 3
+        node = out["extracted_fields"]["contract_sign_date"]
+        assert node["value"] == "2021年12月15日" and node["page"] == 3
+
+
+@pytest.mark.parametrize(
+    ("setup", "reason"),
+    [
+        ("budget", "扫描识别页数已达上限"),
+        ("raise", "识别失败"),
+        ("bad_json", "识别结果无法解析"),
+    ],
+)
+def test_unreviewed_is_visible_in_src(monkeypatch, setup, reason):
+    # 签署栏没复核成：保留原值，出处写明未复核及原因（#172 评审）
+    state = _state(used=10_000) if setup == "budget" else _state()
+    if setup == "raise":
+        monkeypatch.setattr(nodes_mod, "ocr_signature_page", AsyncMock(side_effect=RuntimeError("x")))
+        out = asyncio.run(nodes_mod.signature_ocr_node(state))
+    else:
+        out, _ = _run(monkeypatch, "识别不出" if setup == "bad_json" else _sig(), state)
+    node = out["extracted_fields"]["contract_sign_date"]
+    assert node["value"] == "2021年10月15日"
+    assert "签署栏未复核" in node["src"] and reason in node["src"] and "待核实" in node["src"]
 
 
 def test_signature_ocr_key_separate_from_page_ocr():
