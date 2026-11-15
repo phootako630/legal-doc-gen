@@ -1,0 +1,22 @@
+{
+  "title": "虚构提醒案 M（金额提醒，#171：合同安装总价 210000 ≠ 审批表合同总额 200000；审批表未付款总金额 130000 > 未付款金额 120000，只提醒、起诉金额仍按审批表）",
+  "as_of": "2025-06-01",
+  "reminders": ["contract_total_match", "unpaid_total_match"],
+  "fields": {
+    "plaintiff_name_final": "日立电梯（中国）有限公司梧桐分公司",
+    "defendant_name": "苏州虚构置业有限公司",
+    "contract_sign_date": "2024年4月10日",
+    "total_amount": 200000,
+    "paid_amount": 80000,
+    "unpaid_amount": 120000,
+    "contract_total_in_contract": 210000,
+    "claim_amount": 120000,
+    "payable_ratio": "100%",
+    "debt_term": "剩余合同款",
+    "elevator_qty": 2,
+    "acceptance_latest_date": "2024年10月18日",
+    "payment_cite_location": {"value": "3.3", "match": "contains"},
+    "interest_term": "逾期付款利息",
+    "court_district": "苏州市姑苏区"
+  }
+}

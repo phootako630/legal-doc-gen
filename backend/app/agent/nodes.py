@@ -311,10 +311,12 @@ def _all_checks(state: GraphState, fields: dict) -> list[ValidationCheck]:
     checks = run_all_checks(fields)
     # 审批表「未付款总金额」多于本次取的未付金额：只提醒（一体化合同审批表只列了买卖部分等）
     unpaid = fields.get("unpaid_amount")
+    found = approval_unpaid_total(state.get("files", []), unpaid)
     checks.append(
         check_unpaid_total(
-            approval_unpaid_total(state.get("files", [])),
+            found[0] if found else None,
             unpaid.get("value") if isinstance(unpaid, dict) else unpaid,
+            found[1] if found else "",
         )
     )
     checklist = state.get("checklist")

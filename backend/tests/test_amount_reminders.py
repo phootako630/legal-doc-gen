@@ -48,30 +48,48 @@ def test_contract_total_check_in_run_all_checks():
         "类型买卖合同 签约台数8 账龄-货款欠款- 未付款总金额 64,400.00 买卖合同总额1,048,000.00 未付金额52,400.00",
         "| 实际履行台数 | 8 | 未付款总金额 | 64,400.00 |",
         "**实际履行台数** 8 **未付款总金额** 64,400.00 |",
+        # 币种符号、单位标注、万元（#171 评审）
+        "未付款总金额：¥64,400.00",
+        "未付款总金额（元）：64,400.00",
+        "未付款总金额6.44万元",
     ],
 )
 def test_approval_unpaid_total_parsed(text):
     files = [{"filename": "审批表.pdf", "identified_type": "审批表", "text": text}]
-    assert approval_unpaid_total(files) == 64400.0
+    assert approval_unpaid_total(files) == (64400.0, "《审批表.pdf》「未付款总金额」")
 
 
-def test_approval_unpaid_total_from_ocr_pages():
+def test_approval_unpaid_total_from_ocr_pages_with_page():
     files = [{"filename": "审批表.pdf", "identified_type": "审批表", "text": "",
-              "pages": [{"page": 1, "text": "| 未付款总金额 | 1,000.00 |"}]}]
-    assert approval_unpaid_total(files) == 1000.0
+              "pages": [{"page": 3, "text": "| 未付款总金额 | 1,000.00 |"}]}]
+    assert approval_unpaid_total(files) == (1000.0, "《审批表.pdf》第3页「未付款总金额」")
     assert approval_unpaid_total([{"identified_type": "合同", "text": "未付款总金额 5"}]) is None
 
 
+def test_multiple_approvals_follow_unpaid_source():
+    # 多份审批表：按本案未付金额的出处选对应那份；对应不上不按上传顺序猜（#171 评审）
+    files = [
+        {"filename": "A.pdf", "identified_type": "审批表", "text": "未付款总金额 10,000.00"},
+        {"filename": "B.pdf", "identified_type": "审批表", "text": "未付款总金额 64,400.00"},
+    ]
+    assert approval_unpaid_total(files, {"value": 52400, "src": "《B.pdf》第1页"})[0] == 64400.0
+    assert approval_unpaid_total(files, {"value": 52400, "src": "x", "source_file": "B.pdf"})[0] == 64400.0
+    assert approval_unpaid_total(files, {"value": 52400, "src": "《审批表》"}) is None
+
+
 def test_unpaid_total_reminder():
-    c = check_unpaid_total(64400.0, "52400")
+    c = check_unpaid_total(64400.0, "52400", "《审批表.pdf》第3页「未付款总金额」")
     assert c.needs_review and not c.is_conflict
     assert "64,400" in c.message and "52,400" in c.message and "12,000" in c.message
+    assert "《审批表.pdf》第3页" in c.message  # 出处可追溯（#171 评审）
     assert not check_unpaid_total(52400.0, "52,400.00").needs_review
     assert not check_unpaid_total(None, "52400").needs_review
 
 
 def test_all_checks_reads_approval_text():
-    state = {"files": [{"identified_type": "审批表", "text": "未付款总金额64,400.00 未付金额52,400.00"}]}
+    state = {"files": [{"filename": "审批表.pdf", "identified_type": "审批表",
+                        "text": "未付款总金额64,400.00 未付金额52,400.00"}]}
     checks = nodes_mod._all_checks(state, _f(unpaid_amount=52400))
     check = next(c for c in checks if c.key == "unpaid_total_match")
     assert check.needs_review and check.related_fields == ["unpaid_amount"]
+    assert "《审批表.pdf》" in check.message

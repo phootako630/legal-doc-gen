@@ -157,6 +157,12 @@ async def _run(case_dir: str, cache: ReplayCache, result: dict[str, Any]) -> Non
         result["stuck"] = case.pending is not None  # 轮数用完仍在断点
         fields = case.extracted_fields
         result["readiness"] = case.readiness
+        # 提醒类校验（needs_review：橙色提醒、不算冲突）：expected.json 的 reminders 列出应出现的，
+        # 缺了基线门槛就失败（字段打分看不到提醒，#171 评审）
+        result["reminders"] = sorted(
+            {v.get("key") for v in case.validations or [] if isinstance(v, dict) and v.get("needs_review")}
+        )
+        result["missing_reminders"] = [k for k in expected.get("reminders") or [] if k not in result["reminders"]]
         result["fields"] = fields
         with _as_of(expected), _branch_table(case_dir):
             result["complaint"] = render_complaint(fields)

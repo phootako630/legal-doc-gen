@@ -370,7 +370,7 @@ def check_contract_total(
     )
 
 
-def check_unpaid_total(approval_unpaid_total: float | None, unpaid: object) -> ValidationCheck:
+def check_unpaid_total(approval_unpaid_total: float | None, unpaid: object, source: str = "") -> ValidationCheck:
     """
     审批表「未付款总金额」大于本次取的「未付金额」：可能还含另一部分欠款（一体化合同审批表只列了买卖
     部分、安装部分的欠款只在总额里），只提醒、不改起诉金额（律师确认前不定，确认单（八）第 2 题）。
@@ -383,7 +383,9 @@ def check_unpaid_total(approval_unpaid_total: float | None, unpaid: object) -> V
     return ValidationCheck(
         key,
         True,
-        f"审批表「未付款总金额」{_yuan(approval_unpaid_total)} 多于本次起诉的未付金额 {_yuan(amount)}"
+        f"审批表「未付款总金额」{_yuan(approval_unpaid_total)}"
+        + (f"（{source}）" if source else "")
+        + f" 多于本次起诉的未付金额 {_yuan(amount)}"
         f"（相差 {_yuan(approval_unpaid_total - amount)}），可能还含另一部分欠款（如一体化合同的安装部分）。"
         "起诉金额未改，请核实。",
         related,
