@@ -612,12 +612,75 @@ _BREACH_UNREAD_SRC = f"{OCR_BUDGET_HINT}，合同违约条款未读到，不能�
 
 
 # ── 逾期利息 / 违约金 ─────────────────────────────────────────────────────────
+# 合同按「同期（同档次）贷款利率」「贷款市场报价利率 / LPR」计付（确认单（七）第 1 题选 A）：
+# 不论条款叫违约金还是利息，诉请写「逾期付款利息」、利率统一写一年期 LPR、不引用违约条款。
+# 有上浮 / 倍数 / 另加比率的不能直接套 LPR（「按同期贷款利率的1.5倍」），交律师填写
+_LOAN_RATE_RE = re.compile(r"贷款(?:市场报价)?利率|贷款市场报价|LPR|同期同档次贷款|同期贷款")
+_LOAN_RATE_ADJUST_RE = re.compile(r"倍|上浮|上调|加收|加计|加成|[%％‰]|万分之|千分之|百分之")
+LOAN_RATE_PLAIN = "plain"
+LOAN_RATE_ADJUSTED = "adjusted"
+
+
+# 上限说法（「最高不超过合同总价10%」「违约金总额以拖延金额的2%为限」「封顶」）先去掉，再找加成：
+# 这些百分比限定的是违约金总额，不是贷款利率本身的加成。不靠标点切分（「按同期贷款利率，
+# 上浮30%」是同一个计算标准，#169 复审）
+_CAP_PHRASE_RE = re.compile(
+    r"(?:最高|最多|总额|累计)?(?:不得?超过|不应超过|不高于|最高为|最多为|上限为?|封顶)[^，。；;,）)】]*"
+    r"|以[^，。；;,）)】]{0,30}?为限"
+)
+
+
+def _loan_rate_hits(fields: dict) -> tuple[str | None, list[str]]:
+    """
+    抽出的利率原文与条款原文都看（摘录可能省掉了「的1.5倍」，#169 评审）：提到贷款利率时，
+    去掉上限说法后两处任一处还有上浮 / 倍数 / 比率 → LOAN_RATE_ADJUSTED（判断不了一律交律师，
+    不自动套 LPR）；都没有 → LOAN_RATE_PLAIN；没提到贷款利率 → None。
+    同时返回提到贷款利率的字段出处（文件 + 位置）。
+    """
+    texts = {
+        key: re.sub(r"\s+", "", _str_value(fields, key) or "")
+        for key in ("breach_interest_rate_text", "breach_clause_text")
+    }
+    mentioned = [key for key, text in texts.items() if _LOAN_RATE_RE.search(text)]
+    if not mentioned:
+        return None, []
+    srcs: list[str] = []
+    for key in mentioned:
+        src = str(_node(fields, key).get("src") or "").strip()
+        if src and src not in srcs:
+            srcs.append(src)
+    adjusted = any(_LOAN_RATE_ADJUST_RE.search(_CAP_PHRASE_RE.sub("", text)) for text in texts.values())
+    return (LOAN_RATE_ADJUSTED if adjusted else LOAN_RATE_PLAIN), srcs
+
+
+def loan_rate_reference(fields: dict) -> str | None:
+    """
+    甲方逾期付款条款按贷款利率计付时返回 LOAN_RATE_PLAIN（直接按贷款利率）或
+    LOAN_RATE_ADJUSTED（另有上浮 / 倍数 / 比率）；没有提到贷款利率返回 None。
+    """
+    return _loan_rate_hits(fields)[0]
+
+
+def _loan_rate_src(fields: dict) -> str:
+    """规则说明 + 实际采用的条款出处（出处可追溯）。"""
+    srcs = _loan_rate_hits(fields)[1]
+    return f"{_LOAN_RATE_SRC}（依据：{'；'.join(srcs)}）" if srcs else _LOAN_RATE_SRC
+
+
 def _breach_is_penalty(fields: dict) -> bool:
-    """合同的甲方逾期付款条款写的是「违约金」（而非利息）。"""
+    """
+    合同的甲方逾期付款条款写的是「违约金」（而非利息）。直接按贷款利率计的「违约金」实质是利息，
+    按逾期付款利息处理（确认单（七）第 1 题）。
+    """
+    if loan_rate_reference(fields) == LOAN_RATE_PLAIN:
+        return False
     text = (_str_value(fields, "breach_clause_text") or "") + (
         _str_value(fields, "breach_interest_rate_text") or ""
     )
     return "违约金" in text
+
+
+_LOAN_RATE_SRC = "合同约定按同期贷款利率计付，按律师规则（确认单（七）第 1 题）写逾期付款利息、按一年期 LPR 计算"
 
 
 def interest_term_field(fields: dict) -> dict:
@@ -627,6 +690,8 @@ def interest_term_field(fields: dict) -> dict:
     """
     if _breach_is_penalty(fields):
         return {"value": "违约金", "src": "合同甲方逾期付款条款约定为违约金"}
+    if loan_rate_reference(fields) == LOAN_RATE_PLAIN:
+        return {"value": "逾期付款利息", "src": _loan_rate_src(fields)}
     if unread_by_budget(fields, "breach_interest_rate_text", "breach_clause_text"):
         return {"value": None, "src": _BREACH_UNREAD_SRC}  # 没读到 ≠ 没约定，留给律师
     return {"value": "逾期付款利息", "src": "合同未约定甲方逾期付款违约金"}
@@ -637,6 +702,8 @@ def breach_clause_sentence_field(fields: dict) -> dict:
     约定违约金时在违约段落前引用违约条款：「依据合同第11.4条约定，……。」（第三轮第 4 题）。
     没有违约金约定时为空串：模板中这一句整句不出现，不算待补充。
     """
+    if loan_rate_reference(fields) == LOAN_RATE_PLAIN:
+        return {"value": "", "src": f"{_loan_rate_src(fields)}，不引用违约条款"}
     if not _breach_is_penalty(fields):
         return {"value": "", "src": "合同未约定违约金，不引用违约条款"}
     location = finest_clause_no(_str_value(fields, "breach_interest_clause_location")) or _MISSING
@@ -715,6 +782,7 @@ def is_lump_sum_penalty(fields: dict) -> bool:
     # 都不算一次性金额（见 interest_basis_field）
     return (
         _breach_is_penalty(fields)
+        and loan_rate_reference(fields) is None  # 按贷款利率（含加成）计的是按期计付，不是一次性金额
         and not _is_periodic(breach)
         and not _is_periodic(clause)
     )
@@ -726,6 +794,15 @@ def interest_basis_field(fields: dict) -> dict:
     违约金为固定金额 / 一次性比例时不按利率计算（诉请直接写金额，见 penalty_amount_field）。
     """
     breach = _str_value(fields, "breach_interest_rate_text")
+    loan = loan_rate_reference(fields)
+    if loan == LOAN_RATE_PLAIN:
+        return {"value": LPR_INTEREST_BASIS, "src": _loan_rate_src(fields), "channel": "text"}
+    if loan == LOAN_RATE_ADJUSTED:
+        # 「同期贷款利率的1.5倍」「上浮30%」：律师规则只说直接按贷款利率的写 LPR，加成的写法交律师
+        return {
+            "value": None,
+            "src": "合同约定按贷款利率加成（上浮 / 倍数 / 另加比率）计付，请律师按条款填写，不直接套用 LPR",
+        }
     if is_lump_sum_penalty(fields):
         return {
             "value": "不适用（违约金为固定金额或一次性比例，诉请直接写金额）",
