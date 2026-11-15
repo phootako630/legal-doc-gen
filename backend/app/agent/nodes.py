@@ -680,8 +680,8 @@ def _acceptance_from_approval(fields: dict) -> bool:
 
 
 # 每份扫描报告先读的页数：首页有设备品种 / 设备代码 / 报告编号 / 批准日期，个别报告的编号
-# 在第 2 页。各报告的前 2 页都读完了，才回头读其余页——多份报告一起上传时，预算不会被
-# 前几份报告的后页用完，后几份连首页都没读到、漏数台数。
+# 在第 2 页。先读完各份的第 1 页、再读各份的第 2 页，最后才回头读其余页——多份报告一起上传时，
+# 预算不会被前几份报告的后页用完，后几份连首页都没读到、漏数台数。
 REPORT_HEAD_PAGES = 2
 
 
@@ -713,10 +713,12 @@ async def report_ocr_node(state: GraphState) -> dict:
     budget_hit = False  # 因页数上限没读完（区别于 OCR 本身失败）
     ocr_reports: list[tuple[str, list[dict]]] = []
     ocr_files: list[dict] = []
-    # 先读每份报告的前几页（首页与批准日期页），预算还有再按文件顺序读其余页：逐份读到底时，
-    # 8 份 7 页的报告读到第 5 份就用完 30 页，后 3 份一页没读、台数少数（新案卷核对：8 台数成 6 台）
+    # 逐份读到底时，8 份 7 页的报告读到第 5 份就用完 30 页，后 3 份一页没读、台数少数
+    # （新案卷核对：8 台数成 6 台）；改为按轮次排页，见 REPORT_HEAD_PAGES
     pdfs: dict[int, bytes] = {}
-    head: list[tuple[int, int]] = []
+    # 第 1 轮：每份的第 1 页；第 2 轮：每份的第 2 页；之后才是其余页（报告份数超过预算一半时，
+    # 先保证每份的首页都读到，#168 评审）
+    rounds: list[list[tuple[int, int]]] = [[] for _ in range(REPORT_HEAD_PAGES)]
     rest: list[tuple[int, int]] = []
     for i, f in enumerate(scanned):
         pdf = file_store.get(f.get("file_id"))
@@ -725,10 +727,12 @@ async def report_ocr_node(state: GraphState) -> dict:
             continue
         pdfs[i] = pdf
         unread = _unread_pages(f, pdf)
-        head += [(i, n) for n in unread[:REPORT_HEAD_PAGES]]
+        for r, n in enumerate(unread[:REPORT_HEAD_PAGES]):
+            rounds[r].append((i, n))
         rest += [(i, n) for n in unread[REPORT_HEAD_PAGES:]]
-    planned = (head + rest)[: max(budget, 0)]
-    if len(planned) < len(head) + len(rest):
+    order = [p for pages in rounds for p in pages] + rest
+    planned = order[: max(budget, 0)]
+    if len(planned) < len(order):
         incomplete = budget_hit = True  # 预算不够读完全部报告页
     plan: dict[int, list[int]] = {}
     for i, n in planned:
@@ -986,8 +990,12 @@ async def qty_check_node(state: GraphState) -> dict:
     """
     合同台数与验收报告台数不一致、且差额不是 VGE 家用电梯时，暂停提醒律师核对
     （报告是否齐全 / 有无补充协议 / 是否口头取消部分电梯），由律师确定验收台数。
+    没有验收报告台数、只有审批表 / 合同台数时，也暂停请律师确认（不拿签约台数代替验收台数）。
     """
     fields = state.get("extracted_fields", {})
+    no_acceptance = _qty_without_acceptance_pending(fields, state.get("files", []))
+    if no_acceptance is not None:
+        return _ask_qty(fields, no_acceptance)
     mismatch = _qty_mismatch(fields)
     if mismatch is None:
         return {}
@@ -1009,22 +1017,67 @@ async def qty_check_node(state: GraphState) -> dict:
             else "另：合同中出现 VGE 型号（家用电梯，无需验收报告），台数请核对。"
         )
     lines.append("确认后，请选择起诉状「N 台电梯均于……验收合格」写几台。")
-    decisions = interrupt(
+    return _ask_qty(
+        fields,
         {
-            "pending": {
-                "kind": "confirm",
-                "question": "\n".join(lines),
-                "options": [str(acceptance), str(contract)],
-                "field_keys": ["elevator_qty"],
-            }
-        }
+            "kind": "confirm",
+            "question": "\n".join(lines),
+            "options": [str(acceptance), str(contract)],
+            "field_keys": ["elevator_qty"],
+        },
     )
+
+
+def _ask_qty(fields: dict, pending: dict) -> dict:
+    """暂停请律师定起诉状台数；律师没作答则不写（保持原值 / 【待补充】）。"""
+    decisions = interrupt({"pending": pending})
     answer = (decisions or {}).get("elevator_qty")
     if answer in (None, ""):
         return {}
     fields = copy.deepcopy(fields)
     fields["elevator_qty"] = {"value": answer, "src": "律师确认"}
     return {"extracted_fields": fields}
+
+
+def _qty_without_acceptance_pending(fields: dict, files: list[dict]) -> dict | None:
+    """
+    没有验收报告台数、起诉状台数也空着，但审批表 / 合同写了台数：暂停请律师确认验收合格的台数。
+    签约台数不能证明已验收（宁缺勿造），不自动写进「N 台电梯均于……验收合格」；问题里列出
+    各来源台数及原出处，并区分「没有验收报告」与「报告已上传但没数出台数」（保留原因）。
+    """
+    if not _is_missing(fields, "elevator_qty") or _lawyer_edited_qty(fields):
+        return None
+    if parse_qty(_str_value(fields, "elevator_qty_by_acceptance")) is not None:
+        return None
+    sources: list[tuple[int, str]] = []
+    for key, name in (("elevator_qty_by_approval", "审批表"), ("elevator_qty_by_contract", "合同")):
+        qty = parse_qty(_str_value(fields, key))
+        if qty is not None:
+            node = fields.get(key)
+            src = str(node.get("src") or "").strip() if isinstance(node, dict) else ""
+            sources.append((qty, f"{name}写 {qty} 台：{src or '出处未注明'}"))
+    if not sources:
+        return None
+    if any(f.get("identified_type") == "验收报告" for f in files):
+        node = fields.get("elevator_qty_by_acceptance")
+        why = str(node.get("src") or "").strip() if isinstance(node, dict) else ""
+        head = "已上传验收报告，但没有数出验收台数" + (f"（{why}）" if why else "") + "。"
+    else:
+        head = "材料中没有验收报告，验收合格的台数没有原件印证。"
+    lines = [head, *(text for _, text in sources)]
+    lines.append("请核对后选择起诉状「N 台电梯均于……验收合格」写几台；暂不确定可不选，该处留【待补充】。")
+    options = list(dict.fromkeys(str(q) for q, _ in sources))
+    return {
+        "kind": "confirm",
+        "question": "\n".join(lines),
+        "options": options,
+        "field_keys": ["elevator_qty"],
+    }
+
+
+def _lawyer_edited_qty(fields: dict) -> bool:
+    node = fields.get("elevator_qty")
+    return isinstance(node, dict) and str(node.get("src") or "").startswith("律师")
 
 
 async def retention_node(state: GraphState) -> dict:

@@ -190,3 +190,61 @@ def test_resume_does_not_repeat_ocr(monkeypatch):
     resumed = asyncio.run(run_resume(state.run_id, {"elevator_qty": "13"}))
     assert resumed.pending is None
     assert ocr.await_count == before
+
+
+# 没有验收报告台数（新案卷核对）：签约台数不能证明已验收，不自动写进「N 台均于……验收合格」，
+# 暂停请律师确认；问题里列出各来源台数及原出处，并区分「没有报告」与「报告没数出台数」
+def _no_acceptance(approval, contract):
+    extracted = _qty(contract, None)
+    extracted.pop("elevator_qty_by_acceptance")
+    extracted["elevator_qty_by_approval"] = {"value": approval, "src": "《审批表.pdf》签约台数"}
+    extracted["elevator_qty_by_contract"]["src"] = "《合同.pdf》第二条（OCR识别，请核实）"
+    return extracted
+
+
+def test_no_acceptance_report_pauses_with_sources(monkeypatch):
+    files = [{"filename": "合同.docx", "identified_type": "合同", "text": "无设备清单"}]
+    state = _run(monkeypatch, _no_acceptance(8, 8), files)
+    p = state.pending
+    assert p is not None and p.field_keys == ["elevator_qty"]
+    assert p.options == ["8"]  # 两个来源一致只给一个候选
+    assert "材料中没有验收报告" in p.question
+    assert "审批表写 8 台：《审批表.pdf》签约台数" in p.question
+    assert "合同写 8 台：《合同.pdf》第二条（OCR识别，请核实）" in p.question
+    assert not state.extracted_fields.get("elevator_qty", {}).get("value")  # 暂停前不自动填
+
+    resumed = asyncio.run(run_resume(state.run_id, {"elevator_qty": "8"}))
+    assert resumed.pending is None
+    assert resumed.extracted_fields["elevator_qty"] == {"value": "8", "src": "律师确认"}
+
+
+def test_no_acceptance_unanswered_stays_missing(monkeypatch):
+    files = [{"filename": "合同.docx", "identified_type": "合同", "text": "无设备清单"}]
+    state = _run(monkeypatch, _no_acceptance(8, 8), files)
+    resumed = asyncio.run(run_resume(state.run_id, {"elevator_qty": ""}))  # 律师没选、直接继续
+    assert not (resumed.extracted_fields.get("elevator_qty") or {}).get("value")  # 宁缺勿造：留【待补充】
+
+
+def test_uploaded_report_not_counted_keeps_reason():
+    fields = _no_acceptance(6, 8)
+    fields["elevator_qty_by_acceptance"] = {
+        "value": None,
+        "src": "扫描验收报告未识别（扫描识别页数已达上限，可能不全）",
+    }
+    files = [{"filename": "验收报告.pdf", "identified_type": "验收报告"}]
+    p = nodes_mod._qty_without_acceptance_pending(fields, files)
+    assert p is not None and p["options"] == ["6", "8"]
+    assert p["question"].startswith(
+        "已上传验收报告，但没有数出验收台数（扫描验收报告未识别（扫描识别页数已达上限，可能不全））"
+    )
+    assert "没有验收报告" not in p["question"]
+
+
+def test_no_acceptance_pause_skipped_when_not_needed():
+    base = _no_acceptance(8, 8)
+    assert nodes_mod._qty_without_acceptance_pending({**base, "elevator_qty": {"value": 8, "src": "《起诉材料》"}}, []) is None
+    assert nodes_mod._qty_without_acceptance_pending({**base, "elevator_qty": {"value": "8", "src": "律师确认"}}, []) is None
+    with_report = {**base, "elevator_qty_by_acceptance": {"value": 8, "src": "《验收报告》"}}
+    assert nodes_mod._qty_without_acceptance_pending(with_report, []) is None
+    bare = {k: v for k, v in base.items() if not k.startswith("elevator_qty")}
+    assert nodes_mod._qty_without_acceptance_pending(bare, []) is None  # 没有任何台数：不问，留【待补充】
