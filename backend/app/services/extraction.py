@@ -655,8 +655,8 @@ _FILE_IN_LOCATION_RE = re.compile(r"《[^》]*?\.(?:pdf|docx?|jpe?g|png)》\s*",
 def strip_filename_from_locations(fields: dict) -> None:
     """
     各条款位置字段（*_location）的取值去掉《文件名.pdf》，文件名移到出处：
-    - 只涉及一份文件：取值去掉文件名；出处没写文件时在开头补上「《文件名》」（来源锚定按它优先匹配），
-      出处写的是另一份文件时不改指向，只在末尾注明条款位置原写的文件；
+    - 只涉及一份文件：取值去掉文件名；出处没写文件时在开头补上「《文件名》」（来源锚定按它优先匹配）；
+    - 出处写的是另一份文件（来源冲突）：取值原样保留，不让冲突被当成已核实的条款位置；
     - 涉及多份文件（「《主合同.pdf》第五条及《战略协议.pdf》第八条」）：文件名区分了各条款属于哪份合同，
       去掉会丢掉跨合同的限定，取值原样保留，交律师改写（#173 评审）。
     """
@@ -672,14 +672,12 @@ def strip_filename_from_locations(fields: dict) -> None:
         cleaned = _FILE_IN_LOCATION_RE.sub("", value).strip()
         if not cleaned:
             continue
-        node["value"] = cleaned
         src = str(node.get("src") or "")
-        if names[0] in src:
+        if names[0] not in src and _FILE_IN_LOCATION_RE.search(src):
+            # 出处写的是另一份文件：来源有冲突，文件名是区分条款属于哪份文件的唯一依据，取值原样保留（#173 复审）
             continue
-        if _FILE_IN_LOCATION_RE.search(src):
-            # 出处已写了另一份文件：不改出处指向的文件，只记下条款位置原写的文件
-            node["src"] = f"{src}（条款位置原写{names[0]}）"
-        else:
+        node["value"] = cleaned
+        if names[0] not in src:
             node["src"] = f"{names[0]}{src}"
 
 

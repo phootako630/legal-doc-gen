@@ -332,14 +332,17 @@ def test_filename_stripped_from_clause_locations():
     from app.services.extraction import apply_rule_guards
 
     fields = {
-        "payment_clause_location": {"value": "《AH9000099 设备 虚构项目（2020-8-27）(OCR).pdf》第五条5.2", "src": "《合同.pdf》第3页"},
+        "payment_clause_location": {
+            "value": "《AH9000099 设备 虚构项目（2020-8-27）(OCR).pdf》第五条5.2",
+            "src": "《AH9000099 设备 虚构项目（2020-8-27）(OCR).pdf》第3页",
+        },
         "dispute_clause_location": {"value": "《虚构合同.PDF》第十七条第2款及第一条第1.3款", "src": "x"},
         "breach_interest_clause_location": {"value": "第十四条第4款", "src": "x"},
     }
     apply_rule_guards(fields)
     assert fields["payment_clause_location"] == {
         "value": "第五条5.2",
-        "src": "《合同.pdf》第3页（条款位置原写《AH9000099 设备 虚构项目（2020-8-27）(OCR).pdf》）",
+        "src": "《AH9000099 设备 虚构项目（2020-8-27）(OCR).pdf》第3页",
     }
     assert fields["dispute_clause_location"]["value"] == "第十七条第2款及第一条第1.3款"
     assert fields["breach_interest_clause_location"]["value"] == "第十四条第4款"
@@ -411,9 +414,9 @@ def test_equal_section_amounts_follow_contract_type():
     assert part == "设备" and text.startswith("1. 合同签订后支付设备价款")
     text, part = case_payment_section(_TWO_SECTION_CLAUSE, "安装合同", 100000, 100000, 100000)
     assert part == "安装" and text.startswith("1. 安装进场后")
-    # 合同类型也分不清（一体化）时不选段
+    # 合同类型也分不清（一体化）时不选段，也不拿全文去匹配付款节点（#173 复审）
     text, part = case_payment_section(_TWO_SECTION_CLAUSE, "买卖及安装合同", 100000, 100000, 100000)
-    assert part is None and text == _TWO_SECTION_CLAUSE
+    assert part is None and text is None
 
 
 def test_equal_section_amounts_undetermined_falls_back_with_note():
@@ -451,3 +454,38 @@ def test_multilevel_stage_label_carries_section_name():
     }
     out = apply_derived_fields(fields)
     assert out["payment_cite_location"]["value"] == "安装付款方式第6.2条、第6.3条"
+
+
+def test_filename_kept_when_src_names_another_file():
+    # 条款位置写《B》、出处写《A》：来源冲突，取值保留文件名，不当成已核实的条款位置（#173 复审）
+    from app.services.extraction import strip_filename_from_locations
+
+    fields = {"dispute_clause_location": {"value": "《B.pdf》第五条", "src": "《A.pdf》第五条"}}
+    strip_filename_from_locations(fields)
+    assert fields["dispute_clause_location"] == {"value": "《B.pdf》第五条", "src": "《A.pdf》第五条"}
+
+
+def test_undetermined_section_never_matches_whole_clause():
+    # 两段金额相等、合同类型分不清时，全文可能只解析出设备段（安装段只写金额），不能把设备段节点当本案引用；
+    # 付款引用与进度校验一致退回（#173 复审）
+    from app.services.validators import run_all_checks
+
+    clause = (
+        "设备付款方式：1. 合同签订后支付设备价款的30%；2. 验收合格后支付设备价款的70%。"
+        "安装付款方式：安装费人民币100000元，安装完成后付清。"
+    )
+    fields = {
+        "payment_clause_text": {"value": clause, "src": "《合同.pdf》第六条"},
+        "payment_clause_location": {"value": "第六条", "src": "《合同.pdf》"},
+        "contract_type": {"value": "一体化合同", "src": "《审批表》"},
+        "total_amount": {"value": 100000, "src": "《审批表》"},
+        "paid_amount": {"value": 30000, "src": "《审批表》"},
+        "unpaid_amount": {"value": 70000, "src": "《审批表》"},
+        "contract_equipment_amount": {"value": 100000.0, "src": "《合同》"},
+        "contract_install_amount": {"value": 100000.0, "src": "《合同》"},
+    }
+    out = apply_derived_fields(fields)
+    assert out["payment_cite_location"]["value"] == "第六条"
+    assert "判断不出本案诉哪一段" in out["payment_cite_location"]["src"]
+    progress = next(c for c in run_all_checks(out) if c.key == "payment_progress")
+    assert progress.applicable is False

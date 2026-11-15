@@ -178,7 +178,9 @@ def case_payment_section(
     install: float | None,
 ) -> tuple[str | None, str | None]:
     """
-    本案对应的付款段：(段落文字, 「设备」/「安装」)；不是两段式或判断不了本案诉哪部分时 (原文, None)。
+    本案对应的付款段：(段落文字, 「设备」/「安装」)；不是两段式时 (原文, None)。
+    分设备 / 安装两段却判断不出本案诉哪一段时返回 (None, None)：不拿全文去匹配付款节点（全文可能只解析出设备段，
+    把设备款节点当成本案引用），付款引用与进度校验一致退回（#173 复审）。
     本案诉哪部分：审批表合同总额等于合同的安装款 / 设备款；对不上时看合同类型（安装合同 / 买卖合同）。
     """
     sections = split_payment_sections(text)
@@ -204,7 +206,7 @@ def case_payment_section(
         part = "设备"
     if part and part in sections:
         return sections[part], part
-    return text, None
+    return None, None
 
 
 def parse_payment_stages(text: str | None) -> list[PaymentStage]:
