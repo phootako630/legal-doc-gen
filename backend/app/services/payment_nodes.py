@@ -184,14 +184,23 @@ def case_payment_section(
     sections = split_payment_sections(text)
     if not sections:
         return text, None
+    is_install = total is not None and install is not None and abs(total - install) <= 0.01
+    is_equipment = total is not None and equipment is not None and abs(total - equipment) <= 0.01
+    kind = contract_type or ""
     part = None
-    if total is not None and install is not None and abs(total - install) <= 0.01:
+    if is_install and not is_equipment:
         part = "安装"
-    elif total is not None and equipment is not None and abs(total - equipment) <= 0.01:
+    elif is_equipment and not is_install:
         part = "设备"
-    elif contract_type and "安装" in contract_type and "买卖" not in contract_type:
+    elif is_install and is_equipment:
+        # 设备款与安装款恰好相等：金额区分不了，只认单纯的安装合同 / 买卖合同；仍分不清时不选段，交律师核对（#173 评审）
+        if "安装" in kind and "买卖" not in kind:
+            part = "安装"
+        elif "买卖" in kind and "安装" not in kind:
+            part = "设备"
+    elif "安装" in kind and "买卖" not in kind:
         part = "安装"
-    elif contract_type and "买卖" in contract_type:
+    elif "买卖" in kind:
         part = "设备"
     if part and part in sections:
         return sections[part], part

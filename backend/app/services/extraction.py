@@ -653,14 +653,34 @@ _FILE_IN_LOCATION_RE = re.compile(r"《[^》]*?\.(?:pdf|docx?|jpe?g|png)》\s*",
 
 
 def strip_filename_from_locations(fields: dict) -> None:
-    """各条款位置字段（*_location）的取值去掉《文件名.pdf》，出处原样保留。"""
+    """
+    各条款位置字段（*_location）的取值去掉《文件名.pdf》，文件名移到出处：
+    - 只涉及一份文件：取值去掉文件名；出处没写文件时在开头补上「《文件名》」（来源锚定按它优先匹配），
+      出处写的是另一份文件时不改指向，只在末尾注明条款位置原写的文件；
+    - 涉及多份文件（「《主合同.pdf》第五条及《战略协议.pdf》第八条」）：文件名区分了各条款属于哪份合同，
+      去掉会丢掉跨合同的限定，取值原样保留，交律师改写（#173 评审）。
+    """
     for key, node in fields.items():
         if not key.endswith("_location") or not isinstance(node, dict):
             continue
         value = node.get("value")
-        if isinstance(value, str) and _FILE_IN_LOCATION_RE.search(value):
-            cleaned = _FILE_IN_LOCATION_RE.sub("", value).strip()
-            node["value"] = cleaned or None
+        if not isinstance(value, str):
+            continue
+        names = list(dict.fromkeys(m.group(0).strip() for m in _FILE_IN_LOCATION_RE.finditer(value)))
+        if len(names) != 1:
+            continue
+        cleaned = _FILE_IN_LOCATION_RE.sub("", value).strip()
+        if not cleaned:
+            continue
+        node["value"] = cleaned
+        src = str(node.get("src") or "")
+        if names[0] in src:
+            continue
+        if _FILE_IN_LOCATION_RE.search(src):
+            # 出处已写了另一份文件：不改出处指向的文件，只记下条款位置原写的文件
+            node["src"] = f"{src}（条款位置原写{names[0]}）"
+        else:
+            node["src"] = f"{names[0]}{src}"
 
 
 def apply_rule_guards(fields: dict) -> None:
