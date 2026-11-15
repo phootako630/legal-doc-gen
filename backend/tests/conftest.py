@@ -1,11 +1,12 @@
 # 测试隔离：checkpoint 库、上传目录与运行日志指向临时目录，并在每个测试后重置图缓存，
 # 避免测试写进真实的 backend/data，也避免测试间串状态。
 import asyncio
+from unittest.mock import AsyncMock
 
 import pytest
 
 from app import config
-from app.agent import checkpoint, runner
+from app.agent import checkpoint, nodes, runner
 from app.agent.graph import reset_graph
 from app.services import file_store, run_log
 from app.routers import client_errors
@@ -26,6 +27,9 @@ def isolated_case_storage(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DAILY_SUMMARY_ENABLED", False)
     guard.reset()
     client_errors.limiter.reset()
+    # 签署栏专用识别（签约日期被印章遮挡时用）默认不识别：不发外部请求，签约日期保持原值；
+    # 测这个功能的用例自行打桩（#171 之后，确认单（七）第 7 题）
+    monkeypatch.setattr(nodes, "ocr_signature_page", AsyncMock(return_value=""))
     yield
     # 进行中的分析任务属于测试自己的事件循环，跨测试复用会出错，清空
     runner._inflight.clear()

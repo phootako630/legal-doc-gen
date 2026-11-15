@@ -70,11 +70,11 @@ def record_llm(messages: list[dict], json_mode: bool, result: Any) -> None:
     _record("llm", key, text)
 
 
-def record_ocr(img_b64: str, text: str) -> None:
-    """一页 OCR 的识别文本；空串多半是接口异常，不录。"""
+def record_ocr(img_b64: str, text: str, prompt: str | None = None) -> None:
+    """一页 OCR 的识别文本（prompt 为专用提示词，默认识别全部文字时为 None）；空串多半是接口异常，不录。"""
     if not config.SNAPSHOT_ENABLED or not text:
         return
-    _record("ocr", ocr_key(img_b64), text)
+    _record("ocr", ocr_key(img_b64, prompt), text)
 
 
 # ── 导出时取回（#157 导出脚本用）─────────────────────────────────────────────

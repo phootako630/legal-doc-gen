@@ -8,6 +8,8 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import logging
+import re
 import statistics
 import time
 
@@ -21,6 +23,7 @@ from app.config import (
     AGENT_MAX_STRATEGIC_OCR_PAGES,
     AGENT_MAX_TOTAL_OCR_PAGES,
     OCR_MAX_CONCURRENCY,
+    PLAINTIFF_HQ_NAME,
     SCANNED_PAGE_TEXT_THRESHOLD,
 )
 from app.services import file_store, llm_progress, run_log
@@ -69,7 +72,7 @@ from app.services.derived_fields import (
 from app.services.error_category import OCR_RATE_LIMIT, OCR_TIMEOUT, categorize
 from app.services.llm_client import chat
 from app.services.materials import material_note, material_status
-from app.services.ocr_engine import ocr_page, pdf_page_count
+from app.services.ocr_engine import ocr_page, ocr_signature_page, pdf_page_count
 from app.services.prompt_loader import load_prompt
 from app.services.validators import (
     ValidationCheck,
@@ -80,6 +83,8 @@ from app.services.validators import (
     parse_qty,
     run_all_checks,
 )
+
+logger = logging.getLogger(__name__)
 
 # 三类条款字段（按需 OCR 的目标）：indicator 为“该条款是否已拿到”的判定字段
 _CLAUSE_INDICATOR = {
@@ -689,6 +694,120 @@ def _acceptance_from_approval(fields: dict) -> bool:
     node = fields.get("acceptance_latest_date")
     src = str(node.get("src") or "") if isinstance(node, dict) else ""
     return _is_missing(fields, "acceptance_latest_date") or "政府验收时间" in src
+
+
+# ── 签约日期被印章遮挡（确认单（七）第 7 题选 B）──────────────────────────────────
+# 普通 OCR 会把被公章盖住的日期读成一个确定的错日期、且漏掉我方盖章旁的手写日期；对签约日期所在的
+# 扫描签署页另做一次签署栏专用识别（prompts/ocr-signature.md），日期被遮挡 / 看不清时取我方盖章处日期
+_OCCLUDED_RE = re.compile(r"覆盖|遮挡|遮住|盖住|压住|看不清|模糊|不清|无法辨认|难以辨认|无法识别")
+_OUR_ROLE_RE = re.compile(r"乙方|供货方|供方|卖方|出卖人|承包方|承包人|分包方|分包人|承揽方|承揽人|安装方")
+
+
+def _parse_signature_json(text: str) -> dict | None:
+    m = re.search(r"\{.*\}", text or "", re.S)
+    if not m:
+        return None
+    try:
+        data = json.loads(m.group(0))
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _our_party(parties: list) -> dict | None:
+    """我方（原告）盖章处：称谓是乙方 / 供货方 / 承包方等，或单位名称是原告总公司及其分公司。"""
+    hq = PLAINTIFF_HQ_NAME.split("（")[0]
+    for p in parties:
+        if not isinstance(p, dict):
+            continue
+        if _OUR_ROLE_RE.search(str(p.get("role") or "")) or (hq and hq in str(p.get("name") or "")):
+            return p
+    return None
+
+
+def seal_date_override(fields: dict, data: dict, filename: str, page: int) -> dict | None:
+    """
+    签署栏识别结果 → 新的签约日期节点；不需要改时返回 None。只在签署栏有日期被遮挡 / 看不清、且我方
+    盖章处日期清楚可读、与现值不同时改，标待核实并写明原识别值；双方日期都清楚的仍按原规则（确认单（六）第 4 题）。
+    """
+    parties = data.get("parties") if isinstance(data.get("parties"), list) else []
+    ours = _our_party(parties)
+    if not ours or ours.get("date_legible") is False or not ours.get("date"):
+        return None
+    ymd = parse_date(ours.get("date"))
+    if ymd is None or "?" in str(ours.get("date")):
+        return None
+    # 没有公共日期（shared_date 为空）时模型也可能把 legible 填 false：只看确实写了日期的那几处
+    others_unclear = bool(data.get("shared_date")) and data.get("shared_date_legible") is False
+    others_unclear = others_unclear or any(
+        isinstance(p, dict) and p is not ours and p.get("date") and p.get("date_legible") is False for p in parties
+    )
+    notes = str(data.get("notes") or "")
+    # 说明里要说的是「日期」被遮挡（「甲方名称位于印章下方」不算）
+    if not (others_unclear or ("日期" in notes and _OCCLUDED_RE.search(notes))):
+        return None
+    value = f"{ymd[0]}年{ymd[1]}月{ymd[2]}日"
+    old = _str_value(fields, "contract_sign_date")
+    if parse_date(old) == ymd:
+        return None
+    role = str(ours.get("role") or "我方")
+    return {
+        "value": value,
+        "src": f"《{filename}》第{page}页{role}（我方）盖章处日期；签署栏日期被印章遮挡或看不清"
+        f"（原识别为「{old or '无'}」），按律师规则取我方盖章处日期（OCR识别，请核实），待核实",
+        "page": page,
+        "channel": "ocr",
+    }
+
+
+def _signature_target(fields: dict, files: list[dict]) -> tuple[dict, int] | None:
+    """签约日期出自扫描合同的某一页（OCR）、律师没改过时，返回 (合同文件, 页码)。"""
+    sign = fields.get("contract_sign_date")
+    if not isinstance(sign, dict) or _is_missing(fields, "contract_sign_date"):
+        return None
+    if str(sign.get("src") or "").startswith("律师") or not isinstance(sign.get("page"), int):
+        return None
+    if sign.get("channel") != "ocr" and "OCR" not in str(sign.get("src") or ""):
+        return None
+    source = sign.get("source_file")
+    for f in files:
+        if f.get("identified_type") != "合同" or not f.get("is_scanned"):
+            continue
+        if source and f.get("filename") != source:
+            continue
+        if not source and f"《{f.get('filename')}》" not in str(sign.get("src") or ""):
+            continue
+        return f, sign["page"]
+    return None
+
+
+async def signature_ocr_node(state: GraphState) -> dict:
+    """
+    签约日期来自扫描合同的签署页时，对那一页做一次签署栏专用识别（占全案 OCR 总页数 1 页）；
+    日期被印章遮挡 / 看不清时改取我方盖章处日期并标待核实（确认单（七）第 7 题选 B）。识别失败不影响流程。
+    """
+    fields = state.get("extracted_fields", {})
+    files = state.get("files", [])
+    target = _signature_target(fields, files)
+    used = state.get("ocr_pages_used") or 0
+    if target is None or _total_left(used) <= 0:
+        return {}
+    f, page = target
+    pdf = file_store.get(f.get("file_id")) if f.get("file_id") else None
+    if pdf is None:
+        return {}
+    try:
+        text = await ocr_signature_page(pdf, page)
+    except Exception as exc:  # noqa: BLE001 — 签署栏复核失败不影响主流程，签约日期保持原值
+        logger.warning("签署栏识别失败：%s", type(exc).__name__)
+        return {"ocr_pages_used": used + 1}
+    data = _parse_signature_json(text)
+    node = seal_date_override(fields, data, f.get("filename", "合同"), page) if data else None
+    if node is None:
+        return {"ocr_pages_used": used + 1}
+    fields = copy.deepcopy(fields)
+    fields["contract_sign_date"] = node
+    return {"extracted_fields": fields, "ocr_pages_used": used + 1}
 
 
 # 每份扫描报告先读的页数：首页有设备品种 / 设备代码 / 报告编号 / 批准日期，个别报告的编号
