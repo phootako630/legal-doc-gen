@@ -1552,52 +1552,85 @@ def _stage_period_labels(fields: dict) -> list[str]:
     return labels
 
 
-def warranty_expiry_field(fields: dict) -> dict:
+def _stage_months(label: str) -> int | None:
+    """「满一年」→ 12，「满6个月」→ 6。"""
+    m = re.fullmatch(r"满(.+?)(年|个月)", label)
+    if not m:
+        return None
+    n = int(m.group(1)) if m.group(1).isdigit() else _cn_int(m.group(1))
+    return None if not n else n * 12 if m.group(2) == "年" else n
+
+
+def _target_stage(fields: dict) -> tuple[str | None, str | None]:
     """
-    欠款含质保金时，在移交句后写「，根据合同第X条约定，案涉电梯质保期已经届满」（核对表 Q42 / Q43
-    律师说明；取代确认单（五）第 7 题「质保期已于X年X月X日到期」，不再推算到期日）：
-    - 质保金到期后一次性返还 →「已经届满」；
-    - 分期返还（满一年返还部分、满二年返还剩余）→ 按本次诉请的「支付至 X%」对应到哪一期：
-      全部质保金 →「已经届满」，只含前几期 →「已经满一年」等。
-    第 X 条为质保期条款（取自 warranty_period 的出处），标待核实。质保金尚未到期、本次只诉到期部分时不写；
-    支付至比例对不上任何一期时留【待补充】交律师。
+    本次诉请对应的质保期状态：一次性返还或诉全部质保金 →「届满」；分期返还只诉前几期 → 该期期限
+    （如「满一年」）；支付至比例扣掉了全部质保金（不诉质保金）→ 空串。返回 (状态, 说明)，对不上时状态为 None。
     """
-    if not _retention_in_debt(fields):
-        return {"value": "", "src": "欠款不含质保金，不写质保期句"}
-    if undue_retention(fields) is not None:
-        return {"value": "", "src": "质保金尚未到期，本次只诉到期部分，不写质保期句"}
-    location = _warranty_clause_location(fields)
-    loc_text = location or _MISSING
-    basis = f"质保期条款：{_node(fields, 'warranty_period').get('src') or '出处未注明'}"
-    if not location:
-        basis += "；质保期条款位置未识别，请律师补写"
     stages = retention_stages(fields)
-    if len(stages) <= 1:
-        return {
-            "value": f"，根据合同{loc_text}约定，案涉电梯质保期已经届满",
-            "src": f"按律师规则：质保金到期后一次性返还（{basis}），待核实",
-        }
     payable = parse_percent(_str_value(fields, "payable_ratio"))
-    labels = _stage_period_labels(fields)
+    if stages and payable is not None and abs(payable - (100 - sum(stages))) < 1e-6:
+        return "", f"本次诉请不含质保金（支付至 {payable:g}%）"
+    if len(stages) <= 1:
+        return "届满", None
     if payable is None:
-        return {"value": None, "src": f"质保金分期返还，但支付至比例未定，质保期句请律师补写（{basis}）"}
+        return None, "质保金分期返还，但支付至比例未定"
     if abs(payable - 100) < 1e-6:
-        return {
-            "value": f"，根据合同{loc_text}约定，案涉电梯质保期已经届满",
-            "src": f"按律师规则：质保金分期返还，本次诉请含全部质保金（支付至 100%）（{basis}），待核实",
-        }
+        return "届满", None
+    labels = _stage_period_labels(fields)
     base = 100 - sum(stages)
     for k in range(1, len(stages)):
         if abs(payable - (base + sum(stages[:k]))) < 1e-6:
             if len(labels) != len(stages):
                 break  # 各期期限读不全：写不出「满几年」，交律师
-            return {
-                "value": f"，根据合同{loc_text}约定，案涉电梯质保期已经{labels[k - 1]}",
-                "src": f"按律师规则：质保金分期返还，本次诉请支付至 {payable:g}%，对应第 {k} 期（{labels[k - 1]}）（{basis}），待核实",
-            }
+            return labels[k - 1], None
+    return None, f"质保金分期返还，支付至 {payable:g}% 对不上各期返还比例或期限"
+
+
+def warranty_expiry_field(fields: dict) -> dict:
+    """
+    欠款含质保金时，在移交句后写「，根据合同第X条约定，案涉电梯质保期已经届满」（核对表 Q42 / Q43
+    律师说明；取代确认单（五）第 7 题「质保期已于X年X月X日到期」，句中不写到期日）：
+    - 质保金到期后一次性返还 →「已经届满」；
+    - 分期返还（满一年返还部分、满二年返还剩余）→ 按本次诉请的「支付至 X%」对应到哪一期：
+      全部质保金 →「已经届满」，只含前几期 →「已经满一年」等。
+    写之前核对该期确已届满（最晚验收合格日 + 该期期限 / 质保期，不晚于今天）：未届满不写、提醒律师核对诉请；
+    验收日期、质保期或起算点读不出而无法判断的，留【待补充】交律师（宁缺勿造，#170 评审）。
+    第 X 条为质保期条款（取自 warranty_period 的出处），标待核实。
+    """
+    if not _retention_in_debt(fields):
+        return {"value": "", "src": "欠款不含质保金，不写质保期句"}
+    location = _warranty_clause_location(fields)
+    loc_text = location or _MISSING
+    basis = f"质保期条款：{_node(fields, 'warranty_period').get('src') or '出处未注明'}"
+    if not location:
+        basis += "；质保期条款位置未识别，请律师补写"
+    state, why = _target_stage(fields)
+    if state == "":
+        return {"value": "", "src": f"{why}，不写质保期句"}
+    if state is None:
+        return {"value": None, "src": f"{why}，质保期句请律师补写（{basis}）"}
+    expiry, note = _warranty_expiry(fields)
+    accepted = parse_date(_str_value(fields, "acceptance_latest_date"))
+    if expiry is None or not accepted:
+        return {
+            "value": None,
+            "src": f"{note or '验收日期或质保期未识别'}，无法判断质保期是否{'届满' if state == '届满' else '已' + state}，"
+            f"请律师核实后补写（{basis}）",
+        }
+    due = expiry if state == "届满" else _add_months(date(*accepted), _stage_months(state) or 0)
+    if state != "届满" and not _stage_months(state):
+        return {"value": None, "src": f"质保金分期期限「{state}」无法换算，请律师补写（{basis}）"}
+    if due > _today():
+        return {
+            "value": "",
+            "src": f"按最晚验收合格日推算，质保期到 {_cn_date(due)} 才{'届满' if state == '届满' else state}，"
+            f"不写质保期句，请律师核对诉请（{basis}）",
+        }
+    word = "届满" if state == "届满" else state
     return {
-        "value": None,
-        "src": f"质保金分期返还，支付至 {payable:g}% 对不上各期返还比例或期限，质保期句请律师补写（{basis}）",
+        "value": f"，根据合同{loc_text}约定，案涉电梯质保期已经{word}",
+        "src": f"按律师规则：本次诉请对应质保期{word}，按最晚验收合格日推算已于 {_cn_date(due)} {word}{note}"
+        f"（{basis}），待核实",
     }
 
 

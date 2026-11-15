@@ -146,7 +146,7 @@ def test_warranty_not_yet_expired_writes_nothing(monkeypatch):
     monkeypatch.setattr(derived_fields, "_today", lambda: date(2024, 6, 1))
     fields = _retention_fields(unpaid_amount="164,630.70元")
     node = apply_derived_fields(fields)["warranty_expiry_sentence"]
-    assert node["value"] == "" and "尚未到期" in node["src"]
+    assert node["value"] == "" and "才届满" in node["src"]
 
 
 def test_no_retention_in_debt_writes_nothing():
@@ -157,7 +157,6 @@ def test_no_retention_in_debt_writes_nothing():
 @pytest.mark.parametrize(
     ("src", "expected"),
     [
-        ("《合同》第7.8条（自交付使用之日起计算）", "第7.8条"),  # 起算点不影响：不再推算到期日
         # 条款号只写最细一级（确认单（五）第 13 题，finest_clause_no）
         ("《合同》第9.4款（自获得《电梯检验合格证》并正式移交甲方之日起算）", "第9.4条"),
         ("《买卖合同.pdf》第2条第（6）项", "第2条第（6）项"),
@@ -171,6 +170,25 @@ def test_warranty_sentence_clause_location(monkeypatch, src, expected):
     fields["warranty_period"] = {"value": "24个月", "src": src}
     node = apply_derived_fields(fields)["warranty_expiry_sentence"]
     assert node["value"] == f"，根据合同{expected}约定，案涉电梯质保期已经届满"
+
+
+@pytest.mark.parametrize(
+    ("drop", "src"),
+    [
+        ("acceptance_latest_date", None),  # 验收日期缺失
+        (None, "《合同》第7.8条（自交付使用之日起计算）"),  # 不自验收起算
+    ],
+)
+def test_warranty_sentence_undeterminable_left_to_lawyer(monkeypatch, drop, src):
+    # 推不出质保期是否届满：不能断言「已经届满」，留【待补充】（宁缺勿造，#170 评审）
+    monkeypatch.setattr(derived_fields, "_today", lambda: date(2026, 1, 1))
+    fields = _retention_fields()
+    if drop:
+        fields.pop(drop)
+    if src:
+        fields["warranty_period"] = {"value": "24个月", "src": src}
+    node = apply_derived_fields(fields)["warranty_expiry_sentence"]
+    assert node["value"] is None and "无法判断" in node["src"]
 
 
 def test_warranty_sentence_location_missing_left_blank(monkeypatch):
@@ -197,6 +215,7 @@ def test_stage_period_labels_with_words_between():
         ("98%", "，根据合同第13.1条约定，案涉电梯质保期已经满一年"),  # 只诉第一期质保金
         ("100%", "，根据合同第13.1条约定，案涉电梯质保期已经届满"),  # 两期都诉
         ("96%", None),  # 对不上任何一期：交律师
+        ("95%", ""),  # 不诉质保金：不写
     ],
 )
 def test_warranty_sentence_staged_return(monkeypatch, ratio, expected):
@@ -409,3 +428,19 @@ def test_handover_recipient_not_just_mention_of_property(handover, expected):
         _f(payment_clause_text="验收合格后支付全部价款", handover_clause_text=handover)
     )
     assert fields["handover_text"]["value"] == expected
+
+
+@pytest.mark.parametrize(
+    ("today", "expected"),
+    [
+        # 第一期（满一年）已到、末期（满二年）未到，律师只诉第一期：写「已经满一年」（#170 评审）
+        (date(2024, 6, 1), "，根据合同第13.1条约定，案涉电梯质保期已经满一年"),
+        (date(2023, 6, 1), ""),  # 第一期都还没到：不写，提醒律师核对诉请
+    ],
+)
+def test_warranty_sentence_staged_checks_that_stage(monkeypatch, today, expected):
+    monkeypatch.setattr(derived_fields, "_today", lambda: today)
+    fields = _retention_fields(retention_ratio="5%", retention_clause_text=_STAGED, unpaid_amount="164,630.70元")
+    fields["payable_ratio"] = {"value": "98%", "src": "律师确认"}
+    node = apply_derived_fields(fields)["warranty_expiry_sentence"]
+    assert node["value"] == expected
