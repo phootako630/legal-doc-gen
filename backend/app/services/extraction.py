@@ -133,6 +133,52 @@ def _case_contract_kind(files: list[dict]) -> str | None:
     return "买卖" if sale else "安装"
 
 
+# 「未付款总金额」：标签后可带「（元）」、冒号、币种符号；金额可带「万」（「6.44万元」）
+# 单位可写在表头（「未付款总金额（万元）：6.44」）或数字后（「6.44万元」），两处都参与换算
+_UNPAID_TOTAL_RE = re.compile(
+    r"未付款总金额(?:[（(](?:人民币)?(?P<head_wan>万)?元[）)])?[:：]?(?:¥|￥|RMB|人民币)?"
+    r"(?P<num>\d[\d,，]*(?:\.\d+)?)(?P<tail_wan>万)?"
+)
+
+
+def _unpaid_total_in(text: str) -> float | None:
+    m = _UNPAID_TOTAL_RE.search(re.sub(r"[\s|｜*]", "", text or ""))
+    if not m:
+        return None
+    amount = parse_amount(m.group("num"))
+    if amount is None:
+        return None
+    return round(amount * 10000, 2) if (m.group("head_wan") or m.group("tail_wan")) else amount
+
+
+def approval_unpaid_total(files: list[dict], unpaid_node: object = None) -> tuple[float, str] | None:
+    """
+    审批表「未付款总金额」（代码从原文读，不经模型）及出处（《文件》第N页）。文字版取各页 / text，
+    扫描版取 OCR 各页；表格线、加粗符号、空白去掉后匹配。多份审批表时按本案未付金额（unpaid_node）
+    出处里的文件名选对应那份；对应不上时不取（不按上传顺序猜，#171 评审）。
+    """
+    approvals = [f for f in files if f.get("identified_type") == "审批表"]
+    if len(approvals) > 1:
+        node = unpaid_node if isinstance(unpaid_node, dict) else {}
+        source, src = node.get("source_file"), str(node.get("src") or "")
+        approvals = [
+            f for f in approvals
+            if (source and f.get("filename") == source) or (not source and f"《{f.get('filename')}》" in src)
+        ]
+        if len(approvals) != 1:
+            return None
+    for f in approvals:
+        name = f.get("filename", "审批表")
+        for page in f.get("pages") or []:
+            amount = _unpaid_total_in(str(page.get("text") or ""))
+            if amount is not None:
+                return amount, f"《{name}》第{page.get('page')}页「未付款总金额」"
+        amount = _unpaid_total_in(f.get("text") or "")
+        if amount is not None:
+            return amount, f"《{name}》「未付款总金额」"
+    return None
+
+
 def apply_dual_contract_amounts(fields: dict, files: list[dict]) -> None:
     """
     审批表同时列了买卖、安装两份合同时，按本案合同取对应一栏的合同总额 / 已付 / 未付 / 未付质保金，

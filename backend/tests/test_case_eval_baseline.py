@@ -117,3 +117,12 @@ def test_new_judge_field_prompts_baseline_update():
     gate = baseline.compare(JBASE, [_case("甲", [_j("h", "一致"), _j("k", "不一致")])], "fx")
     assert not gate.failed
     assert gate.warnings == ["甲 / k：新交给裁判的字段（不一致），确认后用 --update-baseline 写入基线"]
+
+
+def test_missing_expected_reminder_fails():
+    # expected.json 的 reminders 里列了、这次没出现的提醒：字段打分看不到，门槛单独判失败（#171 评审）
+    ok = [_r("a", CORRECT, True), _r("b", MISSING), _r("c", WRONG, silent=True)]
+    case = _case("甲", ok) | {"missing_reminders": ["unpaid_total_match"]}
+    gate = baseline.compare(BASE, [case], "fx")
+    assert gate.failed and gate.regressions == ["甲：应出现的提醒没有出现：unpaid_total_match"]
+    assert not baseline.compare(BASE, [_case("甲", ok) | {"missing_reminders": []}], "fx").failed

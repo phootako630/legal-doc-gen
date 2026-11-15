@@ -97,6 +97,9 @@ def compare(baseline: dict[str, Any], cases: list[dict[str, Any]], root: str) ->
             else:
                 gate.errors.append(f"{name}：运行出错 {c['error']}")
             continue
+        if c.get("missing_reminders"):
+            # expected.json 的 reminders 里列了、这次没出现的提醒（字段打分看不到）
+            gate.regressions.append(f"{name}：应出现的提醒没有出现：{'、'.join(c['missing_reminders'])}")
         if name not in base:
             gate.errors.append(f"{name}：基线里没有这个案件，确认结论无误后用 --update-baseline 写入")
             continue

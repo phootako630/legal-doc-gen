@@ -72,7 +72,7 @@ def _approval(case: str, filename: str, v: dict) -> None:
         ("签约时间", v["sign_date"]),
         ("签约台数", v["qty"]),
         ("实际履行台数", v["qty_actual"]),
-        ("未付款总金额", v["unpaid"]),
+        ("未付款总金额", v.get("unpaid_total", v["unpaid"])),
         (f"{v['amount_label']}合同总额", v["total"]),
         ("已付款金额", v["paid"]),
         ("未付款金额", v["unpaid"]),
@@ -733,6 +733,57 @@ def case_integrated_contract() -> None:
         })
 
 
+def case_amount_reminders() -> None:
+    """金额提醒（#171）：合同写安装总价 210000、审批表合同总额 200000 → 提醒核对结算价（确认单（七）第 4 题）；
+    审批表「未付款总金额」130000 多于「未付款金额」120000 → 提醒可能另有欠款。只提醒，起诉金额仍按审批表。"""
+    case = "虚构提醒案M"
+    os.makedirs(os.path.join(ROOT, case, "materials"), exist_ok=True)
+    _approval(case, "AH9000013苏州虚构置业有限公司诉讼审批表.pdf", {
+        "serial": "SS2099-000131", "title": "AH9000013苏州虚构置业有限公司虚构苑项目",
+        "contract_no": "AH9000013", "branch_path": "集团/营销网络/梧桐分公司",
+        "buyer": "苏州虚构置业有限公司", "contact": "虚构辛", "contact_phone": "13800000013",
+        "buyer_address": "苏州市姑苏区虚构路13号", "site": "苏州市姑苏区虚构路13号虚构苑",
+        "contract_type": "安装合同", "amount_label": "安装", "sign_date": "2024-04-08", "qty": "2", "qty_actual": "2",
+        "total": "200,000.00", "paid": "80,000.00", "unpaid": "120,000.00", "unpaid_total": "130,000.00",
+        "gov_accept": "2024-10-18", "last_pay_date": "2024-05-01", "reason": "电梯已验收并移交，买方未支付验收款。",
+    })
+    _text_pdf(os.path.join(ROOT, case, "materials", "苏州虚构苑项目电梯安装合同.pdf"), [
+        """电梯安装合同
+
+合同编号：AH9000013
+甲方：苏州虚构置业有限公司
+乙方：日立电梯（中国）有限公司梧桐分公司
+
+第一条 工程概况
+工程地点：苏州市姑苏区虚构路13号虚构苑。乙方负责安装客梯2台。
+
+第二条 合同价款
+本合同安装总价为人民币210,000元（大写：贰拾壹万元整）。
+
+第三条 付款条件
+3.1 甲方须采用电汇方式向乙方付款。
+3.2 甲方在安装前7日向乙方支付合同总价的40%作为动工款。
+3.3 电梯经技术监督部门验收合格后15日内，甲方支付至合同总价的100%。""",
+        """第四条 违约责任
+甲方逾期付款的，应向乙方支付逾期付款利息。
+
+第五条 争议解决
+因本合同发生的争议，双方协商不成的，向工程所在地人民法院提起诉讼。
+
+（以下无正文）
+甲方（盖章）：苏州虚构置业有限公司
+乙方（盖章）：日立电梯（中国）有限公司梧桐分公司
+签订日期：2024年4月10日""",
+    ])
+    for i, code in enumerate(["31103203202400000131", "31103203202400000132"], start=1):
+        _report(case, f"电梯监督检验报告{i}.pdf", {
+            "report_no": f"XG-DTJ-2024-93{i:02d}", "user": "苏州虚构置业有限公司",
+            "installer": "日立电梯（中国）有限公司梧桐分公司", "device_code": code,
+            "inspect_date": "2024年10月11日", "approve_date": "2024年10月18日",
+            "site": "苏州市姑苏区虚构路13号虚构苑", "model": "HGP",
+        })
+
+
 if __name__ == "__main__":
     case_install_scanned()
     case_sales_arbitration()
@@ -745,4 +796,5 @@ if __name__ == "__main__":
     case_stop_after_first_batch()
     case_retention_not_due()
     case_integrated_contract()
+    case_amount_reminders()
     print("已生成：", ", ".join(sorted(n for n in os.listdir(ROOT) if not n.startswith(("_", ".")) and os.path.isdir(os.path.join(ROOT, n)))))

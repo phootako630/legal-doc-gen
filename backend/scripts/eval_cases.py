@@ -31,6 +31,7 @@ expected.json：
       "internet_allowed": true,                         选填：默认 false；它会写进提示词，线上案件按律师当时的选择
       "material_types": {"001.pdf": "审批表"},           选填：律师在上传页改过的材料类型
       "material_order": ["审批表.pdf", "001.pdf"],       选填：材料顺序（默认按文件名）；材料在提示词里按这个顺序排列
+      "reminders": ["unpaid_total_match"],               选填：应出现的提醒类校验（needs_review）的 key；缺了基线门槛失败
       "fields": {
         "total_amount": 1488996,                         数字 → 按金额比（到分）
         "contract_sign_date": "2020年7月30日",           完整日期 → 按日期比
