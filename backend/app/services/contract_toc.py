@@ -7,7 +7,7 @@
 #
 # 目录有两种写法：
 # - 页数：「| 1 | 本合同书 | 4 |」，表头写「页数」，数字是该部分有几页；各部分常另有一页分隔页（不计入
-#   页数），估算会逐段漂移，所以范围两侧各放宽 _MARGIN 页；
+#   页数），也可能没有：两种情况的范围都算进去（第 i 部分起点相差 i 页），两侧再各放宽 _MARGIN 页；
 # - 页码：「第十九条 争议的解决 …… 85」，数字是起始页；印刷页码与 PDF 页码之间差封面、目录等几页，
 #   范围终点再放宽目录所在页数。
 # 解析不出（没有目录、行数太少、页码倒退）时返回空，照原顺序读。纯函数、可单测。
@@ -20,6 +20,9 @@ from app.services.doc_search import is_toc_page
 
 _MARGIN = 3  # 按页数估算时，各部分范围两侧放宽的页数
 _MIN_ROWS = 2  # 目录至少解析出这么多行才用
+# 页码写法里标题直接写着目标条款的条目（「付款方式 …… 12」）只先读前几页：目录只列了少数条目时，
+# 到下一条目的距离可能有几十页，整段排在前面会把后面的争议条款挤出页数上限（#174 评审）
+_ENTRY_SPAN = 6
 
 # 与目标条款对应的目录标题关键词
 _TARGET_TITLE_RE: dict[str, re.Pattern[str]] = {
@@ -36,6 +39,10 @@ _CLAUSE_SECTION_RE = re.compile(
 _TABLE_ROW_RE = re.compile(r"^\s*\|(.+)\|\s*$")
 _LINE_ROW_RE = re.compile(r"^\s*(?P<title>.*?[一-鿿].*?)[\s.．…·_—\-]*(?<![/／\d])(?P<num>\d{1,3})\s*$")
 _NUM_CELL_RE = re.compile(r"^\d{1,3}$")
+# 页数写法的表头：只认表头行（「| 序号 | 文件内容 | 页数 |」「文件内容 页数」），页脚的「文件总页数：120」不算
+_COUNT_HEADER_RE = re.compile(
+    r"^\s*\|?[^|\d]*(?:\|[^|\d]*)*\|\s*页\s*数\s*\|?\s*$|^[^|\d]*?(?:内容|名称|文件)\s*页\s*数\s*$"
+)
 _SEQ_CELL_RE = re.compile(r"^(?:第?[\d一二三四五六七八九十]{1,3}[章节条部分]?|[\d.．]+)$")
 
 
@@ -58,7 +65,7 @@ def _parse_rows(text: str) -> list[TocRow]:
                 rows.append(TocRow(max(titles, key=len), int(cells[-1])))
             continue
         m = _LINE_ROW_RE.match(line)
-        if m and "目录" not in m.group("title"):
+        if m and not re.search(r"目录|页数|页码|共\s*\d*\s*页", m.group("title")):
             rows.append(TocRow(m.group("title").strip(), int(m.group("num"))))
     return rows
 
@@ -67,11 +74,13 @@ def _ranges(rows: list[TocRow], counts: bool, toc_page: int, page_total: int) ->
     """各目录行估算的 PDF 页码范围（含两端，已放宽）。"""
     out: list[tuple[TocRow, int, int]] = []
     if counts:
-        cursor = toc_page + 1
-        for row in rows:
-            start, end = cursor, cursor + row.num  # 分隔页 + 该部分 row.num 页
+        before = 0  # 前面各部分的页数合计
+        for i, row in enumerate(rows):
+            # 没有分隔页：起点 = 目录后 + 前面页数；每部分有一页分隔页：起点再往后 i 页，本部分也多一页
+            start = toc_page + 1 + before
+            end = start + i + row.num
             out.append((row, start - _MARGIN, end + _MARGIN))
-            cursor = end + 1
+            before += row.num
     else:
         for i, row in enumerate(rows):
             nxt = rows[i + 1].num if i + 1 < len(rows) else page_total
@@ -96,14 +105,16 @@ def toc_priority_pages(pages: list[dict], page_total: int, targets: set[str]) ->
     rows = _parse_rows(text)
     if len(rows) < _MIN_ROWS:
         return []
-    compact = re.sub(r"\s+", "", text)
-    counts = "页数" in compact and "页码" not in compact
+    counts = any(_COUNT_HEADER_RE.match(line) for line in text.splitlines())
     if not counts and any(b.num < a.num for a, b in zip(rows, rows[1:])):
         return []  # 页码倒退：多半没解析对
     ranges = _ranges(rows, counts, first[-1]["page"], page_total)
     patterns = [_TARGET_TITLE_RE[t] for t in sorted(targets) if t in _TARGET_TITLE_RE]
     direct = [rg for rg in ranges if any(p.search(rg[0].title) for p in patterns)]
     clause = [rg for rg in ranges if rg not in direct and _CLAUSE_SECTION_RE.search(rg[0].title)]
+    if not counts:
+        toc_page = first[-1]["page"]
+        direct = [(r, s, min(e, s + _ENTRY_SPAN - 1 + toc_page)) for r, s, e in direct]
     order: list[int] = []
     for _, start, end in direct + clause:
         order.extend(n for n in range(start, end + 1) if n not in order)

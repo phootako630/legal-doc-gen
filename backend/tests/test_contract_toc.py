@@ -128,3 +128,28 @@ def test_without_toc_reading_order_unchanged(monkeypatch):
     monkeypatch.setattr(nodes_mod, "chat", AsyncMock(return_value=_CLAUSES))
     asyncio.run(nodes_mod.ocr_augment_node(_state(60)))
     assert [c.args[1] for c in ocr.await_args_list] == list(range(1, 16))
+
+
+def test_footer_total_pages_does_not_switch_to_count_mode():
+    # 页码目录的页脚写「文件总页数：120」，不能因此当成页数目录；目录只列少数条目时，
+    # 付款条目只先读前几页，争议条目（第 85 页）仍排在页数上限内（#174 评审）
+    toc = "目录\n付款方式……12\n争议解决……85\n其他……86\n文件总页数：120"
+    order = toc_priority_pages(_pages(toc), 120, {"dispute", "payment"})
+    assert order[0] == 12
+    assert 85 in order and order.index(85) < 15
+
+
+def test_count_toc_without_divider_pages():
+    # 页数目录、各部分没有分隔页：8 个技术部分各 10 页后，争议部分从第 83 页开始，估算范围要覆盖到（#174 评审）
+    rows = "\n".join(f"| {i} | 技术部分{i} | 10 |" for i in range(1, 9))
+    toc = f"合同目录\n| 序号 | 文件内容 | 页数 |\n{rows}\n| 9 | 专用条件（争议解决） | 6 |"
+    order = toc_priority_pages(_pages(toc), 120, {"dispute"})
+    assert 83 in order and 88 in order  # 无分隔页时第 83–88 页；有分隔页时更靠后，也都在范围内
+    assert order[0] <= 83
+
+
+def test_count_header_only_from_header_row():
+    # 不带竖线的表头「序号 文件内容 页数」照样认作页数写法
+    toc = "合同目录\n序号 文件内容 页数\n1 合同协议书 3\n2 技术参数表 50\n3 专用条件 6"
+    order = toc_priority_pages(_pages(toc), 70, {"dispute"})
+    assert 56 in order and 62 in order and 30 not in order
