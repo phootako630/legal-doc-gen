@@ -1,0 +1,21 @@
+```json
+{
+    "parties": [
+        {
+            "role": "甲方",
+            "name": "南通虚构置业有限公司",
+            "date": null,
+            "date_legible": true
+        },
+        {
+            "role": "乙方",
+            "name": "日立电梯（中国）有限公司梧桐分公司",
+            "date": null,
+            "date_legible": true
+        }
+    ],
+    "shared_date": "2024年7月3日",
+    "shared_date_legible": true,
+    "notes": ""
+}
+```

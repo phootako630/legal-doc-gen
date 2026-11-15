@@ -127,12 +127,12 @@ class ReplayCache:
 
         return chat
 
-    def wrap_ocr(self, real: Callable[[str], str]) -> Callable[[str], str]:
-        def ocr(img_b64: str) -> str:
-            # 只记页面图片的哈希，不上传图片
+    def wrap_ocr(self, real: Callable[..., str]) -> Callable[..., str]:
+        def ocr(img_b64: str, prompt: str | None = None) -> str:
+            # 只记页面图片的哈希，不上传图片；专用提示词（签署栏识别）与同一页的普通识别分开记
             page = {"page_image_sha256": image_digest(img_b64)}
             with self.tracer.observe("OCR", "generation", model=config.QWEN_OCR_MODEL, input=page) as obs:
-                path = self._path("ocr", ocr_key(img_b64), "txt")
+                path = self._path("ocr", ocr_key(img_b64, prompt), "txt")
                 cached = self._read(path)
                 if cached is not None:
                     with self._lock:
@@ -143,7 +143,7 @@ class ReplayCache:
                     self._miss("OCR")
                 if not self.ocr_available:
                     raise RuntimeError("OCR 缓存里没有这一页，且未配置 DASHSCOPE_API_KEY")
-                text = real(img_b64)
+                text = real(img_b64) if prompt is None else real(img_b64, prompt)
                 with self._lock:
                     self.stats.ocr_calls += 1
                 obs.update(output=text, metadata={"cached": False})

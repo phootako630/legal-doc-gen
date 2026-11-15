@@ -143,8 +143,14 @@ def _post_with_fallback(payload: dict):
     raise RuntimeError("OCR 处理失败：没有可用的 DashScope key")  # 不会走到
 
 
-def _ocr_image_b64(img_b64: str) -> str:
-    """对单页 PNG（base64）调用 Qwen-VL-OCR，返回识别文本（异常/异常结构返回空串）。"""
+_DEFAULT_PROMPT = "请识别图中所有文字内容，保持原有格式输出。"
+
+
+def _ocr_image_b64(img_b64: str, prompt: str | None = None) -> str:
+    """
+    对单页 PNG（base64）调用 Qwen-VL-OCR，返回识别文本（异常/异常结构返回空串）。
+    prompt 为专用提示词（如签署栏识别）；None 时识别全部文字。
+    """
     payload = {
         "model": QWEN_OCR_MODEL,
         "input": {
@@ -153,7 +159,7 @@ def _ocr_image_b64(img_b64: str) -> str:
                     "role": "user",
                     "content": [
                         {"image": f"data:image/png;base64,{img_b64}"},
-                        {"text": "请识别图中所有文字内容，保持原有格式输出。"},
+                        {"text": prompt or _DEFAULT_PROMPT},
                     ],
                 }
             ]
@@ -175,7 +181,7 @@ def _ocr_image_b64(img_b64: str) -> str:
         keys = sorted(data) if isinstance(data, dict) else type(data).__name__
         logger.warning("OCR 返回结构异常，顶层字段：%s", keys)
         return ""
-    call_recorder.record_ocr(img_b64, text)  # 线上案件快照（#157），未开启时不录
+    call_recorder.record_ocr(img_b64, text, prompt)  # 线上案件快照（#157），未开启时不录
     return text
 
 
@@ -208,9 +214,10 @@ def _render_page_b64(pdf_bytes: bytes, page_num: int) -> str | None:
     return base64.b64encode(pix.tobytes("png")).decode()
 
 
-async def ocr_page(pdf_bytes: bytes, page_num: int) -> str:
+async def ocr_page(pdf_bytes: bytes, page_num: int, prompt: str | None = None) -> str:
     """
     对扫描件 PDF 的**指定页**（1 起）做 OCR，返回该页文本（按需 OCR，非整份）。
+    prompt 为专用提示词（如签署栏识别，见 ocr_signature_page）；None 时识别全部文字。
 
     Raises:
         RuntimeError: API Key 未配置，或 OCR 处理失败
@@ -234,7 +241,7 @@ async def ocr_page(pdf_bytes: bytes, page_num: int) -> str:
             return ""
         # 带上调用方的上下文（run_id / 节点名）：线程里切换 key 时记的事件才能归到本案件
         running = loop.run_in_executor(
-            _OCR_POOL, contextvars.copy_context().run, _ocr_image_b64, img_b64
+            _OCR_POOL, contextvars.copy_context().run, _ocr_with_prompt, img_b64, prompt
         )
         return await asyncio.wait_for(asyncio.shield(running), timeout=OCR_PAGE_TIMEOUT)
     except asyncio.TimeoutError as exc:
@@ -251,6 +258,18 @@ async def ocr_page(pdf_bytes: bytes, page_num: int) -> str:
         else:
             # 线程还在跑（超时或请求被取消）：等它真正结束再放出名额
             running.add_done_callback(lambda f: _release_after(f, slot))
+
+
+def _ocr_with_prompt(img_b64: str, prompt: str | None) -> str:
+    """默认提示词时按原签名调用 _ocr_image_b64（eval 回放缓存包装的是它的单参数形式）。"""
+    return _ocr_image_b64(img_b64) if prompt is None else _ocr_image_b64(img_b64, prompt)
+
+
+async def ocr_signature_page(pdf_bytes: bytes, page_num: int) -> str:
+    """合同签署页的签署栏专用识别（prompts/ocr-signature.md）：各方盖章处日期、被印章遮挡的情况，返回 JSON 文本。"""
+    from app.services.prompt_loader import load_prompt
+
+    return await ocr_page(pdf_bytes, page_num, load_prompt("ocr-signature.md"))
 
 
 def _release_after(fut: asyncio.Future, slot: asyncio.Semaphore) -> None:
