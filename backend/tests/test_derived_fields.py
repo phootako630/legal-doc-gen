@@ -5,6 +5,7 @@ from app.services.derived_fields import (
     LPR_INTEREST_BASIS,
     apply_derived_fields,
     derive_court_district,
+    is_lump_sum_penalty,
 )
 
 
@@ -666,3 +667,49 @@ def test_sign_place_jurisdiction(place, court, text):
     assert fields["court_district"]["value"] == court
     assert fields["jurisdiction_text"]["value"] == text
     assert "待核实" in fields["jurisdiction_text"]["src"] or court is None
+
+
+# 合同按同期贷款利率计付（确认单（七）第 1 题选 A）：不论叫违约金还是利息，写逾期付款利息、
+# 利率统一写一年期 LPR、不引用违约条款；有上浮 / 倍数的交律师。虚构条款
+_PENALTY_LOAN = "甲方延期支付任何一笔合同价款，均应按照金融机构公布的同期同档次贷款利率计算向乙方支付违约金。"
+
+
+@pytest.mark.parametrize(
+    ("rate", "clause"),
+    [
+        ("金融机构公布的同期同档次贷款利率的标准", _PENALTY_LOAN),  # 叫违约金，按贷款利率计
+        ("中国人民银行同期贷款利率", "甲方逾期付款的，按中国人民银行同期贷款利率支付利息。"),
+        (None, _PENALTY_LOAN),  # 利率没单独抽出来，看条款原文
+    ],
+)
+def test_loan_rate_clause_becomes_lpr_interest(rate, clause):
+    fields = apply_derived_fields(_f(breach_interest_rate_text=rate, breach_clause_text=clause))
+    assert fields["interest_term"]["value"] == "逾期付款利息"
+    assert fields["interest_rate_basis"]["value"] == LPR_INTEREST_BASIS
+    assert fields["breach_clause_sentence"]["value"] == ""  # 不引用违约条款
+    assert fields["penalty_cap"]["value"] == ""
+    assert "确认单（七）第 1 题" in fields["interest_rate_basis"]["src"]
+    assert not is_lump_sum_penalty(fields)  # 原来被当成一次性违约金
+
+
+@pytest.mark.parametrize(
+    "clause",
+    [
+        "甲方逾期付款的，按同期贷款利率的1.5倍向乙方支付违约金。",
+        "甲方逾期付款的，按银行同期贷款利率上浮30%向乙方支付违约金。",
+    ],
+)
+def test_adjusted_loan_rate_left_to_lawyer(clause):
+    fields = apply_derived_fields(_f(breach_interest_rate_text=None, breach_clause_text=clause))
+    assert fields["interest_term"]["value"] == "违约金"  # 加成的仍按条款原称谓
+    assert fields["interest_rate_basis"]["value"] is None  # 不直接套用 LPR
+    assert "不直接套用 LPR" in fields["interest_rate_basis"]["src"]
+    assert not is_lump_sum_penalty(fields)
+
+
+def test_non_loan_penalty_rate_unchanged():
+    fields = apply_derived_fields(
+        _f(breach_interest_rate_text="每日万分之五", breach_clause_text="甲方逾期付款的，每日按欠款的万分之五支付违约金。")
+    )
+    assert fields["interest_term"]["value"] == "违约金"
+    assert fields["interest_rate_basis"]["value"] == "每日万分之五"
