@@ -692,15 +692,29 @@ def test_loan_rate_clause_becomes_lpr_interest(rate, clause):
     assert not is_lump_sum_penalty(fields)  # 原来被当成一次性违约金
 
 
+def test_loan_rate_keeps_clause_source_and_ignores_separate_cap():
+    # 出处带上实际采用的条款位置（#169 评审）；「最高不超过合同总价的10%」是另一句的上限，不是利率加成
+    clause_src = "《安装合同》第8页第11.4条"
+    fields = apply_derived_fields(
+        {"breach_clause_text": {"value": "甲方逾期付款的，按同期贷款利率支付违约金，最高不超过合同总价的10%。", "src": clause_src}}
+    )
+    assert fields["interest_term"]["value"] == "逾期付款利息"
+    assert fields["interest_rate_basis"]["value"] == LPR_INTEREST_BASIS
+    for key in ("interest_term", "interest_rate_basis", "breach_clause_sentence"):
+        assert clause_src in fields[key]["src"]
+
+
 @pytest.mark.parametrize(
-    "clause",
+    ("rate", "clause"),
     [
-        "甲方逾期付款的，按同期贷款利率的1.5倍向乙方支付违约金。",
-        "甲方逾期付款的，按银行同期贷款利率上浮30%向乙方支付违约金。",
+        (None, "甲方逾期付款的，按同期贷款利率的1.5倍向乙方支付违约金。"),
+        (None, "甲方逾期付款的，按银行同期贷款利率上浮30%向乙方支付违约金。"),
+        # 利率摘录省掉了倍数、条款原文保留：仍按加成处理，不套 LPR（#169 评审）
+        ("同期贷款利率", "甲方逾期付款的，按同期贷款利率的1.5倍向乙方支付违约金。"),
     ],
 )
-def test_adjusted_loan_rate_left_to_lawyer(clause):
-    fields = apply_derived_fields(_f(breach_interest_rate_text=None, breach_clause_text=clause))
+def test_adjusted_loan_rate_left_to_lawyer(rate, clause):
+    fields = apply_derived_fields(_f(breach_interest_rate_text=rate, breach_clause_text=clause))
     assert fields["interest_term"]["value"] == "违约金"  # 加成的仍按条款原称谓
     assert fields["interest_rate_basis"]["value"] is None  # 不直接套用 LPR
     assert "不直接套用 LPR" in fields["interest_rate_basis"]["src"]
