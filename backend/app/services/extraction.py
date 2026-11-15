@@ -647,6 +647,40 @@ def apply_strategic_guards(fields: dict, files: list[dict]) -> None:
         }
 
 
+# 条款位置的取值里不该带文件名：模型有时写成「《某合同.pdf》第五条5.2」，拼进起诉状就成了
+# 「依据合同《某合同.pdf》第五条约定」（新案卷核对）。文件名只留在出处（src）里
+_FILE_IN_LOCATION_RE = re.compile(r"《[^》]*?\.(?:pdf|docx?|jpe?g|png)》\s*", re.I)
+
+
+def strip_filename_from_locations(fields: dict) -> None:
+    """
+    各条款位置字段（*_location）的取值去掉《文件名.pdf》，文件名移到出处：
+    - 只涉及一份文件：取值去掉文件名；出处没写文件时在开头补上「《文件名》」（来源锚定按它优先匹配）；
+    - 出处写的是另一份文件（来源冲突）：取值原样保留，不让冲突被当成已核实的条款位置；
+    - 涉及多份文件（「《主合同.pdf》第五条及《战略协议.pdf》第八条」）：文件名区分了各条款属于哪份合同，
+      去掉会丢掉跨合同的限定，取值原样保留，交律师改写（#173 评审）。
+    """
+    for key, node in fields.items():
+        if not key.endswith("_location") or not isinstance(node, dict):
+            continue
+        value = node.get("value")
+        if not isinstance(value, str):
+            continue
+        names = list(dict.fromkeys(m.group(0).strip() for m in _FILE_IN_LOCATION_RE.finditer(value)))
+        if len(names) != 1:
+            continue
+        cleaned = _FILE_IN_LOCATION_RE.sub("", value).strip()
+        if not cleaned:
+            continue
+        src = str(node.get("src") or "")
+        if names[0] not in src and _FILE_IN_LOCATION_RE.search(src):
+            # 出处写的是另一份文件：来源有冲突，文件名是区分条款属于哪份文件的唯一依据，取值原样保留（#173 复审）
+            continue
+        node["value"] = cleaned
+        if names[0] not in src:
+            node["src"] = f"{names[0]}{src}"
+
+
 def apply_rule_guards(fields: dict) -> None:
     """
     抽取后按律师规则把关（确定性代码，不依赖模型是否照做）：
@@ -670,6 +704,7 @@ def apply_rule_guards(fields: dict) -> None:
     if _RETENTION_RETURN_RE.search(clause) and not _CONTRACT_PRICE_RE.search(clause):
         for key in ("breach_clause_text", "breach_interest_rate_text", "breach_interest_clause_location"):
             fields[key] = {"value": None, "src": "按律师规则：该条款是逾期返还保修款 / 质保金的约定，不是逾期支付合同价款的违约条款"}
+    strip_filename_from_locations(fields)
     _guard_contract_no(fields)
     _guard_breach_clause(fields)
     # 合同当事人只能取自合同：曾把验收报告上的「施工单位」「使用单位」当成合同乙方 / 甲方（律师反馈）

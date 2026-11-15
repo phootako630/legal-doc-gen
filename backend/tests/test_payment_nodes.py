@@ -312,3 +312,180 @@ def test_unmatched_ratio_fallback_explains_why_and_flags_review():
     loc = apply_derived_fields(fields)["payment_cite_location"]
     assert loc["value"] == "第4.2条"
     assert "都对不上" in loc["src"] and "待核实" in loc["src"]
+
+
+def test_retention_ratio_written_before_name():
+    # 「留合同总价的5%作为质保金」先写比例、后写名称（核对表 Q23）：认作末期 5%，累计到 100%，
+    # 欠款对上 95% 节点时照抄原文，「该笔款支付最晚不超过产品出厂之日起6个月」这类期限不会被归纳掉
+    text = (
+        "6.1、甲方在合同签订后支付设备价款的5%作为定金，交货期40日前甲方向乙方付至电梯总价的80%作为提货款。"
+        "6.2、经技术监督部门验收合格后15日内，甲方应向乙方付至电梯总价的95%，该笔款支付最晚不超过产品出厂之日起6个月。"
+        "6.3、留合同总价的5%作为质保金，质保期满后无质量问题30天内无息付清。"
+    )
+    stages = parse_payment_stages(text)
+    assert [(s.no, s.end) for s in stages] == [("6.1", 80.0), ("6.2", 95.0), ("6.3", 100.0)]
+    assert "最晚不超过产品出厂之日起6个月" in match_cumulative(stages, 95).text
+
+
+def test_filename_stripped_from_clause_locations():
+    # 条款位置里混进文件名（新案卷核对：「依据合同《….pdf》第五条约定」）：取值去掉文件名，文件名记进出处
+    from app.services.extraction import apply_rule_guards
+
+    fields = {
+        "payment_clause_location": {
+            "value": "《AH9000099 设备 虚构项目（2020-8-27）(OCR).pdf》第五条5.2",
+            "src": "《AH9000099 设备 虚构项目（2020-8-27）(OCR).pdf》第3页",
+        },
+        "dispute_clause_location": {"value": "《虚构合同.PDF》第十七条第2款及第一条第1.3款", "src": "x"},
+        "breach_interest_clause_location": {"value": "第十四条第4款", "src": "x"},
+    }
+    apply_rule_guards(fields)
+    assert fields["payment_clause_location"] == {
+        "value": "第五条5.2",
+        "src": "《AH9000099 设备 虚构项目（2020-8-27）(OCR).pdf》第3页",
+    }
+    assert fields["dispute_clause_location"]["value"] == "第十七条第2款及第一条第1.3款"
+    assert fields["breach_interest_clause_location"]["value"] == "第十四条第4款"
+
+
+def test_integrated_contract_cites_install_section_only():
+    # 一体化合同付款条款分设备 / 安装两段、本案诉安装款（审批表合同总额 = 安装款）：只按安装段拆节点、
+    # 引用写「第六条第（二）款安装付款方式第N项」（核对表 Q18 / Q22）
+    clause = (
+        "设备付款方式：1. 合同签订后支付设备价款的20%作为定金；2. 发货前支付设备总价的55%；"
+        "3. 验收合格后支付设备总价的10%；4. 结算完成后支付至结算总价的97%；5. 质保金：保修期满后支付至结算总价的100%。"
+        "安装付款方式：1. 安装进场后支付安装费用的20%。2. 安装完毕验收合格后支付安装合同价的50%。"
+        "3. 政府部门验收合格后支付安装合同价的15%。4. 办理移交并审计确认结算总价后，支付至安装工程结算价的97%。"
+        "5. 质保金：保修期满后支付至结算总价的100%。"
+    )
+    fields = {
+        "payment_clause_text": {"value": clause, "src": "《合同.pdf》第六条第（二）款"},
+        "payment_clause_location": {"value": "第六条第（二）款", "src": "《合同.pdf》"},
+        "contract_type": {"value": "安装合同", "src": "《审批表》"},
+        "total_amount": {"value": 100000, "src": "《审批表》"},
+        "paid_amount": {"value": 85000, "src": "《审批表》"},
+        "unpaid_amount": {"value": 12000, "src": "《审批表》"},
+        "contract_equipment_amount": {"value": 200000.0, "src": "《合同》"},
+        "contract_install_amount": {"value": 100000.0, "src": "《合同》"},
+    }
+    out = apply_derived_fields(fields)
+    assert out["payment_cite_location"]["value"] == "第六条第（二）款安装付款方式第4项"
+    assert out["payment_cite_text"]["value"] == "“办理移交并审计确认结算总价后，支付至安装工程结算价的97%”"
+
+
+def test_filename_kept_when_location_spans_several_files():
+    # 条款位置涉及两份文件时，文件名区分各条款属于哪份合同：取值原样保留（#173 评审）
+    from app.services.extraction import strip_filename_from_locations
+
+    value = "《主合同.pdf》第五条及《战略协议.pdf》第八条"
+    fields = {"dispute_clause_location": {"value": value, "src": ""}}
+    strip_filename_from_locations(fields)
+    assert fields["dispute_clause_location"] == {"value": value, "src": ""}
+
+
+def test_filename_moved_into_src_when_missing():
+    # 只涉及一份文件：取值去掉文件名；出处没写这份文件时补到出处开头，来源锚定仍能优先匹配它（#173 评审）
+    from app.services.extraction import strip_filename_from_locations
+    from app.services.provenance import _src_filename
+
+    fields = {
+        "payment_clause_location": {"value": "《战略协议.pdf》第八条", "src": "第3页"},
+        "breach_interest_clause_location": {"value": "《主合同.pdf》第十条", "src": ""},
+        "dispute_clause_location": {"value": "《主合同.pdf》第五条", "src": "《主合同.pdf》第2页"},
+    }
+    strip_filename_from_locations(fields)
+    assert fields["payment_clause_location"] == {"value": "第八条", "src": "《战略协议.pdf》第3页"}
+    assert _src_filename(fields["payment_clause_location"]["src"]) == "战略协议.pdf"
+    assert fields["breach_interest_clause_location"] == {"value": "第十条", "src": "《主合同.pdf》"}
+    assert fields["dispute_clause_location"] == {"value": "第五条", "src": "《主合同.pdf》第2页"}
+
+
+_TWO_SECTION_CLAUSE = (
+    "设备付款方式：1. 合同签订后支付设备价款的30%；2. 发货前支付至设备总价的95%；3. 质保期满后支付至100%。"
+    "安装付款方式：1. 安装进场后支付安装费用的20%。2. 验收合格后支付至安装合同价的95%。3. 质保期满后支付至100%。"
+)
+
+
+def test_equal_section_amounts_follow_contract_type():
+    # 设备款与安装款恰好相等时金额区分不了：买卖合同取设备段、安装合同取安装段（#173 评审）
+    from app.services.payment_nodes import case_payment_section
+
+    text, part = case_payment_section(_TWO_SECTION_CLAUSE, "买卖合同", 100000, 100000, 100000)
+    assert part == "设备" and text.startswith("1. 合同签订后支付设备价款")
+    text, part = case_payment_section(_TWO_SECTION_CLAUSE, "安装合同", 100000, 100000, 100000)
+    assert part == "安装" and text.startswith("1. 安装进场后")
+    # 合同类型也分不清（一体化）时不选段，也不拿全文去匹配付款节点（#173 复审）
+    text, part = case_payment_section(_TWO_SECTION_CLAUSE, "买卖及安装合同", 100000, 100000, 100000)
+    assert part is None and text is None
+
+
+def test_equal_section_amounts_undetermined_falls_back_with_note():
+    # 两段金额相等、合同类型也分不清：引用退回条款位置，出处提示律师核对哪一段（#173 评审）
+    fields = {
+        "payment_clause_text": {"value": _TWO_SECTION_CLAUSE, "src": "《合同.pdf》第六条"},
+        "payment_clause_location": {"value": "第六条", "src": "《合同.pdf》"},
+        "contract_type": {"value": "买卖及安装合同", "src": "《审批表》"},
+        "total_amount": {"value": 100000, "src": "《审批表》"},
+        "paid_amount": {"value": 30000, "src": "《审批表》"},
+        "unpaid_amount": {"value": 65000, "src": "《审批表》"},
+        "contract_equipment_amount": {"value": 100000.0, "src": "《合同》"},
+        "contract_install_amount": {"value": 100000.0, "src": "《合同》"},
+    }
+    out = apply_derived_fields(fields)
+    assert out["payment_cite_location"]["value"] == "第六条"
+    assert "判断不出本案诉哪一段" in out["payment_cite_location"]["src"]
+
+
+def test_multilevel_stage_label_carries_section_name():
+    # 两段都用多级编号（6.1 / 6.2）时，引用也要带段名，与设备段的同号节点区分（#173 评审）
+    clause = (
+        "设备付款方式：6.1 合同签订后支付设备价款的30%；6.2 发货前支付至设备总价的95%；6.3 质保期满后支付至100%。"
+        "安装付款方式：6.1 安装进场后支付安装费用的20%。6.2 验收合格后支付至安装合同价的95%。6.3 质保期满后支付至100%。"
+    )
+    fields = {
+        "payment_clause_text": {"value": clause, "src": "《合同.pdf》第六条"},
+        "payment_clause_location": {"value": "第六条", "src": "《合同.pdf》"},
+        "contract_type": {"value": "安装合同", "src": "《审批表》"},
+        "total_amount": {"value": 100000, "src": "《审批表》"},
+        "paid_amount": {"value": 20000, "src": "《审批表》"},
+        "unpaid_amount": {"value": 80000, "src": "《审批表》"},
+        "contract_equipment_amount": {"value": 200000.0, "src": "《合同》"},
+        "contract_install_amount": {"value": 100000.0, "src": "《合同》"},
+    }
+    out = apply_derived_fields(fields)
+    assert out["payment_cite_location"]["value"] == "安装付款方式第6.2条、第6.3条"
+
+
+def test_filename_kept_when_src_names_another_file():
+    # 条款位置写《B》、出处写《A》：来源冲突，取值保留文件名，不当成已核实的条款位置（#173 复审）
+    from app.services.extraction import strip_filename_from_locations
+
+    fields = {"dispute_clause_location": {"value": "《B.pdf》第五条", "src": "《A.pdf》第五条"}}
+    strip_filename_from_locations(fields)
+    assert fields["dispute_clause_location"] == {"value": "《B.pdf》第五条", "src": "《A.pdf》第五条"}
+
+
+def test_undetermined_section_never_matches_whole_clause():
+    # 两段金额相等、合同类型分不清时，全文可能只解析出设备段（安装段只写金额），不能把设备段节点当本案引用；
+    # 付款引用与进度校验一致退回（#173 复审）
+    from app.services.validators import run_all_checks
+
+    clause = (
+        "设备付款方式：1. 合同签订后支付设备价款的30%；2. 验收合格后支付设备价款的70%。"
+        "安装付款方式：安装费人民币100000元，安装完成后付清。"
+    )
+    fields = {
+        "payment_clause_text": {"value": clause, "src": "《合同.pdf》第六条"},
+        "payment_clause_location": {"value": "第六条", "src": "《合同.pdf》"},
+        "contract_type": {"value": "一体化合同", "src": "《审批表》"},
+        "total_amount": {"value": 100000, "src": "《审批表》"},
+        "paid_amount": {"value": 30000, "src": "《审批表》"},
+        "unpaid_amount": {"value": 70000, "src": "《审批表》"},
+        "contract_equipment_amount": {"value": 100000.0, "src": "《合同》"},
+        "contract_install_amount": {"value": 100000.0, "src": "《合同》"},
+    }
+    out = apply_derived_fields(fields)
+    assert out["payment_cite_location"]["value"] == "第六条"
+    assert "判断不出本案诉哪一段" in out["payment_cite_location"]["src"]
+    progress = next(c for c in run_all_checks(out) if c.key == "payment_progress")
+    assert progress.applicable is False

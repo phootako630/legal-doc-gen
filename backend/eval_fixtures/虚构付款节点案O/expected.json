@@ -1,0 +1,33 @@
+{
+  "title": "虚构付款节点案 O（核对表 Q18 / Q22 / Q23：一体化合同付款条款分设备 / 安装两段，本案诉安装款 → 只按安装段拆节点；末期「留安装合同价的5%作为质保金」；欠款对上的第2项照抄原文，保留「最晚不超过安装完成之日起6个月」）",
+  "as_of": "2025-06-01",
+  "decisions": {
+    "payable_ratio": "95%"
+  },
+  "fields": {
+    "plaintiff_name_final": "日立电梯（中国）有限公司梧桐分公司",
+    "defendant_name": "常州虚构置业有限公司",
+    "contract_sign_date": "2024年2月22日",
+    "total_amount": 100000,
+    "paid_amount": 30000,
+    "unpaid_amount": 70000,
+    "payable_ratio": "95%",
+    "elevator_qty": 2,
+    "acceptance_latest_date": "2024年9月26日",
+    "payment_cite_location": {
+      "value": "安装付款方式第2项",
+      "match": "contains"
+    },
+    "payment_cite_text": {
+      "value": "该笔款支付最晚不超过安装完成之日起6个月",
+      "match": "contains"
+    },
+    "interest_term": "逾期付款利息",
+    "court_district": "常州市天宁区",
+    "retention_unpaid_amount": 5000,
+    "claim_amount": {
+      "value": 65000,
+      "review": "待核实"
+    }
+  }
+}

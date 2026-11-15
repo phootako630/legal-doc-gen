@@ -32,6 +32,10 @@ _CUMULATIVE_RE = re.compile(rf"(?:支付至|付至|支付到|累计支付|累计
 _STAGE_RE = re.compile(rf"(?:支付|付款|付)(?!至|到)[^%％，,；;。]{{0,30}}?{_PCT}")
 # 余款 / 质保金写法：「余款5%在质保期满后……支付」「质保金为合同总价的5%」
 _REMAINDER_RE = re.compile(rf"(?:余款|尾款|剩余款|质保金|保修金|保修款)[^%％，,；;。]{{0,12}}?{_PCT}")
+# 先写比例、后写名称：「留合同总价的5%作为质保金」「预留5%为保修金」
+_REMAINDER_BEFORE_RE = re.compile(
+    rf"(?:留|预留|扣留|保留|余)[^%％，,；;。]{{0,12}}?{_PCT}\s*(?:作为|为|作)\s*(?:质保金|保修金|保修款|尾款|余款)"
+)
 
 
 # 「第一期：」「第2期，」这类分期标记
@@ -76,7 +80,7 @@ def _ratio(piece: str) -> tuple[str, float] | None:
         return "cum", float(m.group(1))
     m = _STAGE_RE.search(piece)
     if not m:
-        m = _REMAINDER_RE.search(piece)
+        m = _REMAINDER_RE.search(piece) or _REMAINDER_BEFORE_RE.search(piece)
         # 「质保金：乙方向甲方开具合同总价5%的银行质保保函」：百分比修饰的是保函，不是支付价款；
         # 「余款5%在甲方收到银行质保保函后支付」里保函只是付款前提，照常计入（#54 评审）
         if m and _GUARANTEE_PCT_RE.match(piece, m.end()):
@@ -143,6 +147,66 @@ def _table_stages(text: str) -> list[PaymentStage]:
         stages.append(PaymentStage(no, body, running, cum))
         running = cum
     return stages if stages and abs(running - 100) <= _TOL else []
+
+
+# 一体化合同的付款条款常分「设备付款方式：……安装付款方式：……」两段（核对表 Q18 / Q22：本案诉安装款，
+# 只引用安装段的节点）
+_SECTION_RE = re.compile(r"(设备|安装)款?\s*(?:付款方式|付款条件|付款|款)\s*[：:]")
+
+
+def split_payment_sections(text: str | None) -> dict[str, str]:
+    """付款条款同时分「设备」「安装」两段时返回 {"设备": 段落, "安装": 段落}；不是两段式返回 {}。"""
+    if not text:
+        return {}
+    marks = [(m.start(), m.end(), m.group(1)) for m in _SECTION_RE.finditer(text)]
+    kinds = [k for _, _, k in marks]
+    if not ("设备" in kinds and "安装" in kinds):
+        return {}
+    sections: dict[str, str] = {}
+    for i, (_, end, kind) in enumerate(marks):
+        stop = marks[i + 1][0] if i + 1 < len(marks) else len(text)
+        if kind not in sections:  # 同一类只取第一段
+            sections[kind] = text[end:stop].strip()
+    return sections
+
+
+def case_payment_section(
+    text: str | None,
+    contract_type: str | None,
+    total: float | None,
+    equipment: float | None,
+    install: float | None,
+) -> tuple[str | None, str | None]:
+    """
+    本案对应的付款段：(段落文字, 「设备」/「安装」)；不是两段式时 (原文, None)。
+    分设备 / 安装两段却判断不出本案诉哪一段时返回 (None, None)：不拿全文去匹配付款节点（全文可能只解析出设备段，
+    把设备款节点当成本案引用），付款引用与进度校验一致退回（#173 复审）。
+    本案诉哪部分：审批表合同总额等于合同的安装款 / 设备款；对不上时看合同类型（安装合同 / 买卖合同）。
+    """
+    sections = split_payment_sections(text)
+    if not sections:
+        return text, None
+    is_install = total is not None and install is not None and abs(total - install) <= 0.01
+    is_equipment = total is not None and equipment is not None and abs(total - equipment) <= 0.01
+    kind = contract_type or ""
+    part = None
+    if is_install and not is_equipment:
+        part = "安装"
+    elif is_equipment and not is_install:
+        part = "设备"
+    elif is_install and is_equipment:
+        # 设备款与安装款恰好相等：金额区分不了，只认单纯的安装合同 / 买卖合同；仍分不清时不选段，交律师核对（#173 评审）
+        if "安装" in kind and "买卖" not in kind:
+            part = "安装"
+        elif "买卖" in kind and "安装" not in kind:
+            part = "设备"
+    elif "安装" in kind and "买卖" not in kind:
+        part = "安装"
+    elif "买卖" in kind:
+        part = "设备"
+    if part and part in sections:
+        return sections[part], part
+    return None, None
 
 
 def parse_payment_stages(text: str | None) -> list[PaymentStage]:
