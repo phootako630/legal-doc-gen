@@ -2,6 +2,8 @@
 import asyncio
 from unittest.mock import AsyncMock
 
+import pytest
+
 from app.agent import nodes as nodes_mod
 from app.services import file_store
 from app.services.acceptance_report import first_install_address, latest_approved_date
@@ -272,3 +274,48 @@ def test_copy_with_only_report_number_matches_either_order():
     partial = "报告编号：JS202506001"
     assert _qty([full], [partial]) == 1
     assert _qty([partial], [full]) == 1
+
+
+def test_report_ids_quoted_as_json_counted_once():
+    # OCR 有时把首页识别成 JSON：「"报告编号": "…"」。引号挡住编号就数不到，封面和第 2 页
+    # 会各算一份（新案卷核对：同一份报告数成两台）
+    cover = '{"设备品种": "曳引驱动乘客电梯", "报告编号": "TJ2024XU000001", "设备代码": "31104401002024000001"}'
+    second = "报告编号：TJ2024XU000001 设备代码：31104401002024000001"
+    assert _qty([cover, second]) == 1
+    f = _scanned_report(2)
+    f["pages"] = [{"page": i + 1, "text": _first(t)} for i, t in enumerate([cover, second])]
+    fields: dict = {}
+    nodes_mod._merge_acceptance_qty(fields, [f], [f], "")
+    assert "计数 1 份（另有 1 页与已计数的报告设备代码 / 报告编号相同" in fields["elevator_qty_by_acceptance"]["src"]
+    assert _qty(["“报告编号”：“TJ2024XU000001”"], ["报告编号：TJ2024XU000002"]) == 2
+
+
+@pytest.mark.parametrize(("reports", "must_read"), [(8, (1, 2)), (16, (1,))])
+def test_breadth_first_reads_every_report_head_before_rest(monkeypatch, reports, must_read):
+    # 7 页的扫描报告、预算 30 页：先读各份第 1 页、再读各份第 2 页，最后才是其余页。
+    # 8 份时每份前 2 页都读到；16 份（超过预算一半）时每份首页都读到（#168 评审）。
+    # 逐份读到底的话，8 份只能读到前 5 份
+    monkeypatch.setattr(nodes_mod, "AGENT_MAX_REPORT_OCR_PAGES", 30)
+    files = []
+    for k in range(reports):
+        f = _scanned_report(7)
+        f["filename"] = f"{k + 1}号梯报告.pdf"
+        f["file_id"] = file_store.put(f"%PDF-fake-report-{k}".encode())
+        files.append(f)
+    pdf_to_report = {file_store.get(f["file_id"]): k for k, f in enumerate(files)}
+    read: list[tuple[int, int]] = []
+
+    async def fake(pdf, n):
+        k = pdf_to_report[pdf]
+        read.append((k, n))
+        if n == 1:
+            return _report_page(f"{k:02d}", f"2022年12月{10 + k}日")
+        return f"检验项目及其内容 第{n}页"
+
+    monkeypatch.setattr(nodes_mod, "ocr_page", AsyncMock(side_effect=fake))
+    f = asyncio.run(nodes_mod.report_ocr_node({"extracted_fields": {}, "files": files}))["extracted_fields"]
+    assert len(read) == 30
+    assert {(k, n) for k in range(reports) for n in must_read} <= set(read)
+    assert f["elevator_qty_by_acceptance"]["value"] == reports
+    assert f["acceptance_latest_date"]["value"] == f"2022年12月{10 + reports - 1}日"
+    assert "可能不全" in f["elevator_qty_by_acceptance"]["src"]  # 其余页没读完，仍提示核实

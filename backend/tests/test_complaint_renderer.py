@@ -103,8 +103,9 @@ def test_render_ocr_source_marks_uncertain():
     assert "⚠️ 待核实：华龙电梯" in out
 
 
-def test_render_qty_conflict_marks_elevator_qty():
-    # 没有验收报告台数：审批表 6 台 vs 合同 5 台 → 冲突
+def test_render_qty_without_acceptance_not_filled():
+    # 没有验收报告台数（审批表 6 台 vs 合同 5 台）：签约台数不能证明已验收，不写进「N 台均于……验收合格」，
+    # 留【待补充】由 qty_check 断点请律师确认（#168 复审）
     out = render_complaint(
         _fields(
             elevator_qty_by_contract={"value": 5, "src": "《合同》"},
@@ -112,7 +113,7 @@ def test_render_qty_conflict_marks_elevator_qty():
         ),
         TEMPLATE,
     )
-    assert "【高亮冲突：6】台" in out
+    assert "台数【待补充】台" in out
 
 
 def test_render_qty_follows_acceptance_report():
@@ -209,6 +210,7 @@ _SAMPLE = {
     "contract_no": {"value": "AH0000001", "src": "《审批表》"},
     "elevator_qty": {"value": 14, "src": "《审批表》情况说明"},
     "elevator_qty_by_contract": {"value": 14, "src": "《合同》协议书"},
+    "elevator_qty_by_acceptance": {"value": 14, "src": "《验收报告》按设备代码计数"},
     "total_amount": {"value": 894934, "src": "《审批表》合同总额"},
     "paid_amount": {"value": 638667.2, "src": "《审批表》已付款"},
     "unpaid_amount": {"value": 256266.8, "src": "《审批表》未付款金额"},
