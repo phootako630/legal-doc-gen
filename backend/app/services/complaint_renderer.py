@@ -220,7 +220,7 @@ _OPTIONAL_KEYS = {
     "paid_note",
     "unpaid_note",
     "penalty_cap",
-    "warranty_expiry_sentence",  # 欠款含质保金且质保期已届满时才写（确认单（五）第 7 题）
+    "warranty_expiry_sentence",  # 欠款含质保金时写「根据合同第X条约定，案涉电梯质保期已经届满」（核对表 Q42 / Q43）
     "supplement_sentence",  # 有补充协议时才写（确认单（五）第 8 题）
     "contract_total_breakdown",  # 一体化合同括注设备款 + 安装款（确认单（六）第 6 题）
 }
