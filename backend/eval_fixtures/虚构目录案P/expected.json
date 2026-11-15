@@ -1,0 +1,36 @@
+{
+  "title": "虚构目录案 P（扫描合同 64 页，按第 2 页目录先读合同协议书与专用条件，读到附录里的仲裁机构）",
+  "decisions": {},
+  "fields": {
+    "defendant_name": {
+      "value": "盐城虚构置业有限公司",
+      "review": "待核实"
+    },
+    "contract_type": "安装合同",
+    "contract_sign_date": "2024年3月5日",
+    "total_amount": 100000,
+    "paid_amount": 30000,
+    "unpaid_amount": 70000,
+    "elevator_qty": 2,
+    "acceptance_latest_date": "2024年11月20日",
+    "payable_ratio": "100%",
+    "payment_cite_location": {
+      "value": "第6.2条",
+      "match": "contains"
+    },
+    "dispute_clause_location": {
+      "value": "19",
+      "match": "contains"
+    },
+    "document_kind": "仲裁申请书",
+    "arbitration_institution": {
+      "value": "上海国际经济贸易仲裁委员会",
+      "match": "contains"
+    },
+    "addressee": {
+      "value": "上海国际经济贸易仲裁委员会",
+      "match": "contains"
+    },
+    "interest_term": "逾期付款利息"
+  }
+}
