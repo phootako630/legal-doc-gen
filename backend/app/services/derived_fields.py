@@ -621,6 +621,8 @@ _BREACH_UNREAD_SRC = f"{OCR_BUDGET_HINT}，合同违约条款未读到，不能�
 # 规范等其余页没读完（agent/nodes.py 写入违约字段出处）：按合同未约定处理（逾期付款利息 + LPR），标待核实
 # （用户选定，2026-11-16）。没有目录可依的长合同仍按 OCR_BUDGET_HINT 留给律师
 TOC_CLAUSES_READ_NOTE = "按合同目录已读完条款部分（合同书 / 专用条件 / 通用条件等）"
+# 违约条款原文里的数字或金额（「每日支付100元」「每日壹佰元」）：写了计付标准，只是没抽成利率
+_CLAUSE_NUMBER_RE = re.compile(r"\d|[零一二两三四五六七八九十百千万壹贰叁肆伍陆柒捌玖拾佰仟]+\s*元")
 
 
 def _breach_toc_note(fields: dict) -> str:
@@ -857,9 +859,11 @@ def interest_basis_field(fields: dict) -> dict:
     ):
         # 抽出的利率出自乙方延迟交货、已去掉，而甲方逾期付款的句子另写了利率：不套用 LPR（#130 评审）
         return {"value": None, "src": "合同甲方逾期付款条款另有利率约定，但未识别出费率，请律师按条款原文填写，不套用 LPR"}
-    if RATE_MARK_RE.search(_str_value(fields, "breach_clause_text") or ""):
-        # 违约条款原文写了利率 / 比例，只是利率字段没抽出来：不是「未约定」，不套用 LPR（#175 评审）
-        return {"value": None, "src": "合同甲方逾期付款条款写有利率 / 比例，但未识别出费率，请律师按条款原文填写，不套用 LPR"}
+    clause = _str_value(fields, "breach_clause_text") or ""
+    if RATE_MARK_RE.search(clause) or _CLAUSE_NUMBER_RE.search(clause):
+        # 违约条款原文写了利率 / 比例 / 金额（「每日支付100元利息」），只是利率字段没抽出来：不是「未约定」，
+        # 不套用 LPR，交律师按原文填（#175 评审、复审）
+        return {"value": None, "src": "合同甲方逾期付款条款写有计付标准（利率 / 比例 / 金额），但未识别出费率，请律师按条款原文填写，不套用 LPR"}
     return {
         "value": LPR_INTEREST_BASIS,
         "src": f"常规话术（合同未约定甲方逾期付款利率）{_breach_toc_note(fields)}",

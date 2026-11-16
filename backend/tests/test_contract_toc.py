@@ -248,3 +248,37 @@ def test_breach_clause_with_rate_is_not_treated_as_not_agreed(monkeypatch):
     assert "已读完条款部分" not in str(f["breach_interest_rate_text"].get("src"))
     basis = interest_basis_field(f)
     assert basis["value"] != LPR_INTEREST_BASIS and basis["value"] is None
+
+
+def test_unfinished_strategic_contract_keeps_budget_hint(monkeypatch):
+    # 主合同按目录读完条款部分，但扫描的战略合同 20 页只读了前 10 页：战略合同也可能补出违约条款，不下「未约定」（#175 复审）
+    from app.services.derived_fields import OCR_BUDGET_HINT
+
+    fid = file_store.put(b"%PDF-strategic-bytes")
+    strategic = {"filename": "战略合作协议.pdf", "identified_type": "战略合同", "is_scanned": True, "text": "",
+                 "pages": [], "page_count": 20, "file_id": fid}
+    state = _budget_hit_state(230)
+    state["files"].append(strategic)
+    main_ocr = _long_contract_ocr()
+
+    async def fake(pdf, n):
+        # 战略合同没有目录，每页都是正文
+        return f"战略合作协议第{n}页" if pdf == b"%PDF-strategic-bytes" else await main_ocr(pdf, n)
+
+    monkeypatch.setattr(nodes_mod, "ocr_page", AsyncMock(side_effect=fake))
+    monkeypatch.setattr(nodes_mod, "chat", AsyncMock(return_value=_CLAUSES))
+    out = asyncio.run(nodes_mod.ocr_augment_node(state))
+    assert OCR_BUDGET_HINT in out["extracted_fields"]["breach_interest_rate_text"]["src"]
+
+
+def test_breach_clause_with_fixed_amount_does_not_get_lpr():
+    # 违约条款原文写「每日支付100元利息」、利率字段空着且带页数上限提示：不套 LPR，交律师（#175 复审）
+    from app.services.derived_fields import LPR_INTEREST_BASIS, OCR_BUDGET_HINT, interest_basis_field
+
+    for clause in ("甲方逾期付款的，每日支付100元利息", "甲方逾期付款的，每日支付壹佰元利息"):
+        f = {
+            "breach_clause_text": {"value": clause, "src": "《合同.pdf》"},
+            "breach_interest_rate_text": {"value": None, "src": f"{OCR_BUDGET_HINT}，合同可能未读完"},
+        }
+        basis = interest_basis_field(f)
+        assert basis["value"] != LPR_INTEREST_BASIS and basis["value"] is None, clause

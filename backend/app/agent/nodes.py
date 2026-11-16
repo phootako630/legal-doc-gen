@@ -700,12 +700,16 @@ def _toc_clause_sections_read(f: dict) -> bool:
 
 def _all_main_clause_sections_read(contracts: list[dict]) -> bool:
     """
-    每份扫描主合同要么全文都读到了，要么按目录估出的条款部分都读到了，且至少一份是按目录读完的：只有这样才能说
-    「条款部分里没有违约条款」。有一份主合同没读完（又没有目录可依），就不能替它下结论（#175 评审）。
+    每份扫描主合同要么全文都读到了，要么按目录估出的条款部分都读到了，且至少一份是按目录读完的；扫描的战略合同
+    也都读完了：只有这样才能说「条款部分里没有违约条款」。有一份没读完（又没有目录可依），就不能替它下结论（#175 评审）。
     """
     main = [f for f in contracts if f.get("identified_type") != "战略合同"]
     toc = [_toc_clause_sections_read(f) for f in main]
-    return any(toc) and all(t or _fully_read(f) for f, t in zip(main, toc))
+    if not (any(toc) and all(t or _fully_read(f) for f, t in zip(main, toc))):
+        return False
+    # 战略 / 框架合同也可能补出违约条款（STRATEGIC_CLAUSE_KEYS）：扫描件没读完也不能下结论（#175 复审）
+    strategic = [f for f in contracts if f.get("identified_type") == "战略合同" and f.get("is_scanned")]
+    return all(_toc_clause_sections_read(f) or _fully_read(f) for f in strategic)
 
 
 def _fully_read(f: dict) -> bool:
