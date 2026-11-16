@@ -216,3 +216,35 @@ def test_budget_hit_without_toc_still_leaves_interest_to_lawyer(monkeypatch):
     f = out["extracted_fields"]
     assert OCR_BUDGET_HINT in f["breach_interest_rate_text"]["src"]
     assert interest_term_field(f)["value"] is None
+
+
+def test_other_main_contract_unread_keeps_budget_hint(monkeypatch):
+    # 两份扫描主合同：A 按目录读完条款部分，B 没目录、没读完；不能替 B 断定「未约定」，仍写页数上限提示（#175 评审）
+    from app.services.derived_fields import OCR_BUDGET_HINT, interest_term_field
+
+    fid = file_store.put(b"%PDF-fake-bytes")
+    other = {"filename": "补充安装合同.pdf", "identified_type": "合同", "is_scanned": True, "text": "",
+             "pages": [], "page_count": 120, "file_id": fid}
+    state = _budget_hit_state(230)
+    state["files"].append(other)
+    monkeypatch.setattr(nodes_mod, "ocr_page", _long_contract_ocr())
+    monkeypatch.setattr(nodes_mod, "chat", AsyncMock(return_value=_CLAUSES))
+    out = asyncio.run(nodes_mod.ocr_augment_node(state))
+    f = out["extracted_fields"]
+    assert OCR_BUDGET_HINT in f["breach_interest_rate_text"]["src"]
+    assert interest_term_field(f)["value"] is None
+
+
+def test_breach_clause_with_rate_is_not_treated_as_not_agreed(monkeypatch):
+    # 违约条款原文已抽到、写着利率，只是利率字段空着：不写「未见违约条款」，也不套 LPR（#175 评审）
+    from app.services.derived_fields import LPR_INTEREST_BASIS, interest_basis_field
+
+    clauses = dict(_CLAUSES)
+    clauses["breach_clause_text"] = {"value": "甲方逾期付款的，应按日利率万分之二支付利息", "src": "《安装合同.pdf》"}
+    monkeypatch.setattr(nodes_mod, "ocr_page", _long_contract_ocr())
+    monkeypatch.setattr(nodes_mod, "chat", AsyncMock(return_value=clauses))
+    out = asyncio.run(nodes_mod.ocr_augment_node(_budget_hit_state(230)))
+    f = out["extracted_fields"]
+    assert "已读完条款部分" not in str(f["breach_interest_rate_text"].get("src"))
+    basis = interest_basis_field(f)
+    assert basis["value"] != LPR_INTEREST_BASIS and basis["value"] is None

@@ -626,7 +626,9 @@ TOC_CLAUSES_READ_NOTE = "按合同目录已读完条款部分（合同书 / 专�
 def _breach_toc_note(fields: dict) -> str:
     """违约条款按目录读完条款部分仍没读到时，派生值出处里带的待核实说明；不是这种情况返回空串。"""
     src = str(_node(fields, "breach_interest_rate_text").get("src") or "")
-    if TOC_CLAUSES_READ_NOTE not in src or _str_value(fields, "breach_interest_rate_text"):
+    if TOC_CLAUSES_READ_NOTE not in src or any(
+        _str_value(fields, k) for k in ("breach_interest_rate_text", "breach_clause_text")
+    ):
         return ""
     return f"（{TOC_CLAUSES_READ_NOTE}，未见甲方逾期付款违约条款；合同其余页未全部识别，待核实）"
 
@@ -855,6 +857,9 @@ def interest_basis_field(fields: dict) -> dict:
     ):
         # 抽出的利率出自乙方延迟交货、已去掉，而甲方逾期付款的句子另写了利率：不套用 LPR（#130 评审）
         return {"value": None, "src": "合同甲方逾期付款条款另有利率约定，但未识别出费率，请律师按条款原文填写，不套用 LPR"}
+    if RATE_MARK_RE.search(_str_value(fields, "breach_clause_text") or ""):
+        # 违约条款原文写了利率 / 比例，只是利率字段没抽出来：不是「未约定」，不套用 LPR（#175 评审）
+        return {"value": None, "src": "合同甲方逾期付款条款写有利率 / 比例，但未识别出费率，请律师按条款原文填写，不套用 LPR"}
     return {
         "value": LPR_INTEREST_BASIS,
         "src": f"常规话术（合同未约定甲方逾期付款利率）{_breach_toc_note(fields)}",
