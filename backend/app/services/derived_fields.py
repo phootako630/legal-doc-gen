@@ -617,6 +617,19 @@ def unread_by_budget(fields: dict, *keys: str) -> bool:
 
 _BREACH_UNREAD_SRC = f"{OCR_BUDGET_HINT}，合同违约条款未读到，不能认定合同未约定，请查看合同原件"
 
+# 长扫描合同按目录把条款部分（合同书 / 专用条件 / 通用条件等）都读完了、仍没有甲方逾期付款违约条款，只是技术
+# 规范等其余页没读完（agent/nodes.py 写入违约字段出处）：按合同未约定处理（逾期付款利息 + LPR），标待核实
+# （用户选定，2026-11-16）。没有目录可依的长合同仍按 OCR_BUDGET_HINT 留给律师
+TOC_CLAUSES_READ_NOTE = "按合同目录已读完条款部分（合同书 / 专用条件 / 通用条件等）"
+
+
+def _breach_toc_note(fields: dict) -> str:
+    """违约条款按目录读完条款部分仍没读到时，派生值出处里带的待核实说明；不是这种情况返回空串。"""
+    src = str(_node(fields, "breach_interest_rate_text").get("src") or "")
+    if TOC_CLAUSES_READ_NOTE not in src or _str_value(fields, "breach_interest_rate_text"):
+        return ""
+    return f"（{TOC_CLAUSES_READ_NOTE}，未见甲方逾期付款违约条款；合同其余页未全部识别，待核实）"
+
 
 # ── 逾期利息 / 违约金 ─────────────────────────────────────────────────────────
 # 合同按「同期（同档次）贷款利率」「贷款市场报价利率 / LPR」计付（确认单（七）第 1 题选 A）：
@@ -701,7 +714,7 @@ def interest_term_field(fields: dict) -> dict:
         return {"value": "逾期付款利息", "src": _loan_rate_src(fields)}
     if unread_by_budget(fields, "breach_interest_rate_text", "breach_clause_text"):
         return {"value": None, "src": _BREACH_UNREAD_SRC}  # 没读到 ≠ 没约定，留给律师
-    return {"value": "逾期付款利息", "src": "合同未约定甲方逾期付款违约金"}
+    return {"value": "逾期付款利息", "src": f"合同未约定甲方逾期付款违约金{_breach_toc_note(fields)}"}
 
 
 def breach_clause_sentence_field(fields: dict) -> dict:
@@ -844,7 +857,7 @@ def interest_basis_field(fields: dict) -> dict:
         return {"value": None, "src": "合同甲方逾期付款条款另有利率约定，但未识别出费率，请律师按条款原文填写，不套用 LPR"}
     return {
         "value": LPR_INTEREST_BASIS,
-        "src": "常规话术（合同未约定甲方逾期付款利率）",
+        "src": f"常规话术（合同未约定甲方逾期付款利率）{_breach_toc_note(fields)}",
         "channel": "text",
     }
 

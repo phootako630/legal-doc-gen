@@ -37,7 +37,7 @@
 - LLM 一律经 `services/llm_client.chat`；JSON 输出用 `json_mode=True`（`response_format=json_object`，并兜底剥掉 markdown 代码块与 `{"type":"json_object"}` 外壳后解析）。超时、重试、备用模型的取值与理由在 `config.py` 与 `llm_client.py` 注释里；改这块时守住：SDK 自带重试关闭（`max_retries=0`），失败只重试 1 次；DeepSeek 超时（含总时限）/ 连不上 / 5xx / 429 / 402 直接改用 `LLM_FALLBACK_MODEL` 并冷却 `LLM_FALLBACK_COOLDOWN_S`；key 无效（401）属配置错误，不切换；报错信息用中文。
 - OCR 超时：单页 `OCR_PAGE_TIMEOUT`、整份 `OCR_TIMEOUT`（`config.py`）；失败抛中文 `RuntimeError`（「OCR 处理失败：具体原因」「第 N 页 OCR 超时」），由调用方写进字段出处提醒律师。
 - 文件解析：不支持的格式抛 `UnsupportedFileError` 并给出中文说明。
-- OCR 页数预算用完（`AGENT_MAX_TOTAL_OCR_PAGES` 及各子上限）→ 停止 OCR，在相关字段出处与起诉状里注明「扫描识别页数已达上限」（`derived_fields.OCR_BUDGET_HINT`）：违约金 / 利息不按「合同未约定」套 LPR，验收报告没读到时日期 / 台数注明可能不全。成本超限必须让律师看见，不静默降级。
+- OCR 页数预算用完（`AGENT_MAX_TOTAL_OCR_PAGES` 及各子上限）→ 停止 OCR，在相关字段出处与起诉状里注明「扫描识别页数已达上限」（`derived_fields.OCR_BUDGET_HINT`）：违约金 / 利息不按「合同未约定」套 LPR（例外：按合同目录已读完条款部分仍没有违约条款的，按未约定写并标待核实，见 `docs/agents/agent-pipeline.md`），验收报告没读到时日期 / 台数注明可能不全。成本超限必须让律师看见，不静默降级。
 
 ## 安全与保密
 

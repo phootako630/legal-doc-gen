@@ -174,3 +174,45 @@ def test_start_toc_reads_rest_of_target_entry_before_other_parts():
     assert 94 in order
     assert order.index(12) < order.index(85) < order.index(94)
     assert 50 not in order and 120 not in order
+
+
+# ── 按目录读完条款部分仍没有违约条款：按合同未约定写逾期付款利息 + LPR，标待核实（用户选定，2026-11-16）──
+def _budget_hit_state(page_count: int) -> dict:
+    state = _state(page_count)
+    # 签约日期还是审批表的：要找签章页，找不到就一直读到页数上限
+    state["extracted_fields"]["contract_sign_date"] = {"value": "2021年5月28日", "src": "《审批表.pdf》签约时间栏"}
+    return state
+
+
+def test_toc_sections_read_breach_missing_is_treated_as_not_agreed(monkeypatch):
+    from app.services.derived_fields import (
+        LPR_INTEREST_BASIS,
+        OCR_BUDGET_HINT,
+        interest_basis_field,
+        interest_term_field,
+    )
+
+    monkeypatch.setattr(nodes_mod, "ocr_page", _long_contract_ocr())
+    monkeypatch.setattr(nodes_mod, "chat", AsyncMock(return_value=_CLAUSES))
+    out = asyncio.run(nodes_mod.ocr_augment_node(_budget_hit_state(230)))
+    f = out["extracted_fields"]
+    src = f["breach_interest_rate_text"]["src"]
+    assert "已读完条款部分" in src and OCR_BUDGET_HINT not in src and "待核实" in src
+    term, basis = interest_term_field(f), interest_basis_field(f)
+    assert term["value"] == "逾期付款利息" and "待核实" in term["src"]
+    assert basis["value"] == LPR_INTEREST_BASIS and "待核实" in basis["src"]
+
+
+def test_budget_hit_without_toc_still_leaves_interest_to_lawyer(monkeypatch):
+    # 没有目录可依：页数用完时仍不能认定合同未约定，利息留给律师（#71 原规则不变）
+    from app.services.derived_fields import OCR_BUDGET_HINT, interest_term_field
+
+    async def fake(_pdf, n):
+        return _PAGE_PAY if n == 3 else ("19. 争议：向工程所在地人民法院提起诉讼。" if n == 4 else f"第{n}页正文")
+
+    monkeypatch.setattr(nodes_mod, "ocr_page", AsyncMock(side_effect=fake))
+    monkeypatch.setattr(nodes_mod, "chat", AsyncMock(return_value=_CLAUSES))
+    out = asyncio.run(nodes_mod.ocr_augment_node(_budget_hit_state(230)))
+    f = out["extracted_fields"]
+    assert OCR_BUDGET_HINT in f["breach_interest_rate_text"]["src"]
+    assert interest_term_field(f)["value"] is None

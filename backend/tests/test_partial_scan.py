@@ -192,16 +192,17 @@ def test_strategic_supplement_filename_is_strategic_contract():
 
 
 def test_strategic_contract_has_own_ocr_budget(monkeypatch):
-    # 主合同把 50 页用完后，战略合同仍按自己的页数上限读到仲裁条款
+    # 主合同把合同页数上限（AGENT_MAX_OCR_PAGES）用完后，战略合同仍按自己的页数上限读到仲裁条款
+    budget = nodes_mod.AGENT_MAX_OCR_PAGES
     fid = file_store.put(b"%PDF-fake")
     main = {"filename": "供货合同.pdf", "identified_type": "合同", "is_scanned": True, "text": "",
-            "pages": [], "page_count": 60, "file_id": fid}
+            "pages": [], "page_count": budget + 10, "file_id": fid}
     strategic = {"filename": "战略协议补充协议.pdf", "identified_type": "战略合同", "is_scanned": True,
                  "text": "", "pages": [], "page_count": 2, "file_id": fid}
     clause = "第三条 争议：若协商不能达成一致意见的，应把争议事项提交某某仲裁委员会仲裁处理。"
 
     async def fake(_pdf, n):
-        return clause if fake.calls >= 50 else "主合同其他条款页面"  # noqa: B023
+        return clause if fake.calls >= budget else "主合同其他条款页面"  # noqa: B023
 
     fake.calls = 0
 
@@ -225,7 +226,7 @@ def test_strategic_contract_has_own_ocr_budget(monkeypatch):
         "files": [main, strategic],
     }
     out = asyncio.run(nodes_mod.ocr_augment_node(state))
-    assert fake.calls == 52  # 主合同 50 页 + 战略合同 2 页
+    assert fake.calls == budget + 2  # 主合同用满上限 + 战略合同 2 页
     assert "仲裁" in out["extracted_fields"]["dispute_clause_text"]["value"]
 
 
