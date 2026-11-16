@@ -50,6 +50,7 @@ from app.services.extraction import (
     apply_rule_guards,
     apply_strategic_dispute_ref,
     apply_strategic_guards,
+    approval_sign_date,
     approval_unpaid_total,
     is_strategic_supplement,
     mark_strategic_supplement,
@@ -80,6 +81,7 @@ from app.services.validators import (
     ValidationCheck,
     check_materials,
     check_to_dict,
+    check_sign_date_ocr,
     check_unpaid_total,
     parse_date,
     parse_qty,
@@ -324,6 +326,15 @@ def _all_checks(state: GraphState, fields: dict) -> list[ValidationCheck]:
             found[0] if found else None,
             unpaid.get("value") if isinstance(unpaid, dict) else unpaid,
             found[1] if found else "",
+        )
+    )
+    # 签约日期是扫描识别的、与审批表签约时间只差一位易混数字：疑似识别有误，只提醒
+    sign = fields.get("contract_sign_date") if isinstance(fields.get("contract_sign_date"), dict) else {}
+    approval_sign = approval_sign_date(state.get("files", []))
+    checks.append(
+        check_sign_date_ocr(
+            sign.get("value"), sign.get("src"),
+            approval_sign[0] if approval_sign else None, approval_sign[1] if approval_sign else "",
         )
     )
     checklist = state.get("checklist")

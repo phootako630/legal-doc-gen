@@ -10,6 +10,7 @@
 - **台数一致**：`elevator_qty_by_approval == elevator_qty_by_contract == elevator_qty_by_acceptance`
 - **信用代码**：18 位、字符集、校验位
 - **金额提醒**（`needs_review`，只提醒、不算冲突、不改起诉金额）：合同里读到的合同总价（`contract_total_in_contract`）与审批表合同总额不一致（有补充协议时、一体化合同审批表只列一部分且合同总价正好是设备款 + 安装款时不提醒，确认单（七）第 4 题选 B：一律按审批表未付款金额起诉，律师核对结算价后自行修改，`validators.check_contract_total`）；审批表「未付款总金额」（代码从审批表原文读，认「（元）」、币种符号、「万元」换算，`extraction.approval_unpaid_total`；提醒写明出自哪份审批表第几页；多份审批表时按未付金额的出处选对应那份，对应不上不提醒）多于本次取的未付金额（一体化合同审批表只列买卖部分，`validators.check_unpaid_total`）。虚构案卷「虚构提醒案M」的 `expected.json` 用 `reminders` 列出应出现的提醒，缺了 eval 基线门槛失败
+- **签约日期疑似识别有误**（`needs_review`，只提醒、不改值）：签约日期是扫描识别的，且与审批表「签约时间」（代码从审批表原文读，只有一份审批表时才取，`extraction.approval_sign_date`）只差一位数字、这一位又是容易认混的一对（3 / 8、0 / 8、6 / 8、1 / 7 等）时提醒律师看签章页原件（新案件核对：日期戳「2020-08-03」的 8 盖得淡，读成 03）。两个日期本就常常不同（审批表记的是别的日子），其他不同不提醒；签约日期仍以签章页为准（确认单（六）第 4 题），`validators.check_sign_date_ocr`，虚构日期戳案S
 - **日期**：合法性、`acceptance_latest_date` 取各验收报告最晚合格日
 - **名称**：不做分公司核实。原告按规则拼接（见 [complaint-rules.md](complaint-rules.md)「原告」）；被告是分公司时只起诉分公司，不列总公司（律师确认）
 - **台数**：有验收报告台数时以其为准、不暂停；只有审批表与合同一致而报告不同时标待核实。无验收报告台数时三源不一致仍暂停问律师

@@ -971,6 +971,53 @@
         "verdict": "正确"
       }
     },
+    "虚构日期戳案S": {
+      "acceptance_latest_date": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "contract_type": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "defendant_name": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "elevator_qty": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "paid_amount": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "payable_ratio": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "payment_cite_location": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "total_amount": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "unpaid_amount": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      }
+    },
     "虚构未约定管辖案R": {
       "acceptance_latest_date": {
         "silent": false,

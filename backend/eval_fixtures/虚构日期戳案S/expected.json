@@ -1,0 +1,22 @@
+{
+  "title": "虚构日期戳案 S（签章页日期戳 08 被读成 03，与审批表只差一位 → 提醒疑似识别有误；末期质保金分两次付按 3% 算一期）",
+  "decisions": {"payable_ratio": "100%"},
+  "reminders": ["sign_date_ocr"],
+  "fields": {
+    "defendant_name": {
+      "value": "泰州虚构置业有限公司",
+      "review": "待核实"
+    },
+    "contract_type": "买卖合同",
+    "total_amount": 100000,
+    "paid_amount": 77000,
+    "unpaid_amount": 23000,
+    "elevator_qty": 2,
+    "acceptance_latest_date": "2025年3月20日",
+    "payable_ratio": "100%",
+    "payment_cite_location": {
+      "value": "第5.2.3条、第5.2.4条、第5.2.5条",
+      "note": "确认单（五）第 3 题：引用欠款对应的付款节点（已付 77%，欠款覆盖 5.2.3–5.2.5）"
+    }
+  }
+}
