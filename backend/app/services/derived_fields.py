@@ -2238,21 +2238,34 @@ def _case_payment(fields: dict) -> tuple[str | None, str | None]:
 _LOC_NOTE_RE = re.compile(r"\s*[（(](?![一二三四五六七八九十\d]{1,3}[）)])[^（()）]*[）)]\s*$")
 
 
-_LOC_SUB_RE = re.compile(r"^第\s*(\d{1,2}[.．]\d{1,2})\s*条")
+_LOC_SINGLE_RE = re.compile(r"第\s*(\d{1,2}(?:[.．]\d{1,2})?)\s*条")
 
 
 def _concatenated_parent(fields: dict) -> str | None:
     """
     「3.1 设备合同付款方式」下各项印成「3.11、3.12、3.13、3.14」（父编号直接接项号，律师新案件核对）：
-    付款条款位置是「第3.1条」、条款里的编号恰好依次是 3.11 … 3.1n（n ≤ 9）时返回父编号「3.1」，
-    起诉状按律师写法引成「第3.1.4条」（确认单（五）第 17 题）；否则返回 None，照原文编号写。
+    付款条款里的分项编号恰好依次是 3.11 … 3.1n（n ≤ 9）时返回父编号「3.1」，起诉状按律师写法引成「第3.1.4条」
+    （确认单（五）第 17 题）；否则返回 None，照原文编号写。父编号须有出处：条款位置就是「第3.1条」，或位置是
+    「第3条」且条款原文开头保留了父标题「3.1 ……」。位置须是单一条款（去掉末尾附注括号后整串就是「第X条」
+    「第X.Y条」）：「第3.1条及第3.2条」「第3.1条第（二）款」不算（#177 评审）。
     """
-    m = _LOC_SUB_RE.match((_str_value(fields, "payment_clause_location") or "").strip())
+    loc = _str_value(fields, "payment_clause_location") or ""
+    while _LOC_NOTE_RE.search(loc):
+        loc = _LOC_NOTE_RE.sub("", loc)
+    m = _LOC_SINGLE_RE.fullmatch(loc.strip())
     if not m:
         return None
-    parent = m.group(1).replace("．", ".")
+    loc_no = m.group(1).replace("．", ".")
     nos = item_numbers(_case_payment(fields)[0])
-    if not 2 <= len(nos) <= 9 or nos != [f"{parent}{i}" for i in range(1, len(nos) + 1)]:
+    if "." in loc_no:
+        parent = loc_no
+    elif nos and nos[0].startswith(f"{loc_no}.") and nos[0].count(".") == 1:
+        parent = nos[0]  # 条款原文开头的父标题「3.1 设备合同付款方式：」
+    else:
+        return None
+    # 条款原文保留了父标题时，父编号本身不算分项（#177 评审）
+    items = [n for n in nos if n != parent]
+    if not 2 <= len(items) <= 9 or items != [f"{parent}{i}" for i in range(1, len(items) + 1)]:
         return None
     return parent
 

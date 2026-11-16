@@ -1164,6 +1164,58 @@ def case_sign_stamp_misread() -> None:
         })
 
 
+def case_concatenated_item_no() -> None:
+    """付款条款父编号直接接项号（新案件核对，确认单（五）第 17 题）：「3.1 设备合同付款方式」下各项印成 3.11、3.12、
+    3.13、3.14，再接「3.2 账号确认」；已付 90%、欠款对上 3.14 结算款 → 引用按律师写法写「第3.1.4条」，引用原文照抄。"""
+    case = "虚构项号连写案T"
+    os.makedirs(os.path.join(ROOT, case, "materials"), exist_ok=True)
+    _approval(case, "AH9000020杭州虚构置业有限公司诉讼审批表.pdf", {
+        "serial": "SS2099-000120", "title": "AH9000020杭州虚构置业有限公司虚构庭项目",
+        "contract_no": "AH9000020", "branch_path": "集团/营销网络/梧桐分公司",
+        "buyer": "杭州虚构置业有限公司", "contact": "虚构寅", "contact_phone": "13800000020",
+        "buyer_address": "杭州市拱墅区虚构路20号", "site": "杭州市拱墅区虚构路20号虚构庭",
+        "contract_type": "买卖合同", "amount_label": "买卖", "sign_date": "2024-05-06", "qty": "2", "qty_actual": "2",
+        "total": "200,000.00", "paid": "180,000.00", "unpaid": "20,000.00",
+        "gov_accept": "2024-11-22", "last_pay_date": "2024-12-10", "reason": "电梯已验收并结算，买方未付结算款。",
+    })
+    _text_pdf(os.path.join(ROOT, case, "materials", "杭州虚构庭项目电梯设备买卖合同.pdf"), [
+        """电梯设备买卖合同
+
+合同编号：AH9000020
+甲方：杭州虚构置业有限公司
+乙方：日立电梯（中国）有限公司梧桐分公司
+
+第一条 合同标的
+乙方向甲方供应电梯2台，交货地点：杭州市拱墅区虚构路20号。设备合同总金额为人民币200,000元（大写：贰拾万元整）。
+
+第三条 付款方式
+3.1 设备合同付款方式：
+3.11 排产款：排产前15个工作日内，甲方向乙方支付本次排产设备总金额的20%的排产款；
+3.12 发货款：产品交货前15个工作日内，甲方向乙方支付本批次设备总金额的50%的发货款；
+3.13 验收款：经甲方及政府相关部门验收合格后25个工作日内，甲方向乙方支付本批次设备总金额的20%的验收款；
+3.14 结算款：办理结算完成后25个工作日内，甲方向乙方支付至设备结算金额的100%。
+3.2 账号确认：甲方按本合同所列乙方账户付款。
+
+第六条 违约责任
+甲方逾期付款的，应按应付未付款的每日万分之五向乙方支付违约金。
+
+第八条 争议解决
+因本合同发生的争议，双方协商不成的，向交货地点所在地人民法院提起诉讼。
+
+（以下无正文）
+甲方（盖章）：杭州虚构置业有限公司
+乙方（盖章）：日立电梯（中国）有限公司梧桐分公司
+签订日期：2024年5月6日""",
+    ])
+    for i, code in enumerate(["31103301202400000201", "31103301202400000202"], start=1):
+        _report(case, f"电梯监督检验报告{i}.pdf", {
+            "report_no": f"XG-DTJ-2024-93{i:02d}", "user": "杭州虚构置业有限公司",
+            "installer": "日立电梯（中国）有限公司梧桐分公司", "device_code": code,
+            "inspect_date": "2024年11月15日", "approve_date": "2024年11月22日",
+            "site": "杭州市拱墅区虚构路20号虚构庭", "model": "HGP",
+        })
+
+
 if __name__ == "__main__":
     case_install_scanned()
     case_sales_arbitration()
@@ -1183,4 +1235,5 @@ if __name__ == "__main__":
     case_toc_breach_not_agreed()
     case_no_dispute_clause()
     case_sign_stamp_misread()
+    case_concatenated_item_no()
     print("已生成：", ", ".join(sorted(n for n in os.listdir(ROOT) if not n.startswith(("_", ".")) and os.path.isdir(os.path.join(ROOT, n)))))

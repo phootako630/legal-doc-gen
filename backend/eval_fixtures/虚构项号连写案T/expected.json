@@ -1,0 +1,25 @@
+{
+  "title": "虚构项号连写案 T（「3.1 设备合同付款方式」下各项印成 3.11–3.14 → 欠款对应结算款，引用按律师写法写「第3.1.4条」）",
+  "decisions": {},
+  "fields": {
+    "defendant_name": "杭州虚构置业有限公司",
+    "contract_sign_date": "2024年5月6日",
+    "total_amount": 200000,
+    "paid_amount": 180000,
+    "unpaid_amount": 20000,
+    "elevator_qty": 2,
+    "acceptance_latest_date": "2024年11月22日",
+    "payable_ratio": "100%",
+    "payment_cite_location": {
+      "value": "第3.1.4条",
+      "note": "合同原文编号为 3.14，系 3.1 下第 4 项（确认单（五）第 17 题）"
+    },
+    "payment_cite_text": {
+      "value": "支付至设备结算金额的100%",
+      "match": "contains"
+    },
+    "interest_term": "违约金",
+    "document_kind": "民事起诉状",
+    "court_district": "杭州市拱墅区"
+  }
+}

@@ -1358,6 +1358,73 @@
         "verdict": "正确"
       }
     },
+    "虚构项号连写案T": {
+      "acceptance_latest_date": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "contract_sign_date": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "court_district": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "defendant_name": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "document_kind": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "elevator_qty": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "interest_term": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "paid_amount": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "payable_ratio": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "payment_cite_location": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "payment_cite_text": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "total_amount": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "unpaid_amount": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      }
+    },
     "虚构首批即停案J": {
       "acceptance_latest_date": {
         "silent": false,

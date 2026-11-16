@@ -545,3 +545,27 @@ def test_concatenation_needs_parent_location_and_consecutive_numbers():
     fields = _case(clause, "1,000,000.00", "900,000.00", "100,000.00")
     fields["payment_clause_location"] = {"value": "第3.1条", "src": "《虚构设备合同.pdf》"}
     assert apply_derived_fields(fields)["payment_cite_location"]["value"] == "第3.13条"
+
+
+def test_concatenation_with_parent_heading_kept_in_clause_text():
+    # 条款原文保留了父标题「3.1 设备合同付款方式：」：父编号不算分项（#177 评审）
+    fields = _concat_case("3.1 设备合同付款方式：" + CONCAT_CLAUSE, "第3.1条")
+    assert fields["payment_cite_location"]["value"] == "第3.1.4条"
+    # 位置末尾的附注括号去掉后仍是单一父条款
+    assert _concat_case(CONCAT_CLAUSE, "第3.1条（付款方式）")["payment_cite_location"]["value"] == "第3.1.4条"
+
+
+def test_concatenation_needs_single_parent_location():
+    # 复合位置不是单一父条款：照原文编号写（#177 评审）
+    for loc in ("第3.1条及第3.2条", "第3.1条第（二）款"):
+        assert _concat_case(CONCAT_CLAUSE, loc)["payment_cite_location"]["value"] == "第3.14条", loc
+
+
+def test_concatenation_parent_from_heading_when_location_is_chapter():
+    # 位置只写到「第3条」：条款原文开头保留了父标题「3.1」才认（虚构项号连写案T 的抽取结果即如此）
+    with_heading = "3.1 设备合同付款方式：" + CONCAT_CLAUSE
+    assert _concat_case(with_heading, "第3条")["payment_cite_location"]["value"] == "第3.1.4条"
+    # 没有父标题：父编号无出处，照原文编号写
+    assert _concat_case(CONCAT_CLAUSE, "第3条")["payment_cite_location"]["value"] == "第3.14条"
+    # 父标题不属于该章：不认
+    assert _concat_case(with_heading, "第4条")["payment_cite_location"]["value"] == "第3.14条"
