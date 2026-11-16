@@ -156,10 +156,12 @@ def test_no_dispute_clause_goes_to_defendant_seat_not_site():
     from app.services.complaint_renderer import render_complaint
     from app.services.derived_fields import apply_derived_fields
 
+    from app.services.derived_fields import DISPUTE_ABSENT_NOTE
+
     fields = apply_derived_fields({
         "project_site": {"value": "上海市杨浦区虚构路1号", "src": "《合同.pdf》"},
         "defendant_address": {"value": "广州市海珠区虚构中路1号", "src": "企查查"},
-        "dispute_clause_text": {"value": None, "src": ""},
+        "dispute_clause_text": {"value": None, "src": f"《合同.pdf》{DISPUTE_ABSENT_NOTE}"},
     })
     assert fields["court_district"]["value"] == "广州市海珠区"
     assert "未约定争议解决方式" in fields["court_district"]["src"]
@@ -172,7 +174,8 @@ def test_no_dispute_clause_goes_to_defendant_seat_not_site():
 def test_unread_dispute_clause_is_left_to_lawyer():
     from app.services.derived_fields import OCR_BUDGET_HINT, apply_derived_fields
 
-    for src in (f"{OCR_BUDGET_HINT}，合同可能未读完，未读到此条款，请查看合同原件", "《合同.pdf》扫描件暂未识别"):
+    # 出处为空（OCR 不可用、字节丢失、没有合同文件时也可能这样）同样证明不了合同读完了（#176 评审）
+    for src in (f"{OCR_BUDGET_HINT}，合同可能未读完，未读到此条款，请查看合同原件", "《合同.pdf》扫描件暂未识别", ""):
         fields = apply_derived_fields({
             "project_site": {"value": "上海市杨浦区虚构路1号", "src": "《合同.pdf》"},
             "defendant_address": {"value": "广州市海珠区虚构中路1号", "src": "企查查"},
@@ -180,3 +183,29 @@ def test_unread_dispute_clause_is_left_to_lawyer():
         })
         node = fields["court_district"]
         assert node["value"] is None and "不能认定未约定" in node["src"], src
+
+
+def test_dispute_absent_marked_only_when_every_main_contract_fully_read():
+    # 只有每份主合同都全文读到（文字版；扫描件每页都有文字）时才写「已全文读完」标记（#176 评审）
+    from app.agent.nodes import _mark_dispute_absent
+    from app.services.derived_fields import DISPUTE_ABSENT_NOTE
+
+    def run(files):
+        fields = {"dispute_clause_text": {"value": None, "src": ""}}
+        _mark_dispute_absent(fields, files)
+        return DISPUTE_ABSENT_NOTE in fields["dispute_clause_text"]["src"]
+
+    text_contract = {"filename": "合同.pdf", "identified_type": "合同", "is_scanned": False, "text": "第一条 总则……"}
+    scanned_full = {"filename": "扫描合同.pdf", "identified_type": "合同", "is_scanned": True, "page_count": 2,
+                    "pages": [{"page": 1, "text": "第一条"}, {"page": 2, "text": "（以下无正文）"}]}
+    scanned_part = dict(scanned_full, pages=[{"page": 1, "text": "第一条"}])
+    scanned_none = dict(scanned_full, pages=[])
+    approval = {"filename": "审批表.pdf", "identified_type": "审批表", "is_scanned": False, "text": "合同号"}
+    assert run([approval, text_contract]) and run([scanned_full])
+    assert not run([scanned_part]) and not run([scanned_none])  # 有页没读到、OCR 不可用
+    assert not run([approval])  # 没有合同文件
+    assert not run([text_contract, scanned_part])  # 有一份没读完
+    # 已有页数上限提示的不改
+    fields = {"dispute_clause_text": {"value": None, "src": "扫描识别页数已达上限，合同可能未读完"}}
+    _mark_dispute_absent(fields, [scanned_full])
+    assert DISPUTE_ABSENT_NOTE not in fields["dispute_clause_text"]["src"]

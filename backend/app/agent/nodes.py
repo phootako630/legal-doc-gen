@@ -62,6 +62,7 @@ from app.services.extraction import (
     mark_supplement_agreements,
 )
 from app.services.derived_fields import (
+    DISPUTE_ABSENT_NOTE,
     OCR_BUDGET_HINT,
     TOC_CLAUSES_READ_NOTE,
     apply_derived_fields,
@@ -352,6 +353,8 @@ async def validate_node(state: GraphState) -> dict:
     apply_integrated_contract_amounts(fields, state.get("files", []))
     # 争议条款最终取自战略合作协议的补充协议：提醒上传原文（#141）
     mark_strategic_supplement(fields, state.get("files", []))
+    # 合同全文读完仍没有争议条款：写明，派生规则才按「未约定」定管辖（#176）
+    _mark_dispute_absent(fields, state.get("files", []))
     # 派生字段（逾期利息标准、管辖法院辖区）进审核页，律师可见可改
     apply_derived_fields(fields)
     checks = _all_checks(state, fields)
@@ -707,6 +710,25 @@ def _toc_clause_sections_read(f: dict) -> bool:
     priority = toc_priority_pages(pages, total, {"breach"})
     known = {p["page"] for p in pages if (p.get("text") or "").strip()}
     return bool(priority) and all(n in known for n in priority)
+
+
+def _mark_dispute_absent(fields: dict, files: list[dict]) -> None:
+    """
+    争议条款为空、且每份主合同都全文读到了（文字版；扫描件每一页都有文字）时，在争议条款出处写明
+    「合同已全文读完，未见争议解决条款」：派生规则只凭这个标记按「未约定」处理。没有主合同、有一页没读到、
+    已标页数上限 / 未识别的，都不写（#176 评审：出处为空不能证明合同读完了）。
+    """
+    node = fields.get("dispute_clause_text")
+    if not _is_missing(fields, "dispute_clause_text"):
+        return
+    src = str(node.get("src") or "") if isinstance(node, dict) else ""
+    if DISPUTE_ABSENT_NOTE in src or OCR_BUDGET_HINT in src or (isinstance(node, dict) and node.get("strategic_ref")):
+        return
+    main = [f for f in files if f.get("identified_type") == "合同"]
+    if not main or not all(not f.get("is_scanned") and (f.get("text") or "").strip() or _fully_read(f) for f in main):
+        return
+    names = "、".join(f"《{f.get('filename', '合同')}》" for f in main)
+    fields["dispute_clause_text"] = {**(node if isinstance(node, dict) else {}), "value": None, "src": f"{names}{DISPUTE_ABSENT_NOTE}"}
 
 
 def _all_main_clause_sections_read(contracts: list[dict]) -> bool:
