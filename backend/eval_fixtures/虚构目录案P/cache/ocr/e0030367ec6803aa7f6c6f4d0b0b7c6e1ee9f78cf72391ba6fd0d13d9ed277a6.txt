@@ -1,0 +1,21 @@
+```json
+{
+    "parties": [
+        {
+            "role": "发包方（盖章）",
+            "name": "盐城虚构置业有限公司",
+            "date": null,
+            "date_legible": true
+        },
+        {
+            "role": "分包方（盖章）",
+            "name": "日立电梯（中国）有限公司梧桐分公司",
+            "date": null,
+            "date_legible": true
+        }
+    ],
+    "shared_date": "2024年3月5日",
+    "shared_date_legible": true,
+    "notes": ""
+}
+```

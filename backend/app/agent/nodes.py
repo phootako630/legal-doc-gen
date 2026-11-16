@@ -35,6 +35,7 @@ from app.services.acceptance_report import (
 )
 from app.services.complaint_readiness import readiness
 from app.services.conflict_options import conflict_options
+from app.services.contract_toc import toc_priority_pages
 from app.services.doc_search import CLAUSE_BODY_PATTERNS, locate_clause_bodies
 from app.services.equipment_list import count_vge_units
 from app.services.clause_location import refine_clause_locations
@@ -507,17 +508,23 @@ async def _ocr_for_targets(
     """
     按批并发 OCR（每批 OCR_MAX_CONCURRENCY 页），找到目标条款正文即停；返回逐页文本、剩余预算、是否 OCR 过。
     部分扫描的 PDF 已有文字层的页直接用、不 OCR、不占预算；预算用完后仍继续看后面有文字层的页。
+    读完第一批后若有目录页，按目录把与目标条款有关的部分排到前面先读（`contract_toc.toc_priority_pages`，
+    长合同的条款常在 50 页上限之后）；没有目录照原顺序。
     """
     known = _known_pages(f)
     page_total = f.get("page_count") or pdf_page_count(pdf)
     ocr_pages: list[dict] = []
     got = False
-    for start in range(1, page_total + 1, OCR_MAX_CONCURRENCY):
-        chunk = range(start, min(start + OCR_MAX_CONCURRENCY, page_total + 1))
+    order = list(range(1, page_total + 1))
+    pos = 0
+    while pos < len(order):
+        chunk = order[pos : pos + OCR_MAX_CONCURRENCY]
+        first_batch = pos == 0
+        pos += len(chunk)
         reused = [known[n] for n in chunk if n in known]
         to_ocr = [n for n in chunk if n not in known][: max(budget, 0)]
         if not reused and not to_ocr:
-            if not known or start > max(known):
+            if not any(n in known for n in order[pos:]):
                 break  # 预算用完，后面也没有文字层的页
             continue
         pages = await _ocr_batch(pdf, to_ocr) if to_ocr else []
@@ -528,6 +535,13 @@ async def _ocr_for_targets(
         got = True
         if targets <= locate_clause_bodies(ocr_pages):
             break
+        if first_batch:
+            rest = set(order[pos:])
+            priority = [n for n in toc_priority_pages(ocr_pages, page_total, targets) if n in rest]
+            if priority:
+                ahead = set(priority)
+                order = order[:pos] + priority + [n for n in order[pos:] if n not in ahead]
+                run_log.log_event("ocr_toc_order", pages=len(priority))
     # 提前停止时，后面没遍历到的文字层页也一并返回：调用方用返回值覆盖 pages，不能丢掉已有文本（#79 评审）
     seen = {p["page"] for p in ocr_pages}
     ocr_pages.extend(p for n, p in sorted(known.items()) if n not in seen)
@@ -565,7 +579,7 @@ async def ocr_augment_node(state: GraphState) -> dict:
     """
     按需 OCR：仅当付款/违约/争议条款字段仍缺失（或签章页、质保金按日违约金所需的质保期
     还没读到）、且存在暂存了字节的扫描合同时，
-    对该合同按批并发 OCR（找到付款 + 争议条款正文即停，跳过目录页；页数受
+    对该合同按批并发 OCR（找到付款 + 争议条款正文即停，跳过目录页；有目录时按目录先读条款部分；页数受
     AGENT_MAX_OCR_PAGES 约束），再据 OCR 文本定向补齐条款字段，并以合同为准覆盖合同名称、
     合同台数、安装地址，最后重新锚定页码。OCR 不可用则优雅降级、条款保持缺失。
     主合同读完仍缺条款时接着读战略 / 框架合同：只补缺失的条款（`STRATEGIC_CLAUSE_KEYS`），争议条款
