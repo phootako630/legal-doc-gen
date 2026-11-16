@@ -18,6 +18,7 @@ import re
 from app.services.derived_fields import (
     OCR_BUDGET_HINT,
     apply_derived_fields,
+    dispute_not_agreed,
     is_daily_amount_penalty,
     is_lump_sum_penalty,
 )
@@ -311,6 +312,8 @@ _PERIODIC_CALC = (
     "计至实际付清之日止{{penalty_cap}}）"
 )
 _LUMP_SUM_CALC = "{{penalty_amount}}"
+# 争议条款引用半句（模板「依据案涉合同{{dispute_clause_location}}约定，{{dispute_clause_text}}。{{jurisdiction_text}}」）
+_DISPUTE_CITE = "依据案涉合同{{dispute_clause_location}}约定，{{dispute_clause_text}}。"
 # 按日计付的固定金额违约金（补充答复 Q6）
 _DAILY_CALC = (
     "{{penalty_amount}}（自{{penalty_start_date}}起，按照{{penalty_daily_text}}"
@@ -329,6 +332,9 @@ def _prepare(fields: dict, template: str | None) -> tuple[dict, str]:
         template = template.replace(_PERIODIC_CALC, _LUMP_SUM_CALC)
     elif is_daily_amount_penalty(fields):
         template = template.replace(_PERIODIC_CALC, _DAILY_CALC)
+    if dispute_not_agreed(fields):
+        # 合同没有争议条款：只写依民诉法第二十四条的管辖句，不写「依据案涉合同【待补充】约定，【待补充】。」
+        template = template.replace(_DISPUTE_CITE, "")
     kind = fields.get("document_kind")
     if isinstance(kind, dict) and kind.get("value") == "仲裁申请书":
         template = to_arbitration_template(template)

@@ -450,6 +450,37 @@ def run_all_checks(fields: dict) -> list[ValidationCheck]:
     return checks
 
 
+# 扫描件里容易认混的数字（印章 / 日期戳盖得淡时：「08」读成「03」）
+_CONFUSABLE_DIGITS = {frozenset(p) for p in ("38", "08", "68", "98", "17", "56", "06", "09", "35")}
+
+
+def check_sign_date_ocr(sign_date: object, sign_src: object, approval_date: str | None, approval_src: str = "") -> ValidationCheck:
+    """
+    合同签约日期来自扫描识别，且与审批表「签约时间」只差一位、这一位又是容易认混的数字（3 / 8 等）：
+    疑似识别有误，只提醒律师看签章页原件（新案件核对：日期戳「2020-08-03」的 8 盖得淡，读成了 03）。
+    值不改：签约日期以签章页为准（确认单（六）第 4 题），两个日期本就常常不同，其他不同不提醒。
+    """
+    key = "sign_date_ocr"
+    related = ["contract_sign_date"]
+    contract = parse_date(sign_date)
+    approval = parse_date(approval_date)
+    src = str(sign_src or "")
+    if not contract or not approval or not ("OCR" in src or "扫描" in src):
+        return ValidationCheck(key, True, "签约日期不是扫描识别的，或审批表没有签约时间，不比对。", related, applicable=False)
+    a, b = ("{:04d}{:02d}{:02d}".format(*d) for d in (contract, approval))
+    diff = [(x, y) for x, y in zip(a, b) if x != y]
+    if len(diff) == 1 and frozenset(diff[0]) in _CONFUSABLE_DIGITS:
+        x, y = diff[0]
+        return ValidationCheck(
+            key, True,
+            f"合同签约日期 {contract[0]}年{contract[1]}月{contract[2]}日（扫描识别）与审批表签约时间"
+            f" {approval_date}（{approval_src or '审批表'}）只差一位数字（{x} / {y} 容易认混），疑似识别有误，"
+            "请看签章页原件核对。",
+            related, needs_review=True,
+        )
+    return ValidationCheck(key, True, "签约日期与审批表签约时间不是只差一位易混数字，不提醒。", related, applicable=False)
+
+
 def check_to_dict(check: ValidationCheck) -> dict[str, object]:
     """把 ValidationCheck 序列化为 API/前端可消费的字典（含派生的 is_conflict）。"""
     return {

@@ -617,6 +617,10 @@ def unread_by_budget(fields: dict, *keys: str) -> bool:
 
 _BREACH_UNREAD_SRC = f"{OCR_BUDGET_HINT}，合同违约条款未读到，不能认定合同未约定，请查看合同原件"
 
+# 合同全文读完、仍没有争议解决条款时，agent 节点写入争议条款出处的标记（`nodes._mark_dispute_absent`）。
+# 只有带这个标记才按「未约定」处理；出处为空不能证明合同读完了（#176 评审）
+DISPUTE_ABSENT_NOTE = "合同已全文读完，未见争议解决条款"
+
 # 违约条款原文里的具体计付标准（#175 评审第四轮）：分数（「万分之三」「十分之一」「百分之十」）、百分比
 # （「5%」「0.5‰」），或按期计付的金额（「每日支付100元」「每逾期一日壹佰元」）。只出现「利率」二字、欠款本金
 # 「100万元」、条款号、天数都不算
@@ -1862,7 +1866,7 @@ def _dispute_selection(fields: dict) -> tuple[str, bool]:
 def _jurisdiction(fields: dict) -> tuple[str, str | None, str]:
     """
     按争议条款判定管辖方式，返回 (方式, 法院辖区或法院名, 说明)。
-    方式：arbitration / strategic / named / plaintiff / defendant / sign_place / site / delivery / general。
+    方式：arbitration / strategic / named / plaintiff / defendant / sign_place / site / delivery / general / unread。
     """
     dispute, picked = _dispute_selection(fields)
     # 主合同把争议解决交给战略 / 框架合同，又没读到战略合同的争议条款（没上传或没识别出）：
@@ -1908,7 +1912,15 @@ def _jurisdiction(fields: dict) -> tuple[str, str | None, str]:
         if place:
             return "sign_place", None, f"合同签订地「{place}」未写明区县，请律师确定管辖法院"
         return "sign_place", None, "约定合同签订地法院，合同签订地未识别，请律师确定管辖法院"
-    if _SITE_RE.search(dispute) or not dispute:
+    if not dispute:
+        # 合同全文读完了也没有争议解决条款（agent 节点核对每份主合同的阅读覆盖后写入 DISPUTE_ABSENT_NOTE）= 未约定：
+        # 依民诉法第二十四条向被告住所地法院起诉（律师规则；新案件核对：系统原来按工程所在地推成了别的法院）
+        if DISPUTE_ABSENT_NOTE in str(node.get("src") or ""):
+            return ("general", *_defendant_seat_court(fields, "合同未约定争议解决方式"))
+        # 其余（页数上限、扫描件未识别、OCR 不可用、没有合同文件、出处为空）都证明不了合同已读完：
+        # 没读到 ≠ 没约定，交律师定管辖（#71；#176 评审）
+        return "unread", None, "合同争议解决条款未读到，不能认定未约定，请律师查看合同原件确定管辖法院"
+    if _SITE_RE.search(dispute):
         return _site_jurisdiction(fields, delivery=bool(_DELIVERY_RE.search(dispute)))
     return ("general", *_defendant_seat_court(fields, "未约定具体地点"))
 
@@ -2007,6 +2019,11 @@ def _place_desc(label: str, place: str | None) -> str:
     return f"{label}「{place}」未写明区县" if place else f"合同{label}未识别"
 
 
+def dispute_not_agreed(fields: dict) -> bool:
+    """合同读完了也没有争议解决条款（按未约定、依民诉法第二十四条处理）：起诉状不写「依据案涉合同……约定」那半句。"""
+    return not _str_value(fields, "dispute_clause_text") and _jurisdiction(fields)[0] == "general"
+
+
 def court_district_field(fields: dict) -> dict:
     mode, district, note = _jurisdiction(fields)
     if district is None:
@@ -2042,6 +2059,8 @@ def document_kind_field(fields: dict) -> dict:
         return {"value": None, "src": note}  # 诉讼还是仲裁要看战略合同（#126）
     if not _str_value(fields, "dispute_clause_text"):
         # 没读到争议条款时不能说「约定诉讼」（#126）
+        if mode == "general":
+            return {"value": "民事起诉状", "src": "合同全文读完未见争议解决条款，按未约定，民事起诉状，待核实"}
         return {"value": "民事起诉状", "src": "争议条款未识别，暂按民事起诉状，待核实"}
     return {"value": "民事起诉状", "src": "争议条款约定诉讼"}
 

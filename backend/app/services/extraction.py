@@ -179,6 +179,29 @@ def approval_unpaid_total(files: list[dict], unpaid_node: object = None) -> tupl
     return None
 
 
+# 审批表「签约时间」栏（「签约时间* 2020-08-03」「签约时间\n2020-08-03」）
+_APPROVAL_SIGN_RE = re.compile(r"签约时间[*＊:：\s|]*(\d{4})\s*[-./年]\s*(\d{1,2})\s*[-./月]\s*(\d{1,2})")
+
+
+def approval_sign_date(files: list[dict]) -> tuple[str, str] | None:
+    """
+    审批表「签约时间」（代码从原文读，不经模型）→ (「2020-08-03」, 出处)。只有一份审批表时才取：
+    多份时对应不上本案合同，不猜。
+    """
+    approvals = [f for f in files if f.get("identified_type") == "审批表"]
+    if len(approvals) != 1:
+        return None
+    f = approvals[0]
+    name = f.get("filename", "审批表")
+    for page in [*(f.get("pages") or []), {"page": None, "text": f.get("text") or ""}]:
+        m = _APPROVAL_SIGN_RE.search(str(page.get("text") or ""))
+        if m:
+            y, mo, d = m.groups()
+            where = f"第{page['page']}页" if page.get("page") else ""
+            return f"{y}-{int(mo):02d}-{int(d):02d}", f"《{name}》{where}「签约时间」"
+    return None
+
+
 def apply_dual_contract_amounts(fields: dict, files: list[dict]) -> None:
     """
     审批表同时列了买卖、安装两份合同时，按本案合同取对应一栏的合同总额 / 已付 / 未付 / 未付质保金，

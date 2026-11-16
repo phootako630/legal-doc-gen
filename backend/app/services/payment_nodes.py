@@ -38,6 +38,11 @@ _REMAINDER_BEFORE_RE = re.compile(
 )
 
 
+# 「合同价的3%为质保金(无息)。在保修期开始一年后……支付1.5%，在保修期满后……支付1.5%」：一款里先写质保金比例、
+# 再分几次付清，各次加起来等于该比例时，这一款按质保金比例算一期（新案件核对：只取到第一个 1.5%，合计到不了 100%）
+_REMAINDER_AS_RE = re.compile(rf"{_PCT}\s*(?:作为|为|作)\s*(?:质保金|保修金|保修款|尾款|余款)")
+
+
 # 「第一期：」「第2期，」这类分期标记
 _PERIOD_RE = re.compile(r"第[一二三四五六七八九十\d]{1,3}期[：:，,]")
 
@@ -78,6 +83,11 @@ def _ratio(piece: str) -> tuple[str, float] | None:
     m = _CUMULATIVE_RE.search(piece)
     if m:
         return "cum", float(m.group(1))
+    rem = _REMAINDER_AS_RE.search(piece)
+    if rem:
+        parts = [float(x.group(1)) for x in _STAGE_RE.finditer(piece, rem.end())]
+        if len(parts) > 1 and abs(sum(parts) - float(rem.group(1))) <= _TOL:
+            return "stage", float(rem.group(1))
     m = _STAGE_RE.search(piece)
     if not m:
         m = _REMAINDER_RE.search(piece) or _REMAINDER_BEFORE_RE.search(piece)

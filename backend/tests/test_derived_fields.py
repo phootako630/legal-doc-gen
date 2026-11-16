@@ -93,7 +93,10 @@ def test_interest_basis_uses_contract_rate():
 
 def test_court_district_marked_uncertain():
     fields = apply_derived_fields(
-        {"project_site": {"value": "江苏省南京市雨花台区某某二期项目", "src": "x"}}
+        {
+            "project_site": {"value": "江苏省南京市雨花台区某某二期项目", "src": "x"},
+            "dispute_clause_text": {"value": "向工程所在地人民法院提起诉讼", "src": "x"},
+        }
     )
     node = fields["court_district"]
     assert node["value"] == "南京市雨花台区"
@@ -113,7 +116,10 @@ def test_court_district_skipped_when_arbitration():
 
 def test_rederives_when_dependency_changes():
     fields = apply_derived_fields(
-        {"project_site": {"value": "江苏省南京市雨花台区", "src": "x"}}
+        {
+            "project_site": {"value": "江苏省南京市雨花台区", "src": "x"},
+            "dispute_clause_text": {"value": "向工程所在地人民法院提起诉讼", "src": "x"},
+        }
     )
     fields["project_site"] = {"value": "江苏省南京市鼓楼区", "src": "律师确认修改"}
     apply_derived_fields(fields)

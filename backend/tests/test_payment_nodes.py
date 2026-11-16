@@ -489,3 +489,23 @@ def test_undetermined_section_never_matches_whole_clause():
     assert "判断不出本案诉哪一段" in out["payment_cite_location"]["src"]
     progress = next(c for c in run_all_checks(out) if c.key == "payment_progress")
     assert progress.applicable is False
+
+
+def test_retention_paid_in_two_halves_counts_as_one_stage():
+    # 末期「合同价的3%为质保金……一年后支付1.5%，期满后支付1.5%」只用逗号分隔：按 3% 算一期，累计到 100%
+    # （新案件核对：原来只取到第一个 1.5%，合计 98.5% 解析失败，引用退回整条条款）
+    from app.services.payment_nodes import parse_payment_stages
+
+    clause = (
+        "5.2.1 合同签订后十五天内甲方支付供货总价的5%；5.2.2 排产前十五天内甲方支付供货总价的15%；"
+        "5.2.3 电梯运达现场验收后十五日内甲方支付合同总价的60%（分批次履行时按当批货物的60%支付）；"
+        "5.2.4 验收付款，付款额为合同价的17%；"
+        "5.2.5 最终付款，合同价的3%为质保金(无息)。在保修期开始一年后的十五天内，甲方支付供货总价的1.5%，"
+        "在保修期满后的十五天内，甲方支付供货总价的1.5%。"
+    )
+    stages = parse_payment_stages(clause)
+    assert [(s.no, s.end) for s in stages] == [
+        ("5.2.1", 5.0), ("5.2.2", 20.0), ("5.2.3", 80.0), ("5.2.4", 97.0), ("5.2.5", 100.0)
+    ]
+    # 分期加起来不等于质保金比例时不合并（仍取第一次支付的比例）
+    assert parse_payment_stages(clause.replace("期满后的十五天内，甲方支付供货总价的1.5%", "期满后的十五天内，甲方支付供货总价的2%")) == []
