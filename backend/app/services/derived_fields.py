@@ -30,6 +30,7 @@ from app.services.extraction import RATE_MARK_RE, SELLER_RATE_DROPPED_NOTE
 from app.services.payment_nodes import (
     PaymentStage,
     case_payment_section,
+    item_numbers,
     match_cumulative,
     split_payment_sections,
     owed_stages,
@@ -2237,14 +2238,38 @@ def _case_payment(fields: dict) -> tuple[str | None, str | None]:
 _LOC_NOTE_RE = re.compile(r"\s*[（(](?![一二三四五六七八九十\d]{1,3}[）)])[^（()）]*[）)]\s*$")
 
 
+_LOC_SUB_RE = re.compile(r"^第\s*(\d{1,2}[.．]\d{1,2})\s*条")
+
+
+def _concatenated_parent(fields: dict) -> str | None:
+    """
+    「3.1 设备合同付款方式」下各项印成「3.11、3.12、3.13、3.14」（父编号直接接项号，律师新案件核对）：
+    付款条款位置是「第3.1条」、条款里的编号恰好依次是 3.11 … 3.1n（n ≤ 9）时返回父编号「3.1」，
+    起诉状按律师写法引成「第3.1.4条」（确认单（五）第 17 题）；否则返回 None，照原文编号写。
+    """
+    m = _LOC_SUB_RE.match((_str_value(fields, "payment_clause_location") or "").strip())
+    if not m:
+        return None
+    parent = m.group(1).replace("．", ".")
+    nos = item_numbers(_case_payment(fields)[0])
+    if not 2 <= len(nos) <= 9 or nos != [f"{parent}{i}" for i in range(1, len(nos) + 1)]:
+        return None
+    return parent
+
+
 def _stage_label(fields: dict, no: str) -> str:
     """
     节点编号 → 起诉状写法：多级编号写「第7.6条」；一级编号挂在条款位置后（「第二十八章第1项」）；
-    一体化合同分段时带上段名（「第六条第（二）款安装付款方式第4项」「安装付款方式第6.2条」，与设备段的同号节点区分）。
+    一体化合同分段时带上段名（「第六条第（二）款安装付款方式第4项」「安装付款方式第6.2条」，与设备段的同号节点区分）；
+    父编号直接接项号的（「3.1」下的「3.14」）写成「第3.1.4条」。
     """
     part = _case_payment(fields)[1]
     section = f"{part}付款方式" if part else ""
     if "." in no or "．" in no:
+        parent = _concatenated_parent(fields)
+        flat = no.replace("．", ".")
+        if parent and flat.startswith(parent) and flat != parent:
+            return f"{section}第{parent}.{flat[len(parent):]}条"
         return f"{section}第{no}条"
     loc = _str_value(fields, "payment_clause_location") or ""
     while _LOC_NOTE_RE.search(loc):
@@ -2339,9 +2364,14 @@ def payment_cite_location_field(fields: dict) -> dict | None:
                 )
             return node
         return _payment_unread_by_budget(fields)
+    src = "按律师规则：欠款对应的付款节点"
+    parent = _concatenated_parent(fields)
+    if parent:
+        raw = "、".join(dict.fromkeys(s.no for s in owed if s.no))
+        src += f"（合同原文编号为「{raw}」，系第{parent}条下的分项，按律师写法引为第{parent}.X条）"
     return {
         "value": "、".join(labels),
-        "src": "按律师规则：欠款对应的付款节点" + _source_risk_note(fields, "payment_clause_text", "付款条款"),
+        "src": src + _source_risk_note(fields, "payment_clause_text", "付款条款"),
     }
 
 

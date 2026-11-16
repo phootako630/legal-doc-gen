@@ -509,3 +509,39 @@ def test_retention_paid_in_two_halves_counts_as_one_stage():
     ]
     # 分期加起来不等于质保金比例时不合并（仍取第一次支付的比例）
     assert parse_payment_stages(clause.replace("期满后的十五天内，甲方支付供货总价的1.5%", "期满后的十五天内，甲方支付供货总价的2%")) == []
+
+
+# ── 父编号直接接项号（「3.1」下印成 3.11 … 3.14）：按律师写法引成「第3.1.4条」（确认单（五）第 17 题）──────
+CONCAT_CLAUSE = (
+    "3.11 排产款：排产前甲方向乙方支付本批设备总金额的20%；"
+    "3.12 发货款：交货前甲方向乙方支付本批设备总金额的50%；"
+    "3.13 验收款：验收合格后甲方向乙方支付本批设备总金额的20%；"
+    "3.14 结算款：办理结算完成后甲方向乙方支付至设备结算金额的100%。"
+)
+
+
+def _concat_case(clause, location):
+    fields = _case(clause, "1,000,000.00", "900,000.00", "100,000.00")
+    fields["payment_clause_location"] = {"value": location, "src": "《虚构设备合同.pdf》"}
+    return apply_derived_fields(fields)
+
+
+def test_items_numbered_by_concatenation_cite_as_third_level():
+    fields = _concat_case(CONCAT_CLAUSE, "第3.1条")
+    assert fields["payment_cite_location"]["value"] == "第3.1.4条"
+    assert "合同原文编号为「3.14」" in fields["payment_cite_location"]["src"]
+    # 引用原文照抄，不改编号
+    assert "办理结算完成后" in fields["payment_cite_text"]["value"]
+
+
+def test_concatenation_needs_parent_location_and_consecutive_numbers():
+    # 条款位置不是「第3.1条」：照原文编号写
+    assert _concat_case(CONCAT_CLAUSE, "第三条")["payment_cite_location"]["value"] == "第3.14条"
+    # 编号不从 3.11 起连续（真实的第 3 章第 12、13 条）：照原文编号写
+    clause = (
+        "3.12 交货前甲方向乙方支付合同总价的90%；"
+        "3.13 结算后甲方向乙方支付至合同总价的100%。"
+    )
+    fields = _case(clause, "1,000,000.00", "900,000.00", "100,000.00")
+    fields["payment_clause_location"] = {"value": "第3.1条", "src": "《虚构设备合同.pdf》"}
+    assert apply_derived_fields(fields)["payment_cite_location"]["value"] == "第3.13条"
