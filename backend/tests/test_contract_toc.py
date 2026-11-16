@@ -282,3 +282,41 @@ def test_breach_clause_with_fixed_amount_does_not_get_lpr():
         }
         basis = interest_basis_field(f)
         assert basis["value"] != LPR_INTEREST_BASIS and basis["value"] is None, clause
+
+
+def test_strategic_contract_must_be_fully_read_even_with_toc(monkeypatch):
+    # 战略合同有目录、目录估出的条款页都在已读的前 10 页，但全文 20 页没读完：仍不下「未约定」（#175 复审）
+    from app.services.derived_fields import OCR_BUDGET_HINT
+
+    fid = file_store.put(b"%PDF-strategic-toc")
+    strategic = {"filename": "战略合作协议.pdf", "identified_type": "战略合同", "is_scanned": True, "text": "",
+                 "pages": [], "page_count": 20, "file_id": fid}
+    state = _budget_hit_state(230)
+    state["files"].append(strategic)
+    main_ocr = _long_contract_ocr()
+    toc = "目录\n第一条 合作范围 …… 3\n第二条 合同条款 …… 4\n第三条 其他 …… 6"
+
+    async def fake(pdf, n):
+        if pdf == b"%PDF-strategic-toc":
+            return toc if n == 2 else f"战略合作协议第{n}页"
+        return await main_ocr(pdf, n)
+
+    monkeypatch.setattr(nodes_mod, "ocr_page", AsyncMock(side_effect=fake))
+    monkeypatch.setattr(nodes_mod, "chat", AsyncMock(return_value=_CLAUSES))
+    out = asyncio.run(nodes_mod.ocr_augment_node(state))
+    assert OCR_BUDGET_HINT in out["extracted_fields"]["breach_interest_rate_text"]["src"]
+
+
+def test_breach_clause_without_standard_gets_lpr_marked_for_review():
+    # 原文没有计付标准（「具体标准另行协商」「逾期超过30天」只有天数 / 条款号）：按 LPR 常规话术、标待核实，
+    # 不虚称「写有计付标准」（#175 复审）
+    from app.services.derived_fields import LPR_INTEREST_BASIS, OCR_BUDGET_HINT, interest_basis_field
+
+    for clause in ("甲方逾期付款应支付利息，具体标准另行协商", "第11条 甲方逾期超过30天付款的，应支付利息"):
+        f = {
+            "breach_clause_text": {"value": clause, "src": "《合同.pdf》"},
+            "breach_interest_rate_text": {"value": None, "src": f"{OCR_BUDGET_HINT}，合同可能未读完"},
+        }
+        basis = interest_basis_field(f)
+        assert basis["value"] == LPR_INTEREST_BASIS and "待核实" in basis["src"], clause
+        assert "写有计付标准" not in basis["src"]
