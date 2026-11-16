@@ -320,3 +320,24 @@ def test_breach_clause_without_standard_gets_lpr_marked_for_review():
         basis = interest_basis_field(f)
         assert basis["value"] == LPR_INTEREST_BASIS and "待核实" in basis["src"], clause
         assert "写有计付标准" not in basis["src"]
+
+
+def test_breach_clause_standard_detected_by_concrete_values():
+    # 只认具体计付数值：中文分数、百分比、按期计付金额 → 交律师；本金金额、只提「利率」、条款号 / 天数 → LPR 待核实。
+    # 出处都带原文所在文件页码（#175 评审第四轮）
+    from app.services.derived_fields import LPR_INTEREST_BASIS, OCR_BUDGET_HINT, interest_basis_field
+
+    def basis(clause: str) -> dict:
+        return interest_basis_field({
+            "breach_clause_text": {"value": clause, "src": "《虚构合同.pdf》第11页", "page": 11},
+            "breach_interest_rate_text": {"value": None, "src": f"{OCR_BUDGET_HINT}，合同可能未读完"},
+        })
+
+    for clause in ("甲方逾期付款的，按未付款项的十分之一支付利息", "甲方逾期付款的，每日支付100元利息",
+                   "甲方逾期付款，按每逾期一日壹佰元支付利息", "甲方逾期付款按日0.5‰计付利息"):
+        b = basis(clause)
+        assert b["value"] is None and "具体计付标准" in b["src"] and "《虚构合同.pdf》第11页" in b["src"], clause
+    for clause in ("欠付货款100万元，甲方逾期付款应支付利息，具体标准另行协商", "甲方逾期付款的，利率由双方另行协商",
+                   "第11条 甲方逾期超过30天付款的，应支付利息"):
+        b = basis(clause)
+        assert b["value"] == LPR_INTEREST_BASIS and "待核实" in b["src"] and "《虚构合同.pdf》第11页" in b["src"], clause
