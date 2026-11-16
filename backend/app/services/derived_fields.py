@@ -1862,7 +1862,7 @@ def _dispute_selection(fields: dict) -> tuple[str, bool]:
 def _jurisdiction(fields: dict) -> tuple[str, str | None, str]:
     """
     按争议条款判定管辖方式，返回 (方式, 法院辖区或法院名, 说明)。
-    方式：arbitration / strategic / named / plaintiff / defendant / sign_place / site / delivery / general。
+    方式：arbitration / strategic / named / plaintiff / defendant / sign_place / site / delivery / general / unread。
     """
     dispute, picked = _dispute_selection(fields)
     # 主合同把争议解决交给战略 / 框架合同，又没读到战略合同的争议条款（没上传或没识别出）：
@@ -1908,7 +1908,15 @@ def _jurisdiction(fields: dict) -> tuple[str, str | None, str]:
         if place:
             return "sign_place", None, f"合同签订地「{place}」未写明区县，请律师确定管辖法院"
         return "sign_place", None, "约定合同签订地法院，合同签订地未识别，请律师确定管辖法院"
-    if _SITE_RE.search(dispute) or not dispute:
+    if not dispute:
+        # 合同没读完（页数上限）或扫描件没识别出来：没读到 ≠ 没约定，交律师定管辖（#71）
+        src = str(node.get("src") or "")
+        if OCR_BUDGET_HINT in src or "未识别" in src:
+            return "unread", None, "合同争议解决条款未读到，不能认定未约定，请律师查看合同原件确定管辖法院"
+        # 合同读完了也没有争议解决条款 = 未约定：依民诉法第二十四条向被告住所地法院起诉（律师规则；
+        # 新案件核对：安装合同没有争议条款，律师按被告住所地起诉，系统原来按工程所在地推成了别的法院）
+        return ("general", *_defendant_seat_court(fields, "合同未约定争议解决方式"))
+    if _SITE_RE.search(dispute):
         return _site_jurisdiction(fields, delivery=bool(_DELIVERY_RE.search(dispute)))
     return ("general", *_defendant_seat_court(fields, "未约定具体地点"))
 
@@ -2005,6 +2013,11 @@ def _site_jurisdiction(fields: dict, delivery: bool) -> tuple[str, str | None, s
 
 def _place_desc(label: str, place: str | None) -> str:
     return f"{label}「{place}」未写明区县" if place else f"合同{label}未识别"
+
+
+def dispute_not_agreed(fields: dict) -> bool:
+    """合同读完了也没有争议解决条款（按未约定、依民诉法第二十四条处理）：起诉状不写「依据案涉合同……约定」那半句。"""
+    return not _str_value(fields, "dispute_clause_text") and _jurisdiction(fields)[0] == "general"
 
 
 def court_district_field(fields: dict) -> dict:

@@ -149,3 +149,34 @@ def test_picked_institution_not_swallow_leading_words(extracted):
         "按以下方式1解决：(1)争议应由北京某某仲裁委员会仲裁；(2)向工程所在地法院起诉。", extracted
     )
     assert f["addressee"]["value"] == "北京某某仲裁委员会"
+
+
+# ── 合同没有争议条款：按未约定，依民诉法第二十四条向被告住所地法院起诉（新案件核对）─────────────────
+def test_no_dispute_clause_goes_to_defendant_seat_not_site():
+    from app.services.complaint_renderer import render_complaint
+    from app.services.derived_fields import apply_derived_fields
+
+    fields = apply_derived_fields({
+        "project_site": {"value": "上海市杨浦区虚构路1号", "src": "《合同.pdf》"},
+        "defendant_address": {"value": "广州市海珠区虚构中路1号", "src": "企查查"},
+        "dispute_clause_text": {"value": None, "src": ""},
+    })
+    assert fields["court_district"]["value"] == "广州市海珠区"
+    assert "未约定争议解决方式" in fields["court_district"]["src"]
+    assert "第二十四条" in fields["jurisdiction_text"]["value"]
+    text = render_complaint(fields)
+    assert "依据案涉合同【待补充】约定" not in text
+    assert "第二十四条" in text and "广州市海珠区人民法院提起诉讼" in text
+
+
+def test_unread_dispute_clause_is_left_to_lawyer():
+    from app.services.derived_fields import OCR_BUDGET_HINT, apply_derived_fields
+
+    for src in (f"{OCR_BUDGET_HINT}，合同可能未读完，未读到此条款，请查看合同原件", "《合同.pdf》扫描件暂未识别"):
+        fields = apply_derived_fields({
+            "project_site": {"value": "上海市杨浦区虚构路1号", "src": "《合同.pdf》"},
+            "defendant_address": {"value": "广州市海珠区虚构中路1号", "src": "企查查"},
+            "dispute_clause_text": {"value": None, "src": src},
+        })
+        node = fields["court_district"]
+        assert node["value"] is None and "不能认定未约定" in node["src"], src

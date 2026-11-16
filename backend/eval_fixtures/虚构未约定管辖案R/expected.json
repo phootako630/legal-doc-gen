@@ -1,0 +1,22 @@
+{
+  "title": "虚构未约定管辖案 R（合同没有争议解决条款 → 依民诉法第二十四条向被告住所地法院起诉，不按工程所在地）",
+  "decisions": {},
+  "fields": {
+    "defendant_name": "广州虚构建设有限公司",
+    "contract_sign_date": "2024年4月10日",
+    "total_amount": 70000,
+    "paid_amount": 35000,
+    "unpaid_amount": 35000,
+    "elevator_qty": 2,
+    "acceptance_latest_date": "2024年10月18日",
+    "payable_ratio": "100%",
+    "interest_term": "逾期付款利息",
+    "document_kind": "民事起诉状",
+    "court_district": "广州市海珠区",
+    "jurisdiction_text": {
+      "value": "第二十四条",
+      "match": "contains"
+    },
+    "addressee": "广州市海珠区人民法院"
+  }
+}

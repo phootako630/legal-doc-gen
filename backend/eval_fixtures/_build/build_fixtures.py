@@ -1064,6 +1064,54 @@ def case_toc_breach_not_agreed() -> None:
         })
 
 
+def case_no_dispute_clause() -> None:
+    """合同没有争议解决条款（新案件核对）：按未约定、依民诉法第二十四条向被告住所地法院起诉，不按工程所在地推定；
+    起诉状不写「依据案涉合同……约定」那半句。工程在上海市杨浦区，审批表买方地址在广州市海珠区 → 广州市海珠区人民法院。"""
+    case = "虚构未约定管辖案R"
+    os.makedirs(os.path.join(ROOT, case, "materials"), exist_ok=True)
+    _approval(case, "AH9000018广州虚构建设有限公司诉讼审批表.pdf", {
+        "serial": "SS2099-000118", "title": "AH9000018广州虚构建设有限公司虚构中心项目",
+        "contract_no": "AH9000018", "branch_path": "集团/营销网络/梧桐分公司",
+        "buyer": "广州虚构建设有限公司", "contact": "虚构子", "contact_phone": "13800000018",
+        "buyer_address": "广州市海珠区虚构中路18号", "site": "上海市杨浦区虚构路18号虚构中心",
+        "contract_type": "安装合同", "amount_label": "安装", "sign_date": "2024-04-08", "qty": "2", "qty_actual": "2",
+        "total": "70,000.00", "paid": "35,000.00", "unpaid": "35,000.00",
+        "gov_accept": "2024-10-18", "last_pay_date": "2024-08-01", "reason": "电梯已验收，买方未支付验收款。",
+    })
+    _text_pdf(os.path.join(ROOT, case, "materials", "上海虚构中心项目电梯安装合同.pdf"), [
+        """电梯安装合同
+
+合同编号：AH9000018
+甲方：广州虚构建设有限公司
+乙方：日立电梯（中国）有限公司梧桐分公司
+
+一、总则
+工程地点：上海市杨浦区虚构路18号。乙方负责安装电梯2台。
+
+二、合同价格及付款方式
+2.1 本合同安装总价为人民币70,000元（大写：柒万元整）。
+2.2 电梯进场后10日内，甲方支付合同价款的50%；电梯经政府验收合格后15日内，甲方支付至合同价款的100%。
+
+三、违约责任
+3.1 乙方未按约定期限竣工的，应承担甲方因此造成的直接损失。
+
+四、其他
+4.1 本合同一式肆份，甲乙双方各执贰份。
+
+（以下无正文）
+甲方（盖章）：广州虚构建设有限公司
+乙方（盖章）：日立电梯（中国）有限公司梧桐分公司
+签订日期：2024年4月10日""",
+    ])
+    for i, code in enumerate(["31103101202400000181", "31103101202400000182"], start=1):
+        _report(case, f"电梯监督检验报告{i}.pdf", {
+            "report_no": f"XG-DTJ-2024-92{i:02d}", "user": "广州虚构建设有限公司",
+            "installer": "日立电梯（中国）有限公司梧桐分公司", "device_code": code,
+            "inspect_date": "2024年10月11日", "approve_date": "2024年10月18日",
+            "site": "上海市杨浦区虚构路18号虚构中心", "model": "HGP",
+        })
+
+
 if __name__ == "__main__":
     case_install_scanned()
     case_sales_arbitration()
@@ -1081,4 +1129,5 @@ if __name__ == "__main__":
     case_payment_sections()
     case_toc_guided()
     case_toc_breach_not_agreed()
+    case_no_dispute_clause()
     print("已生成：", ", ".join(sorted(n for n in os.listdir(ROOT) if not n.startswith(("_", ".")) and os.path.isdir(os.path.join(ROOT, n)))))
