@@ -174,3 +174,170 @@ def test_start_toc_reads_rest_of_target_entry_before_other_parts():
     assert 94 in order
     assert order.index(12) < order.index(85) < order.index(94)
     assert 50 not in order and 120 not in order
+
+
+# ── 按目录读完条款部分仍没有违约条款：按合同未约定写逾期付款利息 + LPR，标待核实（用户选定，2026-11-16）──
+def _budget_hit_state(page_count: int) -> dict:
+    state = _state(page_count)
+    # 签约日期还是审批表的：要找签章页，找不到就一直读到页数上限
+    state["extracted_fields"]["contract_sign_date"] = {"value": "2021年5月28日", "src": "《审批表.pdf》签约时间栏"}
+    return state
+
+
+def test_toc_sections_read_breach_missing_is_treated_as_not_agreed(monkeypatch):
+    from app.services.derived_fields import (
+        LPR_INTEREST_BASIS,
+        OCR_BUDGET_HINT,
+        interest_basis_field,
+        interest_term_field,
+    )
+
+    monkeypatch.setattr(nodes_mod, "ocr_page", _long_contract_ocr())
+    monkeypatch.setattr(nodes_mod, "chat", AsyncMock(return_value=_CLAUSES))
+    out = asyncio.run(nodes_mod.ocr_augment_node(_budget_hit_state(230)))
+    f = out["extracted_fields"]
+    src = f["breach_interest_rate_text"]["src"]
+    assert "已读完条款部分" in src and OCR_BUDGET_HINT not in src and "待核实" in src
+    term, basis = interest_term_field(f), interest_basis_field(f)
+    assert term["value"] == "逾期付款利息" and "待核实" in term["src"]
+    assert basis["value"] == LPR_INTEREST_BASIS and "待核实" in basis["src"]
+
+
+def test_budget_hit_without_toc_still_leaves_interest_to_lawyer(monkeypatch):
+    # 没有目录可依：页数用完时仍不能认定合同未约定，利息留给律师（#71 原规则不变）
+    from app.services.derived_fields import OCR_BUDGET_HINT, interest_term_field
+
+    async def fake(_pdf, n):
+        return _PAGE_PAY if n == 3 else ("19. 争议：向工程所在地人民法院提起诉讼。" if n == 4 else f"第{n}页正文")
+
+    monkeypatch.setattr(nodes_mod, "ocr_page", AsyncMock(side_effect=fake))
+    monkeypatch.setattr(nodes_mod, "chat", AsyncMock(return_value=_CLAUSES))
+    out = asyncio.run(nodes_mod.ocr_augment_node(_budget_hit_state(230)))
+    f = out["extracted_fields"]
+    assert OCR_BUDGET_HINT in f["breach_interest_rate_text"]["src"]
+    assert interest_term_field(f)["value"] is None
+
+
+def test_other_main_contract_unread_keeps_budget_hint(monkeypatch):
+    # 两份扫描主合同：A 按目录读完条款部分，B 没目录、没读完；不能替 B 断定「未约定」，仍写页数上限提示（#175 评审）
+    from app.services.derived_fields import OCR_BUDGET_HINT, interest_term_field
+
+    fid = file_store.put(b"%PDF-fake-bytes")
+    other = {"filename": "补充安装合同.pdf", "identified_type": "合同", "is_scanned": True, "text": "",
+             "pages": [], "page_count": 120, "file_id": fid}
+    state = _budget_hit_state(230)
+    state["files"].append(other)
+    monkeypatch.setattr(nodes_mod, "ocr_page", _long_contract_ocr())
+    monkeypatch.setattr(nodes_mod, "chat", AsyncMock(return_value=_CLAUSES))
+    out = asyncio.run(nodes_mod.ocr_augment_node(state))
+    f = out["extracted_fields"]
+    assert OCR_BUDGET_HINT in f["breach_interest_rate_text"]["src"]
+    assert interest_term_field(f)["value"] is None
+
+
+def test_breach_clause_with_rate_is_not_treated_as_not_agreed(monkeypatch):
+    # 违约条款原文已抽到、写着利率，只是利率字段空着：不写「未见违约条款」，也不套 LPR（#175 评审）
+    from app.services.derived_fields import LPR_INTEREST_BASIS, interest_basis_field
+
+    clauses = dict(_CLAUSES)
+    clauses["breach_clause_text"] = {"value": "甲方逾期付款的，应按日利率万分之二支付利息", "src": "《安装合同.pdf》"}
+    monkeypatch.setattr(nodes_mod, "ocr_page", _long_contract_ocr())
+    monkeypatch.setattr(nodes_mod, "chat", AsyncMock(return_value=clauses))
+    out = asyncio.run(nodes_mod.ocr_augment_node(_budget_hit_state(230)))
+    f = out["extracted_fields"]
+    assert "已读完条款部分" not in str(f["breach_interest_rate_text"].get("src"))
+    basis = interest_basis_field(f)
+    assert basis["value"] != LPR_INTEREST_BASIS and basis["value"] is None
+
+
+def test_unfinished_strategic_contract_keeps_budget_hint(monkeypatch):
+    # 主合同按目录读完条款部分，但扫描的战略合同 20 页只读了前 10 页：战略合同也可能补出违约条款，不下「未约定」（#175 复审）
+    from app.services.derived_fields import OCR_BUDGET_HINT
+
+    fid = file_store.put(b"%PDF-strategic-bytes")
+    strategic = {"filename": "战略合作协议.pdf", "identified_type": "战略合同", "is_scanned": True, "text": "",
+                 "pages": [], "page_count": 20, "file_id": fid}
+    state = _budget_hit_state(230)
+    state["files"].append(strategic)
+    main_ocr = _long_contract_ocr()
+
+    async def fake(pdf, n):
+        # 战略合同没有目录，每页都是正文
+        return f"战略合作协议第{n}页" if pdf == b"%PDF-strategic-bytes" else await main_ocr(pdf, n)
+
+    monkeypatch.setattr(nodes_mod, "ocr_page", AsyncMock(side_effect=fake))
+    monkeypatch.setattr(nodes_mod, "chat", AsyncMock(return_value=_CLAUSES))
+    out = asyncio.run(nodes_mod.ocr_augment_node(state))
+    assert OCR_BUDGET_HINT in out["extracted_fields"]["breach_interest_rate_text"]["src"]
+
+
+def test_breach_clause_with_fixed_amount_does_not_get_lpr():
+    # 违约条款原文写「每日支付100元利息」、利率字段空着且带页数上限提示：不套 LPR，交律师（#175 复审）
+    from app.services.derived_fields import LPR_INTEREST_BASIS, OCR_BUDGET_HINT, interest_basis_field
+
+    for clause in ("甲方逾期付款的，每日支付100元利息", "甲方逾期付款的，每日支付壹佰元利息"):
+        f = {
+            "breach_clause_text": {"value": clause, "src": "《合同.pdf》"},
+            "breach_interest_rate_text": {"value": None, "src": f"{OCR_BUDGET_HINT}，合同可能未读完"},
+        }
+        basis = interest_basis_field(f)
+        assert basis["value"] != LPR_INTEREST_BASIS and basis["value"] is None, clause
+
+
+def test_strategic_contract_must_be_fully_read_even_with_toc(monkeypatch):
+    # 战略合同有目录、目录估出的条款页都在已读的前 10 页，但全文 20 页没读完：仍不下「未约定」（#175 复审）
+    from app.services.derived_fields import OCR_BUDGET_HINT
+
+    fid = file_store.put(b"%PDF-strategic-toc")
+    strategic = {"filename": "战略合作协议.pdf", "identified_type": "战略合同", "is_scanned": True, "text": "",
+                 "pages": [], "page_count": 20, "file_id": fid}
+    state = _budget_hit_state(230)
+    state["files"].append(strategic)
+    main_ocr = _long_contract_ocr()
+    toc = "目录\n第一条 合作范围 …… 3\n第二条 合同条款 …… 4\n第三条 其他 …… 6"
+
+    async def fake(pdf, n):
+        if pdf == b"%PDF-strategic-toc":
+            return toc if n == 2 else f"战略合作协议第{n}页"
+        return await main_ocr(pdf, n)
+
+    monkeypatch.setattr(nodes_mod, "ocr_page", AsyncMock(side_effect=fake))
+    monkeypatch.setattr(nodes_mod, "chat", AsyncMock(return_value=_CLAUSES))
+    out = asyncio.run(nodes_mod.ocr_augment_node(state))
+    assert OCR_BUDGET_HINT in out["extracted_fields"]["breach_interest_rate_text"]["src"]
+
+
+def test_breach_clause_without_standard_gets_lpr_marked_for_review():
+    # 原文没有计付标准（「具体标准另行协商」「逾期超过30天」只有天数 / 条款号）：按 LPR 常规话术、标待核实，
+    # 不虚称「写有计付标准」（#175 复审）
+    from app.services.derived_fields import LPR_INTEREST_BASIS, OCR_BUDGET_HINT, interest_basis_field
+
+    for clause in ("甲方逾期付款应支付利息，具体标准另行协商", "第11条 甲方逾期超过30天付款的，应支付利息"):
+        f = {
+            "breach_clause_text": {"value": clause, "src": "《合同.pdf》"},
+            "breach_interest_rate_text": {"value": None, "src": f"{OCR_BUDGET_HINT}，合同可能未读完"},
+        }
+        basis = interest_basis_field(f)
+        assert basis["value"] == LPR_INTEREST_BASIS and "待核实" in basis["src"], clause
+        assert "写有计付标准" not in basis["src"]
+
+
+def test_breach_clause_standard_detected_by_concrete_values():
+    # 只认具体计付数值：中文分数、百分比、按期计付金额 → 交律师；本金金额、只提「利率」、条款号 / 天数 → LPR 待核实。
+    # 出处都带原文所在文件页码（#175 评审第四轮）
+    from app.services.derived_fields import LPR_INTEREST_BASIS, OCR_BUDGET_HINT, interest_basis_field
+
+    def basis(clause: str) -> dict:
+        return interest_basis_field({
+            "breach_clause_text": {"value": clause, "src": "《虚构合同.pdf》第11页", "page": 11},
+            "breach_interest_rate_text": {"value": None, "src": f"{OCR_BUDGET_HINT}，合同可能未读完"},
+        })
+
+    for clause in ("甲方逾期付款的，按未付款项的十分之一支付利息", "甲方逾期付款的，每日支付100元利息",
+                   "甲方逾期付款，按每逾期一日壹佰元支付利息", "甲方逾期付款按日0.5‰计付利息"):
+        b = basis(clause)
+        assert b["value"] is None and "具体计付标准" in b["src"] and "《虚构合同.pdf》第11页" in b["src"], clause
+    for clause in ("欠付货款100万元，甲方逾期付款应支付利息，具体标准另行协商", "甲方逾期付款的，利率由双方另行协商",
+                   "第11条 甲方逾期超过30天付款的，应支付利息"):
+        b = basis(clause)
+        assert b["value"] == LPR_INTEREST_BASIS and "待核实" in b["src"] and "《虚构合同.pdf》第11页" in b["src"], clause

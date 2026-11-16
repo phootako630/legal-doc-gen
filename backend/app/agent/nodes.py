@@ -62,6 +62,7 @@ from app.services.extraction import (
 )
 from app.services.derived_fields import (
     OCR_BUDGET_HINT,
+    TOC_CLAUSES_READ_NOTE,
     apply_derived_fields,
     needs_warranty_period,
     parse_percent,
@@ -677,7 +678,7 @@ async def ocr_augment_node(state: GraphState) -> dict:
         enrich_provenance(fields, files)
         apply_strategic_guards(fields, files)  # 按锚定后的实际来源再把关
     if hit_limit:
-        _mark_ocr_budget_hit(fields, missing, need_warranty)
+        _mark_ocr_budget_hit(fields, missing, need_warranty, _all_main_clause_sections_read(contracts))
     if not did_ocr and not hit_limit:
         return {}
     update: dict = {"extracted_fields": fields, "ocr_pages_used": used}
@@ -686,10 +687,44 @@ async def ocr_augment_node(state: GraphState) -> dict:
     return update
 
 
-def _mark_ocr_budget_hit(fields: dict, missing: set[str], need_warranty: bool) -> None:
+def _toc_clause_sections_read(f: dict) -> bool:
+    """扫描合同有目录，且按目录估出的条款部分（合同书 / 专用条件 / 通用条件等）各页都已有文字。"""
+    pages = f.get("pages") or []
+    total = f.get("page_count") or 0
+    if not f.get("is_scanned") or not total:
+        return False
+    priority = toc_priority_pages(pages, total, {"breach"})
+    known = {p["page"] for p in pages if (p.get("text") or "").strip()}
+    return bool(priority) and all(n in known for n in priority)
+
+
+def _all_main_clause_sections_read(contracts: list[dict]) -> bool:
+    """
+    每份扫描主合同要么全文都读到了，要么按目录估出的条款部分都读到了，且至少一份是按目录读完的；扫描的战略合同
+    也都全文读完了：只有这样才能说「条款部分里没有违约条款」。有一份没读完（又没有目录可依），就不能替它下结论（#175 评审）。
+    """
+    main = [f for f in contracts if f.get("identified_type") != "战略合同"]
+    toc = [_toc_clause_sections_read(f) for f in main]
+    if not (any(toc) and all(t or _fully_read(f) for f, t in zip(main, toc))):
+        return False
+    # 战略 / 框架合同也可能补出违约条款（STRATEGIC_CLAUSE_KEYS）：扫描件须全文读完才下结论（#175 复审）
+    strategic = [f for f in contracts if f.get("identified_type") == "战略合同" and f.get("is_scanned")]
+    return all(_fully_read(f) for f in strategic)
+
+
+def _fully_read(f: dict) -> bool:
+    """扫描合同的每一页都已有文字。"""
+    total = f.get("page_count") or 0
+    known = {p["page"] for p in f.get("pages") or [] if (p.get("text") or "").strip()}
+    return bool(total) and all(n in known for n in range(1, total + 1))
+
+
+def _mark_ocr_budget_hit(fields: dict, missing: set[str], need_warranty: bool, toc_read: bool = False) -> None:
     """
     OCR 页数上限用完、目标条款仍缺失：出处写明原因（审核页可见，起诉状【待补充】后也带上），
     不让律师误以为合同没有约定（#71；CODING_STANDARDS.md「LLM、OCR 与解析出错」）。
+    例外：每份主合同都按目录读完了条款部分（toc_read）、违约条款原文和利率都没读到时，违约条款出处写明这一点、
+    不带页数上限提示，派生规则按合同未约定写逾期付款利息 + LPR 并标待核实（用户选定，2026-11-16）。
     """
     keys = [_CLAUSE_INDICATOR[c] for c in missing]
     if need_warranty:
@@ -699,7 +734,11 @@ def _mark_ocr_budget_hit(fields: dict, missing: set[str], need_warranty: bool) -
             continue
         node = dict(fields.get(key) or {})
         node["value"] = None
-        node["src"] = f"{OCR_BUDGET_HINT}，合同可能未读完，未读到此条款，请查看合同原件"
+        # 违约条款原文已抽到（只差利率）时不是「没有违约条款」，照旧交律师核对（#175 评审）
+        if toc_read and key == _CLAUSE_INDICATOR["breach"] and _is_missing(fields, "breach_clause_text"):
+            node["src"] = f"{TOC_CLAUSES_READ_NOTE}，未见甲方逾期付款违约条款；合同其余页（技术规范等）未全部识别，待核实"
+        else:
+            node["src"] = f"{OCR_BUDGET_HINT}，合同可能未读完，未读到此条款，请查看合同原件"
         fields[key] = node
 
 

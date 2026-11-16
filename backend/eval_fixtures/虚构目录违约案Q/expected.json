@@ -1,0 +1,32 @@
+{
+  "title": "虚构目录违约案 Q（扫描合同 93 页，按目录读完条款部分、读到 80 页上限仍无违约条款 → 逾期付款利息 + LPR，待核实）",
+  "decisions": {},
+  "fields": {
+    "defendant_name": {
+      "value": "盐城虚构置业有限公司",
+      "review": "待核实"
+    },
+    "contract_type": "安装合同",
+    "total_amount": 100000,
+    "paid_amount": 30000,
+    "unpaid_amount": 70000,
+    "elevator_qty": 2,
+    "acceptance_latest_date": "2024年11月22日",
+    "payable_ratio": "100%",
+    "payment_cite_location": {
+      "value": "第6.2条",
+      "match": "contains"
+    },
+    "document_kind": "民事起诉状",
+    "court_district": "盐城市亭湖区",
+    "interest_term": {
+      "value": "逾期付款利息",
+      "review": "待核实"
+    },
+    "interest_rate_basis": {
+      "value": "一年期贷款市场报价利率",
+      "match": "contains",
+      "review": "待核实"
+    }
+  }
+}

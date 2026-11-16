@@ -1,0 +1,21 @@
+```json
+{
+  "parties": [
+    {
+      "role": "发包方",
+      "name": null,
+      "date": null,
+      "date_legible": true
+    },
+    {
+      "role": "分包方",
+      "name": null,
+      "date": "2024-03-05",
+      "date_legible": true
+    }
+  ],
+  "shared_date": null,
+  "shared_date_legible": true,
+  "notes": ""
+}
+```
