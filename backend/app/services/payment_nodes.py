@@ -70,6 +70,12 @@ def _segments(text: str) -> list[tuple[str, str]]:
     return out
 
 
+def item_numbers(text: str | None) -> list[str]:
+    """付款条款里各项的编号（原文写法，按出现顺序去重），全角点归一为「.」。"""
+    nos = [(m.group("multi") or m.group("single")).replace("．", ".") for m in _NODE_NO_RE.finditer(text or "")]
+    return list(dict.fromkeys(nos))
+
+
 # 百分比后紧跟「（的）……保函」：比例说的是保函金额
 _GUARANTEE_PCT_RE = re.compile(r"(?:的)?[^，,；;。在后]{0,10}?保函")
 # 违约金 / 利息的百分比（「逾期支付的，按欠款的0.05%支付违约金」）不是付款节点
