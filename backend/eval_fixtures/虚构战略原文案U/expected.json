@@ -1,0 +1,22 @@
+{
+  "title": "虚构战略原文案 U（战略合作合同原文与补充协议都上传 → 以原文第10条为准；主合同用阿拉伯数字编条款 →「第2条及战略合同第10条」）",
+  "decisions": {},
+  "fields": {
+    "defendant_name": "南京虚构置业有限公司",
+    "contract_sign_date": "2024年6月12日",
+    "total_amount": 300000,
+    "paid_amount": 270000,
+    "unpaid_amount": 30000,
+    "elevator_qty": 2,
+    "acceptance_latest_date": "2024年12月16日",
+    "dispute_clause_location": {
+      "value": "第2条及战略合同第10条",
+      "note": "确认单（六）第 5 题选 B：以战略合作合同原文条款为准，补充协议只作确认；律师文书写阿拉伯数字"
+    },
+    "document_kind": "仲裁申请书",
+    "addressee": {
+      "value": "虚构国际仲裁委员会",
+      "match": "contains"
+    }
+  }
+}

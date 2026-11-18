@@ -548,6 +548,9 @@ def mark_strategic_supplement(fields: dict, files: list[dict]) -> None:
 _TAG_RE = re.compile(r"<[^>]+>")
 _LI_RE = re.compile(r'<li\b[^>]*?data-bbox="(\d+)[^"]*"[^>]*>(.*?)</li>', re.S)
 _ITEM_NO_RE = re.compile(r"^\s*(?:第\s*([一二三四五六七八九十\d]{1,3})\s*条|[（(]?(\d{1,2})[)）]?\s*[.、．](?!\d))")
+# 合同用「1 ……」「2 本合同……」这样只写数字、后接空格或换行的条款编号（律师新案件核对）：合并换行前在句首认
+# 「2」+ 空白 + 汉字；「2 台」这类量词不算
+_ITEM_NO_PLAIN_RE = re.compile(r"^\s*(\d{1,2})\s+(?![台部层个套件年月日天])(?=[一-鿿])")
 # OCR HTML 的列表项 / 段落边界：去标签前换成分隔符，免得相邻两项粘成一句（#133 评审）
 _BLOCK_END_RE = re.compile(r"</(?:li|p|td|th|div|h\d)>|<br\s*/?>", re.I)
 _BLOCK = "\x00"
@@ -600,8 +603,11 @@ def apply_strategic_dispute_ref(fields: dict, files: list[dict]) -> None:
             left = max(plain.rfind(ch, 0, m.start()) for ch in _SENTENCE_START) + 1
             rights = [i for i in (plain.find(ch, m.end()) for ch in _SENTENCE_END) if i != -1]
             sentence = plain[left : min(rights) + 1 if rights else len(plain)].replace(_BLOCK, "")
+            bare = _ITEM_NO_PLAIN_RE.match(sentence)
+            if bare:
+                sentence = sentence[bare.end() :]
             sentence = re.sub(r"\s*\n\s*", "", sentence).strip()
-            no, guessed = _clause_no(raw, sentence)
+            no, guessed = (bare.group(1), False) if bare else _clause_no(raw, sentence)
             sentence = _ITEM_NO_RE.sub("", sentence, count=1).strip()  # 编号已写进条款位置
             src = f"《{f.get('filename', '合同')}》第{pg.get('page', 1)}页"
             if f.get("is_scanned"):

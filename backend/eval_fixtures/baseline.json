@@ -894,6 +894,58 @@
         "verdict": "正确"
       }
     },
+    "虚构战略原文案U": {
+      "acceptance_latest_date": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "addressee": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "contract_sign_date": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "defendant_name": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "dispute_clause_location": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "document_kind": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "elevator_qty": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "paid_amount": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "total_amount": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      },
+      "unpaid_amount": {
+        "silent": false,
+        "source_ok": null,
+        "verdict": "正确"
+      }
+    },
     "虚构提醒案M": {
       "acceptance_latest_date": {
         "silent": false,

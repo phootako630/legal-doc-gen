@@ -137,3 +137,23 @@ def test_adjacent_ocr_list_items_without_punctuation_not_merged():
     apply_strategic_dispute_ref(fields, _files(page, scanned=True))
     assert fields["dispute_clause_text"]["value"] == "争议解决按战略合同执行。"
     assert fields["dispute_clause_location"]["value"] == "第2条"
+
+
+def test_bare_number_heading_on_its_own_line():
+    # 合同只写「2」、换行后才是条款正文（扫描件 OCR 常见）：条款号取「2」，正文不带编号
+    page = (
+        "1 以下文件为本合同的组成部分：\n（1）本合同书；\n（2）虚构集团战略合作合同文件（以下简称“战略合同”）。\n\n"
+        f"2\n{_REF}\n（1）付款方式见附件。"
+    )
+    fields = _missing()
+    apply_strategic_dispute_ref(fields, _files(page, scanned=True))
+    assert fields["dispute_clause_location"]["value"] == "第2条"
+    assert fields["dispute_clause_text"]["value"] == _REF
+
+
+def test_quantity_before_reference_is_not_a_clause_number():
+    # 「2 台」是数量：不当条款号
+    page = f"本合同共有电梯。\n2 台电梯的{_REF}"
+    fields = _missing()
+    apply_strategic_dispute_ref(fields, _files(page))
+    assert fields["dispute_clause_location"]["value"] is None
