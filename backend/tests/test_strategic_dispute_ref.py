@@ -151,9 +151,19 @@ def test_bare_number_heading_on_its_own_line():
     assert fields["dispute_clause_text"]["value"] == _REF
 
 
-def test_quantity_before_reference_is_not_a_clause_number():
+def test_quantity_before_reference_is_not_a_clause_number():  # 「2 台」同理
     # 「2 台」是数量：不当条款号
     page = f"本合同共有电梯。\n2 台电梯的{_REF}"
     fields = _missing()
     apply_strategic_dispute_ref(fields, _files(page))
     assert fields["dispute_clause_location"]["value"] is None
+
+
+def test_quantity_phrases_are_not_clause_numbers_and_text_kept():
+    # 「2 份 / 笔 / 项……」是数量短语，没有条款结构佐证：不当条款号，原文不删（#178 评审）
+    for word in ("份", "笔", "项", "家"):
+        page = f"2 {word}战略合同文件，争议的解决按战略合同内相关条款执行。"
+        fields = _missing()
+        apply_strategic_dispute_ref(fields, _files(page))
+        assert fields["dispute_clause_location"]["value"] is None, word
+        assert fields["dispute_clause_text"]["value"].startswith(f"2 {word}"), word

@@ -549,8 +549,8 @@ _TAG_RE = re.compile(r"<[^>]+>")
 _LI_RE = re.compile(r'<li\b[^>]*?data-bbox="(\d+)[^"]*"[^>]*>(.*?)</li>', re.S)
 _ITEM_NO_RE = re.compile(r"^\s*(?:第\s*([一二三四五六七八九十\d]{1,3})\s*条|[（(]?(\d{1,2})[)）]?\s*[.、．](?!\d))")
 # 合同用「1 ……」「2 本合同……」这样只写数字、后接空格或换行的条款编号（律师新案件核对）：合并换行前在句首认
-# 「2」+ 空白 + 汉字；「2 台」这类量词不算
-_ITEM_NO_PLAIN_RE = re.compile(r"^\s*(\d{1,2})\s+(?![台部层个套件年月日天])(?=[一-鿿])")
+# 「2」+ 空白 + 汉字，且须有条款结构佐证（`_bare_article_heading`），「2 份文件」这类数量短语不算（#178 评审）
+_ITEM_NO_PLAIN_RE = re.compile(r"^\s*(\d{1,2})\s+(?=[一-鿿])")
 # OCR HTML 的列表项 / 段落边界：去标签前换成分隔符，免得相邻两项粘成一句（#133 评审）
 _BLOCK_END_RE = re.compile(r"</(?:li|p|td|th|div|h\d)>|<br\s*/?>", re.I)
 _BLOCK = "\x00"
@@ -591,33 +591,72 @@ def apply_strategic_dispute_ref(fields: dict, files: list[dict]) -> None:
     if (text and not (refers_to_strategic(text) and loc_missing)) or (isinstance(node, dict) and node.get("strategic_ref")):
         return
     for f in files:
-        if f.get("identified_type") != "合同":
+        ref = _strategic_ref_in(f)
+        if ref is None:
             continue
-        pages = f.get("pages") or [{"page": 1, "text": f.get("text") or ""}]
-        for pg in pages:
-            raw = pg.get("text") or ""
-            plain = _TAG_RE.sub("", _BLOCK_END_RE.sub(_BLOCK, raw))
-            m = STRATEGIC_DISPUTE_REF_RE.search(plain)
-            if not m:
-                continue
-            left = max(plain.rfind(ch, 0, m.start()) for ch in _SENTENCE_START) + 1
-            rights = [i for i in (plain.find(ch, m.end()) for ch in _SENTENCE_END) if i != -1]
-            sentence = plain[left : min(rights) + 1 if rights else len(plain)].replace(_BLOCK, "")
-            bare = _ITEM_NO_PLAIN_RE.match(sentence)
-            if bare:
-                sentence = sentence[bare.end() :]
-            sentence = re.sub(r"\s*\n\s*", "", sentence).strip()
-            no, guessed = (bare.group(1), False) if bare else _clause_no(raw, sentence)
-            sentence = _ITEM_NO_RE.sub("", sentence, count=1).strip()  # 编号已写进条款位置
-            src = f"《{f.get('filename', '合同')}》第{pg.get('page', 1)}页"
-            if f.get("is_scanned"):
-                src += "（OCR识别，请核实）"
-            if not text:
-                fields["dispute_clause_text"] = {"value": sentence, "src": src}
-            if no and loc_missing:
-                note = "（条款号按扫描页列表顺序推算，待核实）" if guessed else ""
-                fields["dispute_clause_location"] = {"value": f"第{no}条", "src": src + note}
-            return
+        sentence, no, guessed, src = ref
+        if not text:
+            fields["dispute_clause_text"] = {"value": sentence, "src": src}
+        if no and loc_missing:
+            note = "（条款号按扫描页列表顺序推算，待核实）" if guessed else ""
+            fields["dispute_clause_location"] = {"value": f"第{no}条", "src": src + note}
+        return
+
+
+def _bare_article_heading(text: str, n: int) -> bool:
+    """
+    行首只写数字的「n 本合同……」确是条款标题：同一份合同里行首有「n + 空白 + 汉字」，相邻条款（n−1 或 n+1）
+    也这样写。只有一行「2 份文件……」这样的数量短语不算（#178 评审：不靠量词黑名单，看条款结构）。
+    """
+    plain = _TAG_RE.sub("\n", text or "")
+
+    def heading(k: int) -> bool:
+        return k > 0 and re.search(rf"(?m)^[ \t]*{k}\s+(?=[一-鿿])", plain) is not None
+
+    return heading(n) and (heading(n - 1) or heading(n + 1))
+
+
+def _strategic_ref_in(f: dict) -> tuple[str, str | None, bool, str] | None:
+    """
+    一份主合同里「争议……按战略合同执行」那句：(句子原文, 条款号原写法, 条款号是否推算, 出处)；没有返回 None。
+    条款号原写法：「2.」「2 本合同」→「2」，「第二条」→「二」。
+    """
+    if f.get("identified_type") != "合同":
+        return None
+    pages = f.get("pages") or [{"page": 1, "text": f.get("text") or ""}]
+    whole = "\n".join(p.get("text") or "" for p in pages)
+    for pg in pages:
+        raw = pg.get("text") or ""
+        plain = _TAG_RE.sub("", _BLOCK_END_RE.sub(_BLOCK, raw))
+        m = STRATEGIC_DISPUTE_REF_RE.search(plain)
+        if not m:
+            continue
+        left = max(plain.rfind(ch, 0, m.start()) for ch in _SENTENCE_START) + 1
+        rights = [i for i in (plain.find(ch, m.end()) for ch in _SENTENCE_END) if i != -1]
+        sentence = plain[left : min(rights) + 1 if rights else len(plain)].replace(_BLOCK, "")
+        bare = _ITEM_NO_PLAIN_RE.match(sentence)
+        if bare and not _bare_article_heading(whole, int(bare.group(1))):
+            bare = None  # 没有条款结构佐证：不当条款号，原文不删
+        if bare:
+            sentence = sentence[bare.end() :]
+        sentence = re.sub(r"\s*\n\s*", "", sentence).strip()
+        no, guessed = (bare.group(1), False) if bare else _clause_no(raw, sentence)
+        sentence = _ITEM_NO_RE.sub("", sentence, count=1).strip()  # 编号已写进条款位置
+        src = f"《{f.get('filename', '合同')}》第{pg.get('page', 1)}页"
+        if f.get("is_scanned"):
+            src += "（OCR识别，请核实）"
+        return sentence, no, guessed, src
+    return None
+
+
+def strategic_ref_numbers(files: list[dict]) -> list[tuple[str, str | None, bool]]:
+    """写有「争议……按战略合同执行」的各份主合同：(文件名, 转引句条款号原写法, 是否推算)。"""
+    out = []
+    for f in files:
+        ref = _strategic_ref_in(f)
+        if ref is not None:
+            out.append((f.get("filename", ""), ref[1], ref[2]))
+    return out
 
 
 def _from_files(node: object, names: list[str]) -> bool:

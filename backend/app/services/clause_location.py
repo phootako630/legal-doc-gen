@@ -2,15 +2,16 @@
 # 不能取决于这次怎么写。按需 OCR 补读完合同后，用代码对照条款原文所在页：
 #   - 细化到子项：条款原文在页里前面紧跟子项编号（「12.1 所有因本合同……」），而位置只写到条（「第十二条」
 #     或「第12条」），且编号对得上（十二 ↔ 12）→「第12.1条」；
-#   - 中文数字条号：合同自己用阿拉伯数字编条款（行首「6.1」「6 付款方式」）或正文写「第6条」时，「第六条」→「第6条」；
-#     争议条款转引战略合同的组合位置「第二条及战略合同第10条」，前半主合同条号按主合同（转引句所在合同）同样改写。
+#   - 中文数字条号：合同自己用阿拉伯数字编子项（行首「6.1」）或正文写「第6条」时，「第六条」→「第6条」；
+#     争议条款转引战略合同的组合位置「第二条及战略合同第10条」：唯一一份写有转引句的主合同里，转引条款号
+#     原文写作阿拉伯数字「2」时前半改为「第2条」。
 # 只认条款原文出处那份文件（与那一页）；编号对不上、原文找不到或命中不止一处时不改；原值留在出处里。律师改过的不动。
 from __future__ import annotations
 
 import re
 
 from app.services.derived_fields import _cn_int
-from app.services.doc_search import STRATEGIC_DISPUTE_REF_RE
+from app.services.extraction import strategic_ref_numbers
 
 # (位置字段, 条款原文字段, 中文名)
 CLAUSE_PAIRS = (
@@ -25,7 +26,6 @@ _PROBE_LEN = 30  # 用条款原文开头这么多个字回页里定位（不足�
 _SUB_AT_LINE_START_RE = re.compile(r"(\d{1,2}[.．]\d{1,2})[、.．:：]?$")
 # 争议条款转引战略合同的组合位置：前半是主合同条号（中文数字），后半原样保留
 _STRATEGIC_COMBO_RE = re.compile(r"^第\s*([一二三四五六七八九十两]{1,4})\s*条(及战略合同第.+条)$")
-_TAG_RE = re.compile(r"<[^>]+>")
 
 
 def _compact(text: str) -> str:
@@ -73,37 +73,36 @@ def _sub_number_before(pages: list[dict], clause: str) -> str | None:
 
 
 def _uses_arabic(pages: list[dict], n: int) -> bool:
-    """
-    同一份合同自己用阿拉伯数字写这一条：行首有「n.1」这样的子项、行首是「n 本合同……」这样的条款标题
-    （量词「2 台」不算），或正文写着「第n条」。
-    """
+    """同一份合同自己用阿拉伯数字写这一条：行首有「n.1」这样的子项，或正文写着「第n条」。"""
     sub = re.compile(rf"(?m)^\s*(?:\|\s*)?{n}[.．]\d")
-    head = re.compile(rf"(?m)^\s*{n}\s+(?![台部层个套件年月日天])[一-鿿]{{2}}")
     art = re.compile(rf"第\s*{n}\s*条")
-    texts = [_TAG_RE.sub("", p.get("text") or "") for p in pages]
-    return any(sub.search(t) or head.search(t) or art.search(t) for t in texts)
+    return any(sub.search(p.get("text") or "") or art.search(p.get("text") or "") for p in pages)
 
 
-def _main_ref_pages(files: list[dict]) -> list[dict] | None:
-    """主合同里写着「争议……按战略合同执行」那份合同的各页；找不到返回 None。"""
-    for f in files:
-        if f.get("identified_type") != "合同":
-            continue
-        pages = f.get("pages") or [{"page": None, "text": f.get("text") or ""}]
-        if any(STRATEGIC_DISPUTE_REF_RE.search(_TAG_RE.sub("", p.get("text") or "")) for p in pages):
-            return pages
-    return None
+_AMBIGUOUS_MAIN_NOTE = "主合同不止一份写有「争议按战略合同执行」，条款号写法未改，请律师核对"
 
 
 def _refine_strategic_combo(loc: dict, raw: str, files: list[dict]) -> None:
-    """「第二条及战略合同第10条」：主合同用阿拉伯数字编条款时，前半改成「第2条」（律师文书写阿拉伯数字）。"""
+    """
+    「第二条及战略合同第10条」：前半是主合同转引句所在条款。锁定写有转引句的那份主合同（只认一份；
+    不止一份时不改、提示核对，#178 评审），它的转引句条款号原文就写作阿拉伯数字「2」时改为「第2条」。
+    """
     m = _STRATEGIC_COMBO_RE.match(raw)
     n = _cn_int(m.group(1)) if m else None
-    pages = _main_ref_pages(files) if n else None
-    if not (n and pages and _uses_arabic(pages, n)):
+    if not n:
+        return
+    refs = strategic_ref_numbers(files)
+    if len(refs) > 1:
+        if _AMBIGUOUS_MAIN_NOTE not in str(loc.get("src") or ""):
+            loc["src"] = f"{loc.get('src') or ''}（{_AMBIGUOUS_MAIN_NOTE}）"
+        return
+    if not refs:
+        return
+    filename, no, guessed = refs[0]
+    if guessed or not no or not no.isdigit() or int(no) != n:
         return
     loc["value"] = f"第{n}条{m.group(2)}"
-    loc["src"] = f"{loc.get('src') or ''}（原写作「{raw}」，主合同用阿拉伯数字编条款，按代码核对改写）"
+    loc["src"] = f"{loc.get('src') or ''}（原写作「{raw}」，《{filename}》转引条款写作「{no}」，按代码核对改写）"
     loc.pop("anchor", None)
 
 

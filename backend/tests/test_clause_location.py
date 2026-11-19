@@ -156,3 +156,23 @@ def test_quantity_line_is_not_arabic_article_heading():
     # 「2 台电梯」是数量，不算阿拉伯数字条款标题
     main = "第二条 争议的解决按“战略合同”内相关条款执行。\n2 台电梯于验收后移交。"
     assert _combo("第二条及战略合同第10条", main)["value"] == "第二条及战略合同第10条"
+
+
+def test_strategic_combo_locked_to_single_reference_contract():
+    # 两份主合同都写有转引句（A 用「2 本合同……」，B 用「第二条」）：不按上传顺序挑，一律不改并提示核对（#178 评审）
+    other = {"filename": "虚构补充供货合同.pdf", "identified_type": "合同",
+             "pages": [{"page": 1, "text": "第一条 标的\n第二条 争议的解决按“战略合同”内相关条款执行。"}]}
+    for order in ("a_first", "b_first"):
+        files = [
+            {"filename": "虚构供货合同.pdf", "identified_type": "合同", "pages": [{"page": 2, "text": _MAIN_REF}]},
+            {"filename": "虚构战略合作合同.pdf", "identified_type": "战略合同", "pages": []},
+        ]
+        files = files + [other] if order == "a_first" else [other] + files
+        fields = {
+            "dispute_clause_location": {"value": "第二条及战略合同第10条", "src": "《虚构战略合作合同.pdf》"},
+            "dispute_clause_text": {"value": "提交虚构仲裁委员会仲裁。", "src": "《虚构战略合作合同.pdf》第4页"},
+        }
+        refine_clause_locations(fields, files)
+        loc = fields["dispute_clause_location"]
+        assert loc["value"] == "第二条及战略合同第10条", order
+        assert "请律师核对" in loc["src"]
