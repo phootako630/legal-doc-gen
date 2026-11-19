@@ -603,17 +603,27 @@ def apply_strategic_dispute_ref(fields: dict, files: list[dict]) -> None:
         return
 
 
+# 数量短语开头的量词（「1 台电梯」「2 份文件」）：这样的行不算条款标题。「本」不列入：「3 本合同……」正是条款常见开头
+_CLASSIFIERS = frozenset("个只台部份笔项家件套张名位次条层栋幢座间处批年月日天周号元万千百米吨种类组根块片把辆樘扇页册段节级期")
+
+
 def _bare_article_heading(text: str, n: int) -> bool:
     """
-    行首只写数字的「n 本合同……」确是条款标题：同一份合同里行首有「n + 空白 + 汉字」，相邻条款（n−1 或 n+1）
-    也这样写。只有一行「2 份文件……」这样的数量短语不算（#178 评审：不靠量词黑名单，看条款结构）。
+    行首只写数字的「n 本合同……」确是条款标题：同一份合同里行首「数字 + 空白 + 汉字」的标题从 1 起按文档顺序
+    连续编号、至少 3 条（「1 以下文件……」「2 本合同……」「3 本合同一式四份」）并覆盖 n；数字后紧跟量词的
+    「1 台」「2 份」不算标题。只有相邻一两行数量短语时不成立（#178 评审：要条款结构，不是相邻数字行）。
     """
     plain = _TAG_RE.sub("\n", text or "")
-
-    def heading(k: int) -> bool:
-        return k > 0 and re.search(rf"(?m)^[ \t]*{k}\s+(?=[一-鿿])", plain) is not None
-
-    return heading(n) and (heading(n - 1) or heading(n + 1))
+    first: dict[int, int] = {}
+    for m in re.finditer(r"(?m)^[ \t]*(\d{1,2})\s+([一-鿿])", plain):
+        if m.group(2) not in _CLASSIFIERS:
+            first.setdefault(int(m.group(1)), m.start())
+    k, last = 1, -1
+    while k in first and first[k] > last:
+        last = first[k]
+        k += 1
+    run = k - 1
+    return run >= 3 and 1 <= n <= run
 
 
 def _strategic_ref_in(f: dict) -> tuple[str, str | None, bool, str] | None:
