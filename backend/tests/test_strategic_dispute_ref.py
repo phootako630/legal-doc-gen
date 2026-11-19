@@ -187,3 +187,23 @@ def test_two_bare_headings_are_not_enough():
     fields = _missing()
     apply_strategic_dispute_ref(fields, _files(page))
     assert fields["dispute_clause_location"]["value"] is None
+
+
+def test_quantity_line_cannot_borrow_real_heading_elsewhere():
+    # 合同别处真有「1 / 2 / 3」条款标题，另一行「2 份……」不能借用第 2 条标题（#178 评审）
+    page = (
+        "1 合同标的\n乙方供应电梯。\n2 付款安排\n验收后付款。\n3 合同附件\n附件另附。\n"
+        "2 份战略合同文件，争议的解决按战略合同内相关条款执行。"
+    )
+    fields = _missing()
+    apply_strategic_dispute_ref(fields, _files(page))
+    assert fields["dispute_clause_location"]["value"] is None
+    assert fields["dispute_clause_text"]["value"].startswith("2 份")
+
+
+def test_heading_out_of_sequence_order_is_not_trusted():
+    # 「2 ……」写在第 3 条之后：不在按顺序连续的标题里，不当条款号
+    page = f"1 合同标的\n乙方供应电梯。\n3 合同附件\n附件另附。\n2 {_REF}"
+    fields = _missing()
+    apply_strategic_dispute_ref(fields, _files(page))
+    assert fields["dispute_clause_location"]["value"] is None

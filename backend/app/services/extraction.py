@@ -607,23 +607,42 @@ def apply_strategic_dispute_ref(fields: dict, files: list[dict]) -> None:
 _CLASSIFIERS = frozenset("个只台部份笔项家件套张名位次条层栋幢座间处批年月日天周号元万千百米吨种类组根块片把辆樘扇页册段节级期")
 
 
-def _bare_article_heading(text: str, n: int) -> bool:
+def _bare_article_heading(text: str, n: int, follow: str) -> bool:
     """
-    行首只写数字的「n 本合同……」确是条款标题：同一份合同里行首「数字 + 空白 + 汉字」的标题从 1 起按文档顺序
-    连续编号、至少 3 条（「1 以下文件……」「2 本合同……」「3 本合同一式四份」）并覆盖 n；数字后紧跟量词的
-    「1 台」「2 份」不算标题。只有相邻一两行数量短语时不成立（#178 评审：要条款结构，不是相邻数字行）。
+    转引句开头的「n」确是条款标题：同一份合同里行首「数字 + 空白 + 汉字」、数字后不是量词（「1 台」「2 份」不算）的
+    标题中，有一条编号为 n、其后文字就是转引句开头（`follow`）；它与前面的 1…n−1、后面的 n+1…按文档顺序连成
+    连续编号，合计至少 3 条（「1 以下文件……」「2 本合同……」「3 本合同一式四份」）。只核对编号存在不够：
+    合同别处真有第 2 条标题时，另一行「2 份……」不能借用它（#178 评审）。
     """
     plain = _TAG_RE.sub("\n", text or "")
-    first: dict[int, int] = {}
+    heads: list[tuple[int, int, str]] = []  # (编号, 位置, 其后文字去空白)
     for m in re.finditer(r"(?m)^[ \t]*(\d{1,2})\s+([一-鿿])", plain):
         if m.group(2) not in _CLASSIFIERS:
-            first.setdefault(int(m.group(1)), m.start())
-    k, last = 1, -1
-    while k in first and first[k] > last:
-        last = first[k]
-        k += 1
-    run = k - 1
-    return run >= 3 and 1 <= n <= run
+            heads.append((int(m.group(1)), m.start(), re.sub(r"\s+", "", plain[m.start(2) : m.start(2) + 80])))
+    probe = re.sub(r"\s+", "", follow)[:12]
+    if len(probe) < 4:
+        return False
+    for no, pos, after in heads:
+        if no != n or not after.startswith(probe):
+            continue
+        prev, ok = pos, True
+        for k in range(n - 1, 0, -1):  # 前面 n−1 … 1 依次在它之前
+            before = [p for x, p, _ in heads if x == k and p < prev]
+            if not before:
+                ok = False
+                break
+            prev = max(before)
+        if not ok:
+            continue
+        nxt, run = pos, n
+        while True:  # 后面 n+1 … 依次在它之后
+            after_pos = [p for x, p, _ in heads if x == run + 1 and p > nxt]
+            if not after_pos:
+                break
+            nxt, run = min(after_pos), run + 1
+        if run >= 3:
+            return True
+    return False
 
 
 def _strategic_ref_in(f: dict) -> tuple[str, str | None, bool, str] | None:
@@ -645,7 +664,7 @@ def _strategic_ref_in(f: dict) -> tuple[str, str | None, bool, str] | None:
         rights = [i for i in (plain.find(ch, m.end()) for ch in _SENTENCE_END) if i != -1]
         sentence = plain[left : min(rights) + 1 if rights else len(plain)].replace(_BLOCK, "")
         bare = _ITEM_NO_PLAIN_RE.match(sentence)
-        if bare and not _bare_article_heading(whole, int(bare.group(1))):
+        if bare and not _bare_article_heading(whole, int(bare.group(1)), sentence[bare.end() :]):
             bare = None  # 没有条款结构佐证：不当条款号，原文不删
         if bare:
             sentence = sentence[bare.end() :]
