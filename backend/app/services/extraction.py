@@ -548,6 +548,10 @@ def mark_strategic_supplement(fields: dict, files: list[dict]) -> None:
 _TAG_RE = re.compile(r"<[^>]+>")
 _LI_RE = re.compile(r'<li\b[^>]*?data-bbox="(\d+)[^"]*"[^>]*>(.*?)</li>', re.S)
 _ITEM_NO_RE = re.compile(r"^\s*(?:第\s*([一二三四五六七八九十\d]{1,3})\s*条|[（(]?(\d{1,2})[)）]?\s*[.、．](?!\d))")
+# 合同用「1 ……」「2 本合同……」这样只写数字、后接空格或换行的条款编号（律师新案件核对）：合并换行前在句首认
+# 「2」+ 空白 + 汉字，且须有条款结构佐证（`_bare_article_heading`），「2 份文件」这类数量短语不算（#178 评审）
+_ITEM_NO_PLAIN_RE = re.compile(r"^\s*(\d{1,2})\s+(?=[一-鿿])")
+_BARE_HEADING_LINE_RE = re.compile(r"(?m)^[ \t]*(\d{1,2})\s+(?=[一-鿿])")
 # OCR HTML 的列表项 / 段落边界：去标签前换成分隔符，免得相邻两项粘成一句（#133 评审）
 _BLOCK_END_RE = re.compile(r"</(?:li|p|td|th|div|h\d)>|<br\s*/?>", re.I)
 _BLOCK = "\x00"
@@ -588,30 +592,112 @@ def apply_strategic_dispute_ref(fields: dict, files: list[dict]) -> None:
     if (text and not (refers_to_strategic(text) and loc_missing)) or (isinstance(node, dict) and node.get("strategic_ref")):
         return
     for f in files:
-        if f.get("identified_type") != "合同":
+        ref = _strategic_ref_in(f)
+        if ref is None:
             continue
-        pages = f.get("pages") or [{"page": 1, "text": f.get("text") or ""}]
-        for pg in pages:
-            raw = pg.get("text") or ""
-            plain = _TAG_RE.sub("", _BLOCK_END_RE.sub(_BLOCK, raw))
-            m = STRATEGIC_DISPUTE_REF_RE.search(plain)
-            if not m:
+        sentence, no, guessed, src = ref
+        if not text:
+            fields["dispute_clause_text"] = {"value": sentence, "src": src}
+        if no and loc_missing:
+            note = "（条款号按扫描页列表顺序推算，待核实）" if guessed else ""
+            fields["dispute_clause_location"] = {"value": f"第{no}条", "src": src + note}
+        return
+
+
+# 数量短语开头的量词（「1 台电梯」「2 份文件」）：这样的行不算条款标题。「本」不列入：「3 本合同……」正是条款常见开头
+_CLASSIFIERS = frozenset("个只台部份笔项家件套张名位次条层栋幢座间处批年月日天周号元万千百米吨种类组根块片把辆樘扇页册段节级期")
+
+
+def _bare_article_heading(text: str, n: int, follow: str) -> bool:
+    """
+    转引句开头的「n」确是条款标题：同一份合同里行首「数字 + 空白 + 汉字」、数字后不是量词（「1 台」「2 份」不算）的
+    标题中，有一条编号为 n、其后文字就是转引句开头（`follow`）；它与前面的 1…n−1、后面的 n+1…按文档顺序连成
+    连续编号，合计至少 3 条（「1 以下文件……」「2 本合同……」「3 本合同一式四份」）。只核对编号存在不够：
+    合同别处真有第 2 条标题时，另一行「2 份……」不能借用它（#178 评审）。
+    """
+    plain = _TAG_RE.sub("\n", text or "")
+    heads: list[tuple[int, int, str]] = []  # (编号, 位置, 其后文字去空白)
+    for m in re.finditer(r"(?m)^[ \t]*(\d{1,2})\s+([一-鿿])", plain):
+        if m.group(2) not in _CLASSIFIERS:
+            heads.append((int(m.group(1)), m.start(), re.sub(r"\s+", "", plain[m.start(2) : m.start(2) + 80])))
+    probe = re.sub(r"\s+", "", follow)[:12]
+    if len(probe) < 4:
+        return False
+    for no, pos, after in heads:
+        if no != n or not after.startswith(probe):
+            continue
+        prev, ok = pos, True
+        for k in range(n - 1, 0, -1):  # 前面 n−1 … 1 依次在它之前
+            before = [p for x, p, _ in heads if x == k and p < prev]
+            if not before:
+                ok = False
+                break
+            prev = max(before)
+        if not ok:
+            continue
+        nxt, run = pos, n
+        while True:  # 后面 n+1 … 依次在它之后
+            after_pos = [p for x, p, _ in heads if x == run + 1 and p > nxt]
+            if not after_pos:
+                break
+            nxt, run = min(after_pos), run + 1
+        if run >= 3:
+            return True
+    return False
+
+
+def _strategic_ref_in(f: dict) -> tuple[str, str | None, bool, str] | None:
+    """
+    一份主合同里「争议……按战略合同执行」那句：(句子原文, 条款号原写法, 条款号是否推算, 出处)；没有返回 None。
+    条款号原写法：「2.」「2 本合同」→「2」，「第二条」→「二」。
+    """
+    if f.get("identified_type") != "合同":
+        return None
+    pages = f.get("pages") or [{"page": 1, "text": f.get("text") or ""}]
+    whole = "\n".join(p.get("text") or "" for p in pages)
+    for pg in pages:
+        raw = pg.get("text") or ""
+        plain = _TAG_RE.sub("", _BLOCK_END_RE.sub(_BLOCK, raw))
+        m = STRATEGIC_DISPUTE_REF_RE.search(plain)
+        if not m:
+            continue
+        left = max(plain.rfind(ch, 0, m.start()) for ch in _SENTENCE_START) + 1
+        rights = [i for i in (plain.find(ch, m.end()) for ch in _SENTENCE_END) if i != -1]
+        right = min(rights) + 1 if rights else len(plain)
+        # 只写数字的条款之间常只有换行、没有句号分号（OCR）：经核实的行首条款标题也是条款边界，
+        # 转引句从它所在条款的标题起、到下一条标题前止；普通正文折行不算边界（#178 评审）
+        for h in _BARE_HEADING_LINE_RE.finditer(plain, left, right):
+            if not _bare_article_heading(whole, int(h.group(1)), plain[h.end() :]):
                 continue
-            left = max(plain.rfind(ch, 0, m.start()) for ch in _SENTENCE_START) + 1
-            rights = [i for i in (plain.find(ch, m.end()) for ch in _SENTENCE_END) if i != -1]
-            sentence = plain[left : min(rights) + 1 if rights else len(plain)].replace(_BLOCK, "")
-            sentence = re.sub(r"\s*\n\s*", "", sentence).strip()
-            no, guessed = _clause_no(raw, sentence)
-            sentence = _ITEM_NO_RE.sub("", sentence, count=1).strip()  # 编号已写进条款位置
-            src = f"《{f.get('filename', '合同')}》第{pg.get('page', 1)}页"
-            if f.get("is_scanned"):
-                src += "（OCR识别，请核实）"
-            if not text:
-                fields["dispute_clause_text"] = {"value": sentence, "src": src}
-            if no and loc_missing:
-                note = "（条款号按扫描页列表顺序推算，待核实）" if guessed else ""
-                fields["dispute_clause_location"] = {"value": f"第{no}条", "src": src + note}
-            return
+            if h.start() <= m.start():
+                left = h.start()
+            elif h.start() >= m.end():
+                right = h.start()
+                break
+        sentence = plain[left:right].replace(_BLOCK, "")
+        bare = _ITEM_NO_PLAIN_RE.match(sentence)
+        if bare and not _bare_article_heading(whole, int(bare.group(1)), sentence[bare.end() :]):
+            bare = None  # 没有条款结构佐证：不当条款号，原文不删
+        if bare:
+            sentence = sentence[bare.end() :]
+        sentence = re.sub(r"\s*\n\s*", "", sentence).strip()
+        no, guessed = (bare.group(1), False) if bare else _clause_no(raw, sentence)
+        sentence = _ITEM_NO_RE.sub("", sentence, count=1).strip()  # 编号已写进条款位置
+        src = f"《{f.get('filename', '合同')}》第{pg.get('page', 1)}页"
+        if f.get("is_scanned"):
+            src += "（OCR识别，请核实）"
+        return sentence, no, guessed, src
+    return None
+
+
+def strategic_ref_numbers(files: list[dict]) -> list[tuple[str, str | None, bool]]:
+    """写有「争议……按战略合同执行」的各份主合同：(文件名, 转引句条款号原写法, 是否推算)。"""
+    out = []
+    for f in files:
+        ref = _strategic_ref_in(f)
+        if ref is not None:
+            out.append((f.get("filename", ""), ref[1], ref[2]))
+    return out
 
 
 def _from_files(node: object, names: list[str]) -> bool:

@@ -137,3 +137,99 @@ def test_adjacent_ocr_list_items_without_punctuation_not_merged():
     apply_strategic_dispute_ref(fields, _files(page, scanned=True))
     assert fields["dispute_clause_text"]["value"] == "争议解决按战略合同执行。"
     assert fields["dispute_clause_location"]["value"] == "第2条"
+
+
+def test_bare_number_heading_on_its_own_line():
+    # 合同只写「2」、换行后才是条款正文（扫描件 OCR 常见）：条款号取「2」，正文不带编号
+    page = (
+        "1 以下文件为本合同的组成部分：\n（1）本合同书；\n（2）虚构集团战略合作合同文件（以下简称“战略合同”）。\n\n"
+        f"2\n{_REF}\n（1）付款方式见附件。\n3 本合同一式四份。"
+    )
+    fields = _missing()
+    apply_strategic_dispute_ref(fields, _files(page, scanned=True))
+    assert fields["dispute_clause_location"]["value"] == "第2条"
+    assert fields["dispute_clause_text"]["value"] == _REF
+
+
+def test_quantity_before_reference_is_not_a_clause_number():  # 「2 台」同理
+    # 「2 台」是数量：不当条款号
+    page = f"本合同共有电梯。\n2 台电梯的{_REF}"
+    fields = _missing()
+    apply_strategic_dispute_ref(fields, _files(page))
+    assert fields["dispute_clause_location"]["value"] is None
+
+
+def test_quantity_phrases_are_not_clause_numbers_and_text_kept():
+    # 「2 份 / 笔 / 项……」是数量短语，没有条款结构佐证：不当条款号，原文不删（#178 评审）
+    for word in ("份", "笔", "项", "家"):
+        page = f"2 {word}战略合同文件，争议的解决按战略合同内相关条款执行。"
+        fields = _missing()
+        apply_strategic_dispute_ref(fields, _files(page))
+        assert fields["dispute_clause_location"]["value"] is None, word
+        assert fields["dispute_clause_text"]["value"].startswith(f"2 {word}"), word
+
+
+def test_adjacent_quantity_lines_are_not_article_structure():
+    # 相邻行也是数量短语（「1 台……」「2 份……」）：不算条款结构，位置留空、原文不删（#178 评审）
+    for page in (
+        "1 台电梯需要安装。\n2 份战略合同文件，争议的解决按战略合同内相关条款执行。",
+        "1 台电梯需要安装。\n2 份战略合同文件，争议的解决按战略合同内相关条款执行。\n3 件附件另附。",
+    ):
+        fields = _missing()
+        apply_strategic_dispute_ref(fields, _files(page))
+        assert fields["dispute_clause_location"]["value"] is None
+        assert fields["dispute_clause_text"]["value"].startswith("2 份")
+
+
+def test_two_bare_headings_are_not_enough():
+    # 只有「1 ……」「2 ……」两条：结构证据不足，不当条款号
+    page = f"1 以下文件为本合同的组成部分。\n2 {_REF}"
+    fields = _missing()
+    apply_strategic_dispute_ref(fields, _files(page))
+    assert fields["dispute_clause_location"]["value"] is None
+
+
+def test_quantity_line_cannot_borrow_real_heading_elsewhere():
+    # 合同别处真有「1 / 2 / 3」条款标题，另一行「2 份……」不能借用第 2 条标题（#178 评审）
+    page = (
+        "1 合同标的\n乙方供应电梯。\n2 付款安排\n验收后付款。\n3 合同附件\n附件另附。\n"
+        "2 份战略合同文件，争议的解决按战略合同内相关条款执行。"
+    )
+    fields = _missing()
+    apply_strategic_dispute_ref(fields, _files(page))
+    assert fields["dispute_clause_location"]["value"] is None
+    assert fields["dispute_clause_text"]["value"].startswith("2 份")
+
+
+def test_heading_out_of_sequence_order_is_not_trusted():
+    # 「2 ……」写在第 3 条之后：不在按顺序连续的标题里，不当条款号
+    page = f"1 合同标的\n乙方供应电梯。\n3 合同附件\n附件另附。\n2 {_REF}"
+    fields = _missing()
+    apply_strategic_dispute_ref(fields, _files(page))
+    assert fields["dispute_clause_location"]["value"] is None
+
+
+def test_bare_headings_without_punctuation_bound_the_clause():
+    # 条款之间只有换行、没有句号分号（OCR）：转引句按核实过的行首标题定界，取第 2 条、不拼进第 1、3 条（#178 评审）
+    page = (
+        "1 以下文件为本合同组成部分\n"
+        "2 本合同的供货范围、争议的解决按“战略合同”内相关条款执行\n"
+        "3 本合同一式四份"
+    )
+    fields = _missing()
+    apply_strategic_dispute_ref(fields, _files(page, scanned=True))
+    assert fields["dispute_clause_location"]["value"] == "第2条"
+    assert fields["dispute_clause_text"]["value"] == "本合同的供货范围、争议的解决按“战略合同”内相关条款执行"
+
+
+def test_ordinary_line_wrap_inside_clause_kept():
+    # 条款正文普通折行（行首不是数字标题）不当边界，整句照抄
+    page = (
+        "1 以下文件为本合同组成部分\n"
+        "2 本合同的供货范围、违约责任、\n争议的解决按“战略合同”内相关条款执行\n"
+        "3 本合同一式四份"
+    )
+    fields = _missing()
+    apply_strategic_dispute_ref(fields, _files(page, scanned=True))
+    assert fields["dispute_clause_location"]["value"] == "第2条"
+    assert fields["dispute_clause_text"]["value"] == "本合同的供货范围、违约责任、争议的解决按“战略合同”内相关条款执行"

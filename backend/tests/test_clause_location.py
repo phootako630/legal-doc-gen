@@ -116,3 +116,64 @@ def test_only_cited_page_searched():
     fields = _fields("第十二条")
     refine_clause_locations(fields, files)
     assert fields["dispute_clause_location"]["value"] == "第12条"  # 不细化成第5页的「12.1」
+
+
+# ── 争议条款转引战略合同的组合位置：主合同条号写成阿拉伯数字（律师仲裁申请书写「案涉合同第2条及战略合作合同第10条」）──
+_MAIN_REF = (
+    "1 以下文件为本合同的组成部分：\n(1) 本合同书；\n(2) 虚构集团战略合作合同（以下简称“战略合同”）；\n"
+    "2 本合同的供货范围、结算、违约责任、争议的解决与其他约定按“战略合同”内相关条款执行。\n"
+    "3 本合同一式四份，双方各执两份。"
+)
+
+
+def _combo(loc, main_text=_MAIN_REF):
+    files = [
+        {"filename": "虚构供货合同.pdf", "identified_type": "合同", "pages": [{"page": 2, "text": main_text}]},
+        {"filename": "虚构战略合作合同.pdf", "identified_type": "战略合同",
+         "pages": [{"page": 4, "text": "第十条 争议解决\n协商不成的，提交虚构仲裁委员会仲裁。"}]},
+    ]
+    fields = {
+        "dispute_clause_location": {"value": loc, "src": "《虚构战略合作合同.pdf》（OCR识别，请核实）"},
+        "dispute_clause_text": {"value": "协商不成的，提交虚构仲裁委员会仲裁。", "src": "《虚构战略合作合同.pdf》第4页"},
+    }
+    refine_clause_locations(fields, files)
+    return fields["dispute_clause_location"]
+
+
+def test_strategic_combo_main_article_to_arabic():
+    loc = _combo("第二条及战略合同第10条")
+    assert loc["value"] == "第2条及战略合同第10条"
+    assert "原写作「第二条及战略合同第10条」" in loc["src"]
+
+
+def test_strategic_combo_left_alone_when_main_contract_uses_chinese_numbering():
+    main = "第一条 合同组成\n第二条 争议的解决按“战略合同”内相关条款执行。"
+    assert _combo("第二条及战略合同第10条", main)["value"] == "第二条及战略合同第10条"
+    # 主合同没有转引句：找不到依据，不改
+    assert _combo("第二条及战略合同第10条", "2 本合同的供货范围按附件执行。")["value"] == "第二条及战略合同第10条"
+
+
+def test_quantity_line_is_not_arabic_article_heading():
+    # 「2 台电梯」是数量，不算阿拉伯数字条款标题
+    main = "第二条 争议的解决按“战略合同”内相关条款执行。\n2 台电梯于验收后移交。"
+    assert _combo("第二条及战略合同第10条", main)["value"] == "第二条及战略合同第10条"
+
+
+def test_strategic_combo_locked_to_single_reference_contract():
+    # 两份主合同都写有转引句（A 用「2 本合同……」，B 用「第二条」）：不按上传顺序挑，一律不改并提示核对（#178 评审）
+    other = {"filename": "虚构补充供货合同.pdf", "identified_type": "合同",
+             "pages": [{"page": 1, "text": "第一条 标的\n第二条 争议的解决按“战略合同”内相关条款执行。"}]}
+    for order in ("a_first", "b_first"):
+        files = [
+            {"filename": "虚构供货合同.pdf", "identified_type": "合同", "pages": [{"page": 2, "text": _MAIN_REF}]},
+            {"filename": "虚构战略合作合同.pdf", "identified_type": "战略合同", "pages": []},
+        ]
+        files = files + [other] if order == "a_first" else [other] + files
+        fields = {
+            "dispute_clause_location": {"value": "第二条及战略合同第10条", "src": "《虚构战略合作合同.pdf》"},
+            "dispute_clause_text": {"value": "提交虚构仲裁委员会仲裁。", "src": "《虚构战略合作合同.pdf》第4页"},
+        }
+        refine_clause_locations(fields, files)
+        loc = fields["dispute_clause_location"]
+        assert loc["value"] == "第二条及战略合同第10条", order
+        assert "请律师核对" in loc["src"]
