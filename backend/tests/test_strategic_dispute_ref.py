@@ -207,3 +207,29 @@ def test_heading_out_of_sequence_order_is_not_trusted():
     fields = _missing()
     apply_strategic_dispute_ref(fields, _files(page))
     assert fields["dispute_clause_location"]["value"] is None
+
+
+def test_bare_headings_without_punctuation_bound_the_clause():
+    # 条款之间只有换行、没有句号分号（OCR）：转引句按核实过的行首标题定界，取第 2 条、不拼进第 1、3 条（#178 评审）
+    page = (
+        "1 以下文件为本合同组成部分\n"
+        "2 本合同的供货范围、争议的解决按“战略合同”内相关条款执行\n"
+        "3 本合同一式四份"
+    )
+    fields = _missing()
+    apply_strategic_dispute_ref(fields, _files(page, scanned=True))
+    assert fields["dispute_clause_location"]["value"] == "第2条"
+    assert fields["dispute_clause_text"]["value"] == "本合同的供货范围、争议的解决按“战略合同”内相关条款执行"
+
+
+def test_ordinary_line_wrap_inside_clause_kept():
+    # 条款正文普通折行（行首不是数字标题）不当边界，整句照抄
+    page = (
+        "1 以下文件为本合同组成部分\n"
+        "2 本合同的供货范围、违约责任、\n争议的解决按“战略合同”内相关条款执行\n"
+        "3 本合同一式四份"
+    )
+    fields = _missing()
+    apply_strategic_dispute_ref(fields, _files(page, scanned=True))
+    assert fields["dispute_clause_location"]["value"] == "第2条"
+    assert fields["dispute_clause_text"]["value"] == "本合同的供货范围、违约责任、争议的解决按“战略合同”内相关条款执行"

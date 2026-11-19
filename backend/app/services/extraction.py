@@ -551,6 +551,7 @@ _ITEM_NO_RE = re.compile(r"^\s*(?:第\s*([一二三四五六七八九十\d]{1,3}
 # 合同用「1 ……」「2 本合同……」这样只写数字、后接空格或换行的条款编号（律师新案件核对）：合并换行前在句首认
 # 「2」+ 空白 + 汉字，且须有条款结构佐证（`_bare_article_heading`），「2 份文件」这类数量短语不算（#178 评审）
 _ITEM_NO_PLAIN_RE = re.compile(r"^\s*(\d{1,2})\s+(?=[一-鿿])")
+_BARE_HEADING_LINE_RE = re.compile(r"(?m)^[ \t]*(\d{1,2})\s+(?=[一-鿿])")
 # OCR HTML 的列表项 / 段落边界：去标签前换成分隔符，免得相邻两项粘成一句（#133 评审）
 _BLOCK_END_RE = re.compile(r"</(?:li|p|td|th|div|h\d)>|<br\s*/?>", re.I)
 _BLOCK = "\x00"
@@ -662,7 +663,18 @@ def _strategic_ref_in(f: dict) -> tuple[str, str | None, bool, str] | None:
             continue
         left = max(plain.rfind(ch, 0, m.start()) for ch in _SENTENCE_START) + 1
         rights = [i for i in (plain.find(ch, m.end()) for ch in _SENTENCE_END) if i != -1]
-        sentence = plain[left : min(rights) + 1 if rights else len(plain)].replace(_BLOCK, "")
+        right = min(rights) + 1 if rights else len(plain)
+        # 只写数字的条款之间常只有换行、没有句号分号（OCR）：经核实的行首条款标题也是条款边界，
+        # 转引句从它所在条款的标题起、到下一条标题前止；普通正文折行不算边界（#178 评审）
+        for h in _BARE_HEADING_LINE_RE.finditer(plain, left, right):
+            if not _bare_article_heading(whole, int(h.group(1)), plain[h.end() :]):
+                continue
+            if h.start() <= m.start():
+                left = h.start()
+            elif h.start() >= m.end():
+                right = h.start()
+                break
+        sentence = plain[left:right].replace(_BLOCK, "")
         bare = _ITEM_NO_PLAIN_RE.match(sentence)
         if bare and not _bare_article_heading(whole, int(bare.group(1)), sentence[bare.end() :]):
             bare = None  # 没有条款结构佐证：不当条款号，原文不删
