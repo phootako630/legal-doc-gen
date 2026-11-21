@@ -65,7 +65,7 @@ async def main() -> None:
 
     lines = ["# 付款节点原型对比：正则 vs LLM + 不变量", "", "## 汇总", "",
              "| 组 | 方法 | 正确 | 正确放弃 | 放弃（交律师） | **错误（错拆）** |", "|---|---|---|---|---|---|"]
-    for g in ("fixture", "unit", "heldout"):
+    for g in ("fixture", "unit", "heldout", "heldout2"):
         for side in ("正则", "LLM"):
             t = tally.get((g, side), {})
             lines.append(f"| {g} | {side} | {t.get('正确', 0)} | {t.get('正确放弃', 0)} | {t.get('放弃', 0)} | {t.get('错误', 0)} |")
