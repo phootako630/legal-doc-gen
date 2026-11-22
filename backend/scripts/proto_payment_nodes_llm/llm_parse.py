@@ -1,6 +1,8 @@
 # 【原型，用完即弃】付款节点：LLM 给出结构，代码只核对与版式无关的不变量，核不过就返回空（同现有正则的退回口径）。
 #
-# 不变量：① 每个节点的原文片段在条款原文里逐字命中（只忽略空白）；② 编号在原文里、位于本片段与前一个片段之间；
+# 编号不用模型给的：按片段在原文中的位置，用现有的编号规则（payment_nodes._NODE_NO_RE / 表格序号列）由代码确定。
+# 编号决定起诉状里的条款号写法（第3.1.4条），属于引用格式，种类有限，留给代码；模型只管哪些句子是付款、比例是本期还是累计。
+# 不变量：① 每个节点的原文片段在条款原文里逐字命中（只忽略空白）；②（编号由代码定，不再核模型的编号）；
 # ③ 比例写法逐字出现在片段里，且由代码解析出的数值就是比例（模型报的数不用）；④ 片段互不重叠；
 # ⑤ 代码累加：本期 + 前面累计 / 累计取本身，单调不减、不超过且最终等于 100%；
 # ⑥ 原文里每个百分比都有着落：是某节点的比例 / 分次付款（分次合计须等于该节点比例），或落在排除项片段里。
@@ -12,7 +14,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.services.payment_nodes import PaymentStage
+from app.services.payment_nodes import _NO_CELL_RE, _NODE_NO_RE, PaymentStage
 
 _TOL = 0.05
 
@@ -46,11 +48,6 @@ _CN_DIGIT = {"零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 
 # 原文里的百分比写法（去空白后）：30% / 百分之三十 / 三成
 _PCT_ANY_RE = re.compile(r"\d+(?:\.\d+)?[%％]|百分之(?:\d+(?:\.\d+)?|[零〇一二两三四五六七八九十]+)|[一二两三四五六七八九十]成")
 _CUM_WORD_RE = re.compile(r"至|支付到|付到|累计|达到")
-
-
-def _has_token(hay: str, no: str) -> bool:
-    """编号作为独立记号出现：前后不紧挨数字或小数点（「15日」里的「1」不算）。"""
-    return re.search(rf"(?<!\d)(?<!\d[.．]){re.escape(no)}(?![\d%％]|[.．]\d)", hay) is not None
 
 
 _PAYOFF_RE = re.compile(r"付清|全部|余款|剩余|余下|尾款|结清")
@@ -93,14 +90,29 @@ class Result:
     raw: dict | None
 
 
+def _code_no(text: str, idx: list[int], pos: int, quote: str) -> str:
+    """片段所属的条款编号：表格行取第一格序号；否则取原文中片段开头之前（含开头）最近的条款编号。"""
+    if quote.startswith("|") or quote.lower().startswith(("<tr", "<td")):
+        cells = [c for c in re.split(r"\||</?t[dr][^>]*>", quote, flags=re.I) if c.strip()]
+        m = _NO_CELL_RE.match(cells[0].strip()) if cells else None
+        return m.group(1) if m else ""
+    start = idx[pos] if pos < len(idx) else len(text)
+    no = ""
+    for m in _NODE_NO_RE.finditer(text):
+        if m.start() > start + 1:  # 片段可能从编号本身开始（「3.2 交货前……」）
+            break
+        no = m.group("multi") or m.group("single")
+    return no
+
+
 def validate(text: str, raw: dict) -> Result:
     full = _squash(text)
+    idx = [i for i, ch in enumerate(text) if not ch.isspace()]  # 去空白后的位置 → 原文位置
     items = raw.get("stages") if isinstance(raw, dict) else None
     if not isinstance(items, list) or not items:
         return Result([], "没有节点", raw)
     used: list[tuple[int, int]] = []
     claims: list[tuple[tuple[int, int], set[str], float]] = []
-    span_no: dict[tuple[int, int], str] = {}
     stages: list[PaymentStage] = []
     running = 0.0
     for i, it in enumerate(items, 1):
@@ -113,11 +125,7 @@ def validate(text: str, raw: dict) -> Result:
         if any(a < span[1] and span[0] < b for a, b in used):
             return Result([], f"第{i}个节点与其他节点重叠", raw)
         used.append(span)
-        prev = max(((a, b) for a, b in used[:-1] if b <= pos), key=lambda x: x[1], default=None)
-        prev_end = prev[1] if prev else 0
-        # 编号作为独立记号（前后不紧挨数字）出现在片段里（表格行）或本片段与前一片段之间
-        if no and not (_has_token(quote, no) or _has_token(full[prev_end:pos], no)):
-            return Result([], f"第{i}个节点编号「{no}」不在原文该处", raw)
+        no = _code_no(text, idx, pos, quote)
         parts = [_squash(str(x)) for x in (it.get("parts") or [])]
         if parts:
             vals = [parse_pct(x) for x in parts]
@@ -125,7 +133,6 @@ def validate(text: str, raw: dict) -> Result:
                 return Result([], f"第{i}个节点分次比例写法核不了", raw)
             if abs(sum(vals) - (parse_pct(pct_text) or -1)) > _TOL:
                 return Result([], f"第{i}个节点分次合计{sum(vals):g}%不等于{pct_text}", raw)
-        span_no[span] = no
         if pct_text not in quote:
             return Result([], f"第{i}个节点比例写法不在原文片段里", raw)
         if basis == "付清":
@@ -152,7 +159,7 @@ def validate(text: str, raw: dict) -> Result:
         if basis == "本期" and _CUM_WORD_RE.search(before):
             return Result([], f"第{i}个节点标为本期，原文写的是「至」", raw)
         claims.append((span, {pct_text, *parts}, end))
-        stages.append(PaymentStage(str(it.get("no") or ""), str(it.get("quote") or ""), running, end))
+        stages.append(PaymentStage(no, str(it.get("quote") or ""), running, end))
         running = end
     if abs(running - 100) > _TOL:
         return Result([], f"累计{running:g}%不到100%", raw)
