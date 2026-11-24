@@ -3,6 +3,8 @@
 真实案卷的配对与标注表含当事人信息，只放服务器 / 会话临时目录，不进仓库。写法见 case_eval/calibration.py。
 
 用法（在 backend/ 目录下）：
+    # 0. 从 eval 运行结果导出真实配对（可并入已有配对文件，编号不重复）
+    python scripts/judge_calibrate.py export _runs/20261124-0930/results.json pairs.json --base 旧pairs.json
     # 1. 生成标注表（不含裁判结论），人逐对填「一致 / 不一致 / 无法判断」
     python scripts/judge_calibrate.py sheet pairs.json 标注表.xlsx
     # 2. 跑裁判并对照人工结论出报告；裁判调用录在 --cache，重跑不花钱
@@ -16,13 +18,21 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from scripts.case_eval.cache import ReplayCache  # noqa: E402
-from scripts.case_eval.calibration import judge_pairs, load_pairs, read_labels, render, write_sheet  # noqa: E402
+from scripts.case_eval.calibration import (  # noqa: E402
+    judge_pairs,
+    load_pairs,
+    pairs_from_results,
+    read_labels,
+    render,
+    write_sheet,
+)
 from scripts.case_eval.judge import JUDGE_MODEL, call_judge  # noqa: E402
 
 
@@ -33,6 +43,11 @@ def _private(path: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="LLM 裁判校准")
     sub = parser.add_subparsers(dest="cmd", required=True)
+    ex = sub.add_parser("export", help="从 eval 的 results.json 导出真实配对")
+    ex.add_argument("results", nargs="+", help="一个或多个 results.json")
+    ex.add_argument("out", help="输出的配对文件")
+    ex.add_argument("--base", help="已有配对文件：原样保留在前面，新配对编号不与它重复")
+    ex.add_argument("--prefix", default="N", help="新配对编号前缀（默认 N）")
     sh = sub.add_parser("sheet", help="生成标注表")
     sh.add_argument("pairs")
     sh.add_argument("out")
@@ -45,6 +60,22 @@ def main() -> None:
     run.add_argument("--strict", action="store_true", help="只用缓存，不调用接口")
     run.add_argument("--out", required=True, help="校准报告（Markdown）")
     args = parser.parse_args()
+
+    if args.cmd == "export":
+        base: list[dict] = []
+        if args.base:
+            with open(args.base, encoding="utf-8") as fh:
+                base = json.load(fh)
+        cases: list[dict] = []
+        for path in args.results:
+            with open(path, encoding="utf-8") as fh:
+                cases += json.load(fh).get("cases", [])
+        new = pairs_from_results(cases, args.prefix, {p["id"] for p in base})
+        with open(args.out, "w", encoding="utf-8") as fh:
+            json.dump(base + new, fh, ensure_ascii=False, indent=2)
+        _private(args.out)
+        print(f"[校准] 配对：{args.out}（原有 {len(base)} 对，新增 {len(new)} 对）")
+        return
 
     pairs = load_pairs(args.pairs)
     if args.cmd == "sheet":

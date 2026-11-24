@@ -11,6 +11,7 @@ from scripts.case_eval.calibration import (
     confusion,
     judge_pairs,
     load_pairs,
+    pairs_from_results,
     read_labels,
     render,
     write_sheet,
@@ -121,3 +122,44 @@ def test_judge_pairs_and_report():
     text = render(pairs, "fake-model")
     assert "「人工不一致、裁判一致」：1 对" in text and "| 构造反例 | 1 | 0% |" in text
     assert "向乙市人民法院起诉" in text  # 不同的配对逐条列出
+
+
+def test_pairs_from_results_takes_judge_fields_only():
+    # 从 eval 结果导出真实配对：只取交给裁判的白名单字段，一边为空的不要，编号中性且不与已有编号重复
+    cases = [
+        {"case": "虚构案甲", "results": [
+            {"key": "handover_text", "match": "judge", "expected": "已全部移交被告", "actual": "已移交物业"},
+            {"key": "handover_text", "match": "judge", "expected": "已全部移交被告", "actual": None},
+            {"key": "defendant_name", "match": "exact", "expected": "虚构公司", "actual": "虚构公司"},
+        ]},
+        {"case": "虚构案乙", "results": [
+            {"key": "jurisdiction_text", "match": "judge", "expected": "向虚构区人民法院起诉", "actual": "  "},
+            {"key": "interest_rate_basis", "match": "judge", "expected": "一年期 LPR", "actual": "LPR"},
+        ]},
+    ]
+    pairs = pairs_from_results(cases, taken={"N001"})
+    assert [(p["id"], p["case"], p["key"]) for p in pairs] == [
+        ("N002", "虚构案甲", "handover_text"),
+        ("N003", "虚构案乙", "interest_rate_basis"),
+    ]
+    assert pairs[0]["lawyer"] == "已全部移交被告" and pairs[0]["system"] == "已移交物业"
+    assert all(p["origin"] == "真实" for p in pairs)
+
+
+def test_export_command_merges_base(tmp_path):
+    import subprocess
+    import sys
+
+    results = tmp_path / "results.json"
+    results.write_text(json.dumps({"cases": [{"case": "虚构案", "results": [
+        {"key": "handover_text", "match": "judge", "expected": "已全部移交", "actual": "已移交"},
+    ]}]}, ensure_ascii=False), encoding="utf-8")
+    base = tmp_path / "base.json"
+    base.write_text(json.dumps([{"id": "N001", "case": "旧", "key": "handover_text",
+                                 "lawyer": "甲", "system": "乙"}], ensure_ascii=False), encoding="utf-8")
+    out = tmp_path / "pairs.json"
+    subprocess.run([sys.executable, "scripts/judge_calibrate.py", "export", str(results), str(out),
+                    "--base", str(base)], check=True, capture_output=True)
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert [p["id"] for p in data] == ["N001", "N002"]
+    assert load_pairs(str(out))[1].lawyer == "已全部移交"

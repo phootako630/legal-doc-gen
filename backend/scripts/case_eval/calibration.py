@@ -59,6 +59,39 @@ def load_pairs(path: str) -> list[Pair]:
     return pairs
 
 
+def _blank(v: Any) -> bool:
+    return v is None or (isinstance(v, str) and not v.strip())
+
+
+def pairs_from_results(
+    results: list[dict[str, Any]], prefix: str = "N", taken: set[str] | None = None
+) -> list[dict[str, Any]]:
+    """
+    从 eval 运行结果（results.json 的 cases）里取出交给裁判的字段，做成「律师句 / 系统句」真实配对，
+    免得手工整理（#90 收尾）。律师句是 expected.json 的标准值，系统句是裁判实际比的内容（整段比的字段即起诉状段落）。
+    一边为空的不要（代码直接判，测不出模型）；编号用中性的「N001」，不透露案件和字段，已有编号（taken）跳过。
+    """
+    taken = set(taken or ())
+    out, n = [], 0
+    for case in results:
+        for r in case.get("results") or []:
+            if r.get("match") != "judge" or not judge_allowed(r.get("key", "")):
+                continue
+            if _blank(r.get("expected")) or _blank(r.get("actual")):
+                continue
+            n += 1
+            pid = f"{prefix}{n:03d}"
+            while pid in taken:
+                n += 1
+                pid = f"{prefix}{n:03d}"
+            taken.add(pid)
+            out.append({
+                "id": pid, "case": case.get("case", ""), "key": r["key"],
+                "lawyer": r["expected"], "system": r["actual"], "origin": "真实",
+            })
+    return out
+
+
 def write_sheet(pairs: list[Pair], path: str, seed: int | None = None) -> None:
     """
     标注表：每对一行，「你的结论」一栏下拉选择；不含裁判结论，也不标真实 / 构造。
