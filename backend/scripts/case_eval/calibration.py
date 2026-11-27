@@ -19,11 +19,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from scripts.case_eval.judge import BY_CODE, NOT_JUDGED, VERDICTS, Ask, judge_one
-from scripts.case_eval.judge_rubrics import judge_allowed, judge_criteria
+from scripts.case_eval.judge_rubrics import JUDGE_CRITERIA, judge_allowed, judge_criteria
 from scripts.case_eval.scoring import _blank  # 与裁判同一套空值约定：含【待补充】也算没有这句
 
-SHEET_HEADERS = ("编号", "字段", "判断标准", "律师句", "系统句", "你的结论", "备注")
+SHEET_HEADERS = ("题号", "字段", "判断标准", "律师句", "系统句", "你的结论", "备注")
 LABEL_COL = SHEET_HEADERS.index("你的结论")
+_ID_SHEET = "_编号"  # 标注表里的隐藏页：显示题号 → 配对编号
 
 
 @dataclass
@@ -60,44 +61,60 @@ def load_pairs(path: str) -> list[Pair]:
     return pairs
 
 
+def _pair_key(case: str, key: str, lawyer: Any, system: Any) -> tuple[str, str, str, str]:
+    return (case, key, _text(lawyer), _text(system))
+
+
 def pairs_from_results(
-    results: list[dict[str, Any]], prefix: str = "N", taken: set[str] | None = None
-) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]], base: list[dict[str, Any]] | None = None
+) -> tuple[list[dict[str, Any]], int]:
     """
     从 eval 运行结果（results.json 的 cases）里取出交给裁判的字段，做成「律师句 / 系统句」真实配对，
-    免得手工整理（#90 收尾）。律师句是 expected.json 的标准值，系统句是裁判实际比的内容（整段比的字段即起诉状段落），
-    判断标准沿用 eval 实际用的那条（expected.json 覆盖过默认标准时也一样）。
-    一边为空（含【待补充】占位）的不要：裁判按缺失直接判，测不出模型（#180 评审）；编号用中性的「N001」，不透露案件和字段，已有编号（taken）跳过。
+    免得手工整理（#90 收尾）。律师句是 expected.json 的标准值，系统句是裁判实际比的内容（整段比的字段即起诉状段落）。
+    - 一边为空（含【待补充】占位）的不要：裁判按缺失直接判，测不出模型（#180 评审）；
+    - 同一（案件, 字段, 律师句, 系统句）只要一对，base 里已有的也算（合并多次运行时不重复计数，#180 评审）；
+    - 判断标准只在 expected.json 覆盖了默认标准时才写进配对；用默认标准的不写，改了默认标准后重跑校准即用新标准；
+    - 编号 N001…，避开 base 里已有的编号（标注表上另换显示题号，编号不给标注的人看）。
+    返回 (新配对, 因重复跳过的对数)。
     """
-    taken = set(taken or ())
-    out, n = [], 0
+    base = base or []
+    taken = {p["id"] for p in base}
+    seen = {_pair_key(p.get("case", ""), p["key"], p.get("lawyer"), p.get("system")) for p in base}
+    out, n, dup = [], 0, 0
     for case in results:
         for r in case.get("results") or []:
-            if r.get("match") != "judge" or not judge_allowed(r.get("key", "")):
+            key = r.get("key", "")
+            if r.get("match") != "judge" or not judge_allowed(key):
                 continue
             if _blank(r.get("expected")) or _blank(r.get("actual")):
                 continue
+            ident = _pair_key(case.get("case", ""), key, r["expected"], r["actual"])
+            if ident in seen:
+                dup += 1
+                continue
+            seen.add(ident)
             n += 1
-            pid = f"{prefix}{n:03d}"
-            while pid in taken:
+            while f"N{n:03d}" in taken:
                 n += 1
-                pid = f"{prefix}{n:03d}"
+            pid = f"N{n:03d}"
             taken.add(pid)
             pair = {
-                "id": pid, "case": case.get("case", ""), "key": r["key"],
+                "id": pid, "case": case.get("case", ""), "key": key,
                 "lawyer": r["expected"], "system": r["actual"], "origin": "真实",
             }
-            if r.get("criteria"):
-                pair["criteria"] = r["criteria"]  # eval 实际用的判断标准（expected.json 可能覆盖了默认标准，#180 评审）
+            criteria = (r.get("criteria") or "").strip()
+            if criteria and criteria != JUDGE_CRITERIA[key]:
+                pair["criteria"] = criteria  # expected.json 覆盖的标准随配对固定下来（#180 评审）
             out.append(pair)
-    return out
+    return out, dup
 
 
 def write_sheet(pairs: list[Pair], path: str, seed: int | None = None) -> None:
     """
     标注表：每对一行，「你的结论」一栏下拉选择；不含裁判结论，也不标真实 / 构造。
-    行序打乱（#154 评审：构造反例若集中排列，标注的人会从行序猜出分组），人工结论按编号对回；
-    seed 固定时顺序可复现。编号本身也不要透露真实 / 构造（配对文件里用 P01 这类中性编号）。
+    行序打乱（#154 评审：构造反例若集中排列，标注的人会从行序猜出分组），seed 固定时顺序可复现。
+    第一栏只显示打乱后的题号（1、2、3…），配对的内部编号（真实配对 N001、构造配对 P01 前缀不同）不给标注的人看，
+    写在隐藏的「_编号」页里，读回时按题号还原（#180 评审）。
     """
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font
@@ -111,8 +128,8 @@ def write_sheet(pairs: list[Pair], path: str, seed: int | None = None) -> None:
         c.font = Font(bold=True)
     rows = list(pairs)
     random.Random(seed).shuffle(rows)
-    for p in rows:
-        ws.append([p.id, p.key, p.criteria, _text(p.lawyer), _text(p.system), "", ""])
+    for i, p in enumerate(rows, start=1):
+        ws.append([i, p.key, p.criteria, _text(p.lawyer), _text(p.system), "", ""])
     dv = DataValidation(type="list", formula1='"' + ",".join(VERDICTS) + '"', allow_blank=True)
     ws.add_data_validation(dv)
     col = chr(ord("A") + LABEL_COL)
@@ -122,6 +139,11 @@ def write_sheet(pairs: list[Pair], path: str, seed: int | None = None) -> None:
     for row in ws.iter_rows(min_row=2):
         for c in row:
             c.alignment = Alignment(wrap_text=True, vertical="top")
+    ids = wb.create_sheet(_ID_SHEET)
+    ids.append(["题号", "编号"])
+    for i, p in enumerate(rows, start=1):
+        ids.append([i, p.id])
+    ids.sheet_state = "veryHidden"  # Excel 界面里取消隐藏也看不到
     wb.save(path)
 
 
@@ -129,17 +151,27 @@ def read_labels(path: str) -> dict[str, str]:
     """标注表里填了的人工结论 {编号: 结论}；没填的跳过，填了不认识的值报错。"""
     from openpyxl import load_workbook
 
-    ws = load_workbook(path, read_only=True).active
+    wb = load_workbook(path, read_only=True)
+    ws = wb["标注"] if "标注" in wb.sheetnames else wb.active
+    # 新表第一栏是题号，按隐藏页还原成编号；旧表（没有隐藏页）第一栏就是编号
+    id_of: dict[str, str] = {}
+    if _ID_SHEET in wb.sheetnames:
+        for no, pid in wb[_ID_SHEET].iter_rows(min_row=2, max_col=2, values_only=True):
+            if no is not None and pid:
+                id_of[str(no)] = str(pid)
     labels = {}
     for row in ws.iter_rows(min_row=2, values_only=True):
-        if not row or not row[0]:
+        if not row or row[0] is None or str(row[0]).strip() == "":
             continue
         label = str(row[LABEL_COL] or "").strip()
         if not label:
             continue
         if label not in VERDICTS:
             raise ValueError(f"{row[0]}：结论只能填 {'/'.join(VERDICTS)}，表里是「{label}」")
-        labels[str(row[0])] = label
+        cell = str(row[0]).strip()
+        if id_of and cell not in id_of:
+            raise ValueError(f"标注表第一栏「{cell}」不是表里的题号")
+        labels[id_of.get(cell, cell)] = label
     return labels
 
 

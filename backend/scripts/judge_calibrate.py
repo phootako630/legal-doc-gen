@@ -20,6 +20,7 @@ import argparse
 import asyncio
 import json
 import os
+import tempfile
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -36,16 +37,30 @@ from scripts.case_eval.calibration import (  # noqa: E402
 from scripts.case_eval.judge import JUDGE_MODEL, call_judge  # noqa: E402
 
 
-def _private(path: str) -> None:
+def _write_private(path: str, write) -> None:
     """
-    含真实案卷内容：写入之前先把文件建成只许属主读写（0600），再写内容；不是先按默认权限写、写完再收紧，
-    免得共享目录里其他账号在这段时间读到，写到一半中断也不外露（#180 评审）。已有文件同样先改成 0600。
+    含真实案卷内容的输出：在同目录用 0600 新建临时文件（mkstemp 建立时即只许属主读写），写完再 os.replace 覆盖目标。
+    权限从建立起就收紧；写到一半出错时临时文件删掉，原有文件（如律师已填的标注表）不受影响（#180 评审）。
     """
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    folder = os.path.dirname(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(dir=folder, prefix=".tmp-", suffix=os.path.splitext(path)[1])
+    os.close(fd)
     try:
-        os.fchmod(fd, 0o600)
-    finally:
-        os.close(fd)
+        write(tmp)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+
+
+def _write_text(path: str, text: str) -> None:
+    def write(tmp: str) -> None:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(text)
+
+    _write_private(path, write)
 
 
 def main() -> None:
@@ -54,8 +69,9 @@ def main() -> None:
     ex = sub.add_parser("export", help="从 eval 的 results.json 导出真实配对")
     ex.add_argument("results", nargs="+", help="一个或多个 results.json")
     ex.add_argument("out", help="输出的配对文件")
-    ex.add_argument("--base", help="已有配对文件：原样保留在前面，新配对编号不与它重复")
-    ex.add_argument("--prefix", default="N", help="新配对编号前缀（默认 N）")
+    ex.add_argument(
+        "--base", help="已有配对文件：校验后原样保留在前面，新配对编号与内容都不与它重复；多次导出请用它串起来"
+    )
     sh = sub.add_parser("sheet", help="生成标注表")
     sh.add_argument("pairs")
     sh.add_argument("out")
@@ -72,25 +88,27 @@ def main() -> None:
     if args.cmd == "export":
         base: list[dict] = []
         if args.base:
+            try:
+                load_pairs(args.base)  # 白名单、编号唯一：坏数据在这里就报，不等到生成标注表
+            except (ValueError, KeyError) as exc:
+                raise SystemExit(f"[校准] --base 配对文件有误：{exc}") from exc
             with open(args.base, encoding="utf-8") as fh:
                 base = json.load(fh)
         cases: list[dict] = []
         for path in args.results:
             with open(path, encoding="utf-8") as fh:
                 cases += json.load(fh).get("cases", [])
-        new = pairs_from_results(cases, args.prefix, {p["id"] for p in base})
+        new, dup = pairs_from_results(cases, base)
         if not base and not new:
             raise SystemExit("[校准] 没有可导出的配对：这些运行结果里没有交给裁判、两边都有内容的字段")
-        _private(args.out)
-        with open(args.out, "w", encoding="utf-8") as fh:
-            json.dump(base + new, fh, ensure_ascii=False, indent=2)
-        print(f"[校准] 配对：{args.out}（原有 {len(base)} 对，新增 {len(new)} 对）")
+        _write_text(args.out, json.dumps(base + new, ensure_ascii=False, indent=2))
+        skipped = f"，跳过重复 {dup} 对" if dup else ""
+        print(f"[校准] 配对：{args.out}（原有 {len(base)} 对，新增 {len(new)} 对{skipped}）")
         return
 
     pairs = load_pairs(args.pairs)
     if args.cmd == "sheet":
-        _private(args.out)
-        write_sheet(pairs, args.out, args.seed)
+        _write_private(args.out, lambda tmp: write_sheet(pairs, tmp, args.seed))
         print(f"[校准] 标注表：{args.out}（{len(pairs)} 对）")
         return
 
@@ -104,9 +122,7 @@ def main() -> None:
             raise SystemExit(f"标注表里有配对文件中没有的编号：{'、'.join(unknown)}")
         for p in pairs:
             p.human = labels.get(p.id, "")
-    _private(args.out)
-    with open(args.out, "w", encoding="utf-8") as fh:
-        fh.write(render(pairs, args.model))
+    _write_text(args.out, render(pairs, args.model))
     st = cache.stats
     print(f"[校准] 模型调用 {st.judge_calls} 次，缓存 {st.judge_hits} 次；报告：{args.out}")
 
