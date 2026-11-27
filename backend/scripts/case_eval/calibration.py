@@ -20,6 +20,7 @@ from typing import Any
 
 from scripts.case_eval.judge import BY_CODE, NOT_JUDGED, VERDICTS, Ask, judge_one
 from scripts.case_eval.judge_rubrics import judge_allowed, judge_criteria
+from scripts.case_eval.scoring import _blank  # 与裁判同一套空值约定：含【待补充】也算没有这句
 
 SHEET_HEADERS = ("编号", "字段", "判断标准", "律师句", "系统句", "你的结论", "备注")
 LABEL_COL = SHEET_HEADERS.index("你的结论")
@@ -59,10 +60,6 @@ def load_pairs(path: str) -> list[Pair]:
     return pairs
 
 
-def _blank(v: Any) -> bool:
-    return v is None or (isinstance(v, str) and not v.strip())
-
-
 def pairs_from_results(
     results: list[dict[str, Any]], prefix: str = "N", taken: set[str] | None = None
 ) -> list[dict[str, Any]]:
@@ -70,7 +67,7 @@ def pairs_from_results(
     从 eval 运行结果（results.json 的 cases）里取出交给裁判的字段，做成「律师句 / 系统句」真实配对，
     免得手工整理（#90 收尾）。律师句是 expected.json 的标准值，系统句是裁判实际比的内容（整段比的字段即起诉状段落），
     判断标准沿用 eval 实际用的那条（expected.json 覆盖过默认标准时也一样）。
-    一边为空的不要（代码直接判，测不出模型）；编号用中性的「N001」，不透露案件和字段，已有编号（taken）跳过。
+    一边为空（含【待补充】占位）的不要：裁判按缺失直接判，测不出模型（#180 评审）；编号用中性的「N001」，不透露案件和字段，已有编号（taken）跳过。
     """
     taken = set(taken or ())
     out, n = [], 0

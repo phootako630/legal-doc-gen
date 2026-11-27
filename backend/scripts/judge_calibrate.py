@@ -37,7 +37,15 @@ from scripts.case_eval.judge import JUDGE_MODEL, call_judge  # noqa: E402
 
 
 def _private(path: str) -> None:
-    os.chmod(path, 0o600)  # 含真实案卷内容：只许属主读写
+    """
+    含真实案卷内容：写入之前先把文件建成只许属主读写（0600），再写内容；不是先按默认权限写、写完再收紧，
+    免得共享目录里其他账号在这段时间读到，写到一半中断也不外露（#180 评审）。已有文件同样先改成 0600。
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+    finally:
+        os.close(fd)
 
 
 def main() -> None:
@@ -71,16 +79,18 @@ def main() -> None:
             with open(path, encoding="utf-8") as fh:
                 cases += json.load(fh).get("cases", [])
         new = pairs_from_results(cases, args.prefix, {p["id"] for p in base})
+        if not base and not new:
+            raise SystemExit("[校准] 没有可导出的配对：这些运行结果里没有交给裁判、两边都有内容的字段")
+        _private(args.out)
         with open(args.out, "w", encoding="utf-8") as fh:
             json.dump(base + new, fh, ensure_ascii=False, indent=2)
-        _private(args.out)
         print(f"[校准] 配对：{args.out}（原有 {len(base)} 对，新增 {len(new)} 对）")
         return
 
     pairs = load_pairs(args.pairs)
     if args.cmd == "sheet":
-        write_sheet(pairs, args.out, args.seed)
         _private(args.out)
+        write_sheet(pairs, args.out, args.seed)
         print(f"[校准] 标注表：{args.out}（{len(pairs)} 对）")
         return
 
@@ -94,9 +104,9 @@ def main() -> None:
             raise SystemExit(f"标注表里有配对文件中没有的编号：{'、'.join(unknown)}")
         for p in pairs:
             p.human = labels.get(p.id, "")
+    _private(args.out)
     with open(args.out, "w", encoding="utf-8") as fh:
         fh.write(render(pairs, args.model))
-    _private(args.out)
     st = cache.stats
     print(f"[校准] 模型调用 {st.judge_calls} 次，缓存 {st.judge_hits} 次；报告：{args.out}")
 

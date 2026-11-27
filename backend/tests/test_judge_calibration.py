@@ -177,3 +177,51 @@ def test_pairs_from_results_keep_eval_criteria(tmp_path):
     path = tmp_path / "pairs.json"
     path.write_text(json.dumps(pairs, ensure_ascii=False), encoding="utf-8")
     assert load_pairs(str(path))[0].criteria == custom
+
+
+def test_pairs_from_results_skip_to_fill_placeholder():
+    # 系统段落里还有【待补充】：裁判按缺失直接判，不交给律师标注（#180 评审）
+    cases = [{"case": "虚构案", "results": [
+        {"key": "jurisdiction_text", "match": "judge", "expected": "故原告向虚构区人民法院提起诉讼。",
+         "actual": "故原告向【待补充】人民法院提起诉讼。"},
+        {"key": "jurisdiction_text", "match": "judge", "expected": "故原告向虚构区人民法院提起诉讼。",
+         "actual": "故原告向虚构区人民法院起诉。"},
+    ]}]
+    assert [p["system"] for p in pairs_from_results(cases)] == ["故原告向虚构区人民法院起诉。"]
+
+
+def _export(tmp_path, cases, *extra):
+    import subprocess
+    import sys
+
+    results = tmp_path / "results.json"
+    results.write_text(json.dumps({"cases": cases}, ensure_ascii=False), encoding="utf-8")
+    out = tmp_path / "pairs.json"
+    proc = subprocess.run([sys.executable, "scripts/judge_calibrate.py", "export", str(results), str(out), *extra],
+                          capture_output=True, text=True)
+    return proc, out
+
+
+def test_export_refuses_empty_result(tmp_path):
+    # 没有可导出的配对：不写空文件（否则后面生成标注表会失败），给出中文说明（#180 评审）
+    proc, out = _export(tmp_path, [{"case": "虚构案", "results": [
+        {"key": "defendant_name", "match": "exact", "expected": "甲", "actual": "甲"},
+    ]}])
+    assert proc.returncode != 0 and "没有可导出的配对" in proc.stderr
+    assert not out.exists()
+
+
+def test_export_file_is_private_from_creation(tmp_path):
+    # 输出文件建立时就是 0600；已有的宽权限文件也先收紧再写（#180 评审）
+    import os
+    import stat
+
+    target = tmp_path / "pairs.json"
+    target.write_text("旧内容", encoding="utf-8")
+    os.chmod(target, 0o644)
+    proc, out = _export(tmp_path, [{"case": "虚构案", "results": [
+        {"key": "handover_text", "match": "judge", "expected": "已全部移交", "actual": "已移交"},
+    ]}])
+    assert proc.returncode == 0, proc.stderr
+    assert stat.S_IMODE(os.stat(out).st_mode) == 0o600
+    assert json.loads(out.read_text(encoding="utf-8"))[0]["lawyer"] == "已全部移交"
