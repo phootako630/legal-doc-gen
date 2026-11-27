@@ -163,3 +163,17 @@ def test_export_command_merges_base(tmp_path):
     data = json.loads(out.read_text(encoding="utf-8"))
     assert [p["id"] for p in data] == ["N001", "N002"]
     assert load_pairs(str(out))[1].lawyer == "已全部移交"
+
+
+def test_pairs_from_results_keep_eval_criteria(tmp_path):
+    # expected.json 覆盖了默认判断标准时，导出的配对沿用 eval 实际用的标准，标注表和校准提示词都一致（#180 评审）
+    custom = "比较移交对象：移交物业与移交被告不同"
+    cases = [{"case": "虚构案", "results": [
+        {"key": "handover_text", "match": "judge", "expected": "已全部移交物业", "actual": "已全部移交被告",
+         "criteria": custom},
+    ]}]
+    pairs = pairs_from_results(cases)
+    assert pairs[0]["criteria"] == custom
+    path = tmp_path / "pairs.json"
+    path.write_text(json.dumps(pairs, ensure_ascii=False), encoding="utf-8")
+    assert load_pairs(str(path))[0].criteria == custom

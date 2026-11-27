@@ -68,7 +68,8 @@ def pairs_from_results(
 ) -> list[dict[str, Any]]:
     """
     从 eval 运行结果（results.json 的 cases）里取出交给裁判的字段，做成「律师句 / 系统句」真实配对，
-    免得手工整理（#90 收尾）。律师句是 expected.json 的标准值，系统句是裁判实际比的内容（整段比的字段即起诉状段落）。
+    免得手工整理（#90 收尾）。律师句是 expected.json 的标准值，系统句是裁判实际比的内容（整段比的字段即起诉状段落），
+    判断标准沿用 eval 实际用的那条（expected.json 覆盖过默认标准时也一样）。
     一边为空的不要（代码直接判，测不出模型）；编号用中性的「N001」，不透露案件和字段，已有编号（taken）跳过。
     """
     taken = set(taken or ())
@@ -85,10 +86,13 @@ def pairs_from_results(
                 n += 1
                 pid = f"{prefix}{n:03d}"
             taken.add(pid)
-            out.append({
+            pair = {
                 "id": pid, "case": case.get("case", ""), "key": r["key"],
                 "lawyer": r["expected"], "system": r["actual"], "origin": "真实",
-            })
+            }
+            if r.get("criteria"):
+                pair["criteria"] = r["criteria"]  # eval 实际用的判断标准（expected.json 可能覆盖了默认标准，#180 评审）
+            out.append(pair)
     return out
 
 
